@@ -1,0 +1,4 @@
+goterm
+.env
+*.env
+config.local.yaml
