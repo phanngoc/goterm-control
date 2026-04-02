@@ -8,29 +8,26 @@ import (
 
 // Session holds per-chat conversation state for the claude CLI subprocess.
 type Session struct {
-	ID        string
-	ChatID    int64
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	mu        sync.Mutex
+	ID              string    `json:"id"`
+	ChatID          int64     `json:"chat_id"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	ClaudeSessionID string    `json:"claude_session_id,omitempty"`
+	MessageCount    int       `json:"message_count"`
+	InputTokens     int       `json:"input_tokens"`
+	OutputTokens    int       `json:"output_tokens"`
 
-	// claudeSessionID is the session_id returned by the claude CLI on first use.
-	// Subsequent messages pass --resume <claudeSessionID> to continue the conversation.
-	claudeSessionID string
-
-	// messageCount tracks how many turns have been exchanged.
-	messageCount int
-
-	// cancelFn cancels any in-flight Claude request for this session.
-	cancelFn func()
+	mu       sync.Mutex `json:"-"`
+	cancelFn func()     `json:"-"`
 }
 
 func New(chatID int64) *Session {
+	now := time.Now()
 	return &Session{
 		ID:        fmt.Sprintf("chat_%d", chatID),
 		ChatID:    chatID,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 
@@ -38,14 +35,14 @@ func New(chatID int64) *Session {
 func (s *Session) GetSessionID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.claudeSessionID
+	return s.ClaudeSessionID
 }
 
 // SetSessionID stores the claude CLI session ID returned on first message.
 func (s *Session) SetSessionID(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.claudeSessionID = id
+	s.ClaudeSessionID = id
 	s.UpdatedAt = time.Now()
 }
 
@@ -53,15 +50,24 @@ func (s *Session) SetSessionID(id string) {
 func (s *Session) IncrementMessages() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.messageCount++
+	s.MessageCount++
 	s.UpdatedAt = time.Now()
 }
 
-// MessageCount returns the number of turns exchanged.
-func (s *Session) MessageCount() int {
+// GetMessageCount returns the number of turns exchanged.
+func (s *Session) GetMessageCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.messageCount
+	return s.MessageCount
+}
+
+// AddTokens records token usage from a run.
+func (s *Session) AddTokens(input, output int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.InputTokens += input
+	s.OutputTokens += output
+	s.UpdatedAt = time.Now()
 }
 
 // Reset clears conversation history by forgetting the CLI session ID.
@@ -69,8 +75,8 @@ func (s *Session) MessageCount() int {
 func (s *Session) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.claudeSessionID = ""
-	s.messageCount = 0
+	s.ClaudeSessionID = ""
+	s.MessageCount = 0
 	s.UpdatedAt = time.Now()
 }
 

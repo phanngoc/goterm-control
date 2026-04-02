@@ -2,19 +2,26 @@ package bot
 
 import (
 	"log"
+	"path/filepath"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
+	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
+	"github.com/ngocp/goterm-control/internal/transcript"
 )
 
 // Bot is the top-level Telegram bot.
 type Bot struct {
-	api     *tgbotapi.BotAPI
-	handler *Handler
-	cfg     *config.Config
+	api      *tgbotapi.BotAPI
+	handler  *Handler
+	cfg      *config.Config
+	sessions *session.Manager
+	engine   *execution.Engine
 }
 
 // New creates and initialises the bot.
@@ -32,7 +39,19 @@ func New(cfg *config.Config) (*Bot, error) {
 		AllowedPaths:   cfg.Tools.AllowedPaths,
 	})
 
-	sessions := session.NewManager()
+	// Session persistence
+	store := session.NewStore(filepath.Join(cfg.Session.DataDir, "sessions.json"))
+	idleTimeout := time.Duration(cfg.Session.IdleTimeout) * time.Minute
+	sessions := session.NewManager(store, idleTimeout)
+
+	// Transcript writer
+	transcriptWriter := transcript.NewWriter(filepath.Join(cfg.Session.DataDir, "transcripts"))
+
+	// Memory store
+	var memoryStore *memory.Store
+	if cfg.Memory.Enabled {
+		memoryStore = memory.NewStore(filepath.Join(cfg.Session.DataDir, "memory"))
+	}
 
 	claudeClient := claude.New(
 		cfg.Claude.APIKey,
@@ -42,12 +61,17 @@ func New(cfg *config.Config) (*Bot, error) {
 		executor,
 	)
 
-	handler := NewHandler(api, sessions, claudeClient, cfg)
+	// Execution engine with hooks (wired in handler)
+	engine := execution.NewEngine(execution.Hooks{})
+
+	handler := NewHandler(api, sessions, claudeClient, cfg, engine, transcriptWriter, memoryStore)
 
 	return &Bot{
-		api:     api,
-		handler: handler,
-		cfg:     cfg,
+		api:      api,
+		handler:  handler,
+		cfg:      cfg,
+		sessions: sessions,
+		engine:   engine,
 	}, nil
 }
 
@@ -64,4 +88,11 @@ func (b *Bot) Run() {
 		// Process each update in its own goroutine so slow responses don't block polling
 		go b.handler.Handle(update)
 	}
+}
+
+// Shutdown performs graceful cleanup.
+func (b *Bot) Shutdown() {
+	b.engine.Close()
+	b.sessions.SaveNow()
+	log.Println("bot: shutdown complete")
 }

@@ -44,6 +44,14 @@ claude:
 
     You are like Claude Code but running through Telegram. Treat every request as a real engineering task.
 
+session:
+  data_dir: ""           # default: ~/.goterm/data
+  idle_timeout: 30       # minutes before session auto-reset
+
+memory:
+  enabled: true
+  max_entries: 5         # max memory entries injected per prompt
+
 security:
   allowed_user_ids: []  # empty = allow all (not recommended for production)
 
@@ -52,5 +60,5 @@ tools:
   max_output_bytes: 8192 # max chars from shell output before truncation
   allowed_paths:         # paths where write_file is permitted (empty = all)
     - ""
-  require_approval:      # tools requiring inline keyboard approval
-    - "kill_process"
+  # NOTE: Claude CLI runs with bypassPermissions — all tool calls execute without
+  # approval gates. Restrict access via security.allowed_user_ids for safety.

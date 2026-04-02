@@ -80,11 +80,25 @@ type pendingCall struct {
 }
 
 // SendMessage sends userText to the claude CLI and streams events via callbacks.
-func (c *Client) SendMessage(ctx context.Context, sess *session.Session, userText string, cb StreamCallbacks) error {
+// memoryContext is appended to the system prompt (new sessions) or prepended to
+// the user message (resumed sessions) to inject cross-session memory.
+func (c *Client) SendMessage(ctx context.Context, sess *session.Session, userText string, memoryContext string, cb StreamCallbacks) error {
 	sessionID := sess.GetSessionID()
 	isNewSession := sessionID == ""
 
-	args := buildArgs(c.model, sessionID, isNewSession, c.systemPrompt)
+	// For new sessions, inject memory into system prompt.
+	// For resumed sessions, prepend memory to user message (CLI limitation:
+	// --append-system-prompt only works on the first turn).
+	systemPrompt := c.systemPrompt
+	if memoryContext != "" {
+		if isNewSession {
+			systemPrompt += memoryContext
+		} else {
+			userText = memoryContext + "\n\n---\n\n" + userText
+		}
+	}
+
+	args := buildArgs(c.model, sessionID, isNewSession, systemPrompt)
 
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
 

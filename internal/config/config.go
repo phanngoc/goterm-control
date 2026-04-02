@@ -12,6 +12,8 @@ type Config struct {
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Security SecurityConfig `yaml:"security"`
 	Tools    ToolsConfig    `yaml:"tools"`
+	Session  SessionConfig  `yaml:"session"`
+	Memory   MemoryConfig   `yaml:"memory"`
 }
 
 type TelegramConfig struct {
@@ -31,10 +33,23 @@ type SecurityConfig struct {
 }
 
 type ToolsConfig struct {
-	ShellTimeout    int      `yaml:"shell_timeout"`
-	MaxOutputBytes  int      `yaml:"max_output_bytes"`
-	AllowedPaths    []string `yaml:"allowed_paths"`
-	RequireApproval []string `yaml:"require_approval"`
+	ShellTimeout   int      `yaml:"shell_timeout"`
+	MaxOutputBytes int      `yaml:"max_output_bytes"`
+	AllowedPaths   []string `yaml:"allowed_paths"`
+	// NOTE: The Claude CLI runs with --permission-mode bypassPermissions.
+	// All tool calls (shell, file write, process kill) execute without approval.
+	// This is intentional for a personal single-user bot. For shared deployments,
+	// restrict access via security.allowed_user_ids instead.
+}
+
+type SessionConfig struct {
+	DataDir     string `yaml:"data_dir"`
+	IdleTimeout int    `yaml:"idle_timeout"` // minutes
+}
+
+type MemoryConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	MaxEntries int  `yaml:"max_entries"`
 }
 
 func Load(path string) (*Config, error) {
@@ -71,6 +86,16 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.MaxOutputBytes == 0 {
 		cfg.Tools.MaxOutputBytes = 8192
+	}
+	if cfg.Session.DataDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.Session.DataDir = home + "/.goterm/data"
+	}
+	if cfg.Session.IdleTimeout == 0 {
+		cfg.Session.IdleTimeout = 30
+	}
+	if cfg.Memory.MaxEntries == 0 {
+		cfg.Memory.MaxEntries = 5
 	}
 
 	return &cfg, nil
