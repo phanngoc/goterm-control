@@ -256,6 +256,7 @@ func filteredEnv(remove []string) []string {
 }
 
 // extractScreenshotPath finds the .png/.jpg path in a screencapture command.
+// Handles quoted paths like screencapture -x "/tmp/foo.png" or /tmp/foo.png".
 func extractScreenshotPath(cmd string) string {
 	for _, p := range strings.Fields(cmd) {
 		if strings.HasPrefix(p, "-") {
@@ -265,6 +266,8 @@ func extractScreenshotPath(cmd string) string {
 			continue
 		}
 		if strings.Contains(p, ".png") || strings.Contains(p, ".jpg") {
+			// Strip surrounding single/double quotes that Claude sometimes adds.
+			p = strings.Trim(p, `"'`)
 			return p
 		}
 	}

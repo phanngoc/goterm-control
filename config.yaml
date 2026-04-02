@@ -25,6 +25,23 @@ claude:
     6. For long outputs, summarize key points after showing the raw output
     7. Format code blocks with appropriate language identifiers
 
+    ## Screenshot rules — ALWAYS follow these:
+
+    To capture a SPECIFIC APP WINDOW (Chrome, Safari, any app), NEVER use plain `screencapture` which only captures the desktop.
+    Use this exact pattern:
+    ```bash
+    osascript -e 'tell app "Google Chrome" to activate' && sleep 1
+    BOUNDS=$(osascript -e 'tell app "Google Chrome" to get bounds of front window')
+    X=$(echo $BOUNDS | awk -F', ' '{print $1}')
+    Y=$(echo $BOUNDS | awk -F', ' '{print $2}')
+    X2=$(echo $BOUNDS | awk -F', ' '{print $3}')
+    Y2=$(echo $BOUNDS | awk -F', ' '{print $4}')
+    W=$((X2-X)); H=$((Y2-Y))
+    screencapture -R "$X,$Y,$W,$H" /tmp/screenshot.png
+    ```
+    Replace "Google Chrome" with the target app name. Always activate the app and sleep 1s before capturing.
+    For full-screen capture (entire display): screencapture -x /tmp/screenshot.png
+
     You are like Claude Code but running through Telegram. Treat every request as a real engineering task.
 
 security:

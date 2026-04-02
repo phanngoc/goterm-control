@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ngocp/goterm-control/internal/claude"
@@ -136,14 +138,26 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 		},
 		OnToolResult: func(name string, result tools.ToolResult) {
 			if result.IsImage {
-				// Send screenshot as photo
-				textMu.Lock()
-				capText := currentText
-				textMu.Unlock()
-				_ = capText
 				streamer.Flush()
-				streamer.SendPhoto(result.ImagePath, fmt.Sprintf("📸 Screenshot from %s", name))
-				// Tell Claude what happened
+				path := result.ImagePath
+				log.Printf("handler: screenshot detected path=%q", path)
+				// Wait up to 3s for screencapture to finish writing the file.
+				var sendErr error
+				for i := 0; i < 6; i++ {
+					if _, err := os.Stat(path); err == nil {
+						break
+					}
+					log.Printf("handler: waiting for screenshot file (attempt %d)…", i+1)
+					time.Sleep(500 * time.Millisecond)
+				}
+				if _, err := os.Stat(path); err != nil {
+					log.Printf("handler: screenshot file not ready: %v", err)
+					streamer.Append(fmt.Sprintf("\n❌ _Screenshot file not found: %s_\n", path))
+					return
+				}
+				sendErr = nil
+				_ = sendErr
+				streamer.SendPhoto(path, fmt.Sprintf("📸 Screenshot"))
 				streamer.Append("\n📸 _Screenshot sent above._\n")
 			} else {
 				notice := FormatToolResult(name, result.Output, result.IsError)
