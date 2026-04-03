@@ -10,6 +10,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
+	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -53,18 +54,19 @@ func New(cfg *config.Config) (*Bot, error) {
 		memoryStore = memory.NewStore(filepath.Join(cfg.Session.DataDir, "memory"))
 	}
 
-	claudeClient := claude.New(
-		cfg.Claude.APIKey,
-		cfg.Claude.Model,
-		cfg.Claude.MaxTokens,
-		cfg.Claude.SystemPrompt,
-		executor,
-	)
+	// Model resolver — builtin Claude models + custom models from config
+	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
+	defaultModel := resolver.Resolve(0)
+	if defaultModel != nil {
+		log.Printf("bot: default model=%s (%s)", defaultModel.ID, defaultModel.Name)
+	}
 
-	// Execution engine with hooks (wired in handler)
+	claudeClient := claude.New(cfg.Claude.SystemPrompt, executor)
+
+	// Execution engine
 	engine := execution.NewEngine(execution.Hooks{})
 
-	handler := NewHandler(api, sessions, claudeClient, cfg, engine, transcriptWriter, memoryStore)
+	handler := NewHandler(api, sessions, claudeClient, cfg, engine, transcriptWriter, memoryStore, resolver)
 
 	return &Bot{
 		api:      api,
@@ -85,7 +87,6 @@ func (b *Bot) Run() {
 	log.Printf("bot: listening for updates (timeout=%ds)...", b.cfg.Telegram.Timeout)
 
 	for update := range updates {
-		// Process each update in its own goroutine so slow responses don't block polling
 		go b.handler.Handle(update)
 	}
 }

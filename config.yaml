@@ -4,7 +4,7 @@ telegram:
 
 claude:
   api_key: ""      # set via ANTHROPIC_API_KEY env var
-  model: "claude-sonnet-4-6"
+  model: "claude-sonnet-4-6"   # default model (can also use models.default)
   max_tokens: 8192
   system_prompt: |
     You are an AI assistant with full control over a Mac M1 computer. You help the user accomplish any task by:
@@ -43,6 +43,26 @@ claude:
     For full-screen capture (entire display): screencapture -x /tmp/screenshot.png
 
     You are like Claude Code but running through Telegram. Treat every request as a real engineering task.
+
+# Built-in Claude models (opus, sonnet, haiku) are always available.
+# Use models.default to override the default, or models.custom to add more.
+models:
+  default: ""                # override claude.model (empty = use claude.model)
+  # custom:                  # add custom models (e.g. OpenRouter, local Ollama)
+  #   - id: "deepseek-r1"
+  #     name: "DeepSeek R1"
+  #     provider: "openrouter"
+  #     api: "claude-cli"    # still routed through claude CLI --model flag
+  #     aliases: ["ds", "deepseek"]
+  #     context_window: 128000
+  #     max_tokens: 8192
+  #     reasoning: true
+  #     input: ["text"]
+  #     cost:
+  #       input: 0.55
+  #       output: 2.19
+  #       cache_read: 0.14
+  #       cache_write: 0.55
 
 session:
   data_dir: ""           # default: ~/.goterm/data

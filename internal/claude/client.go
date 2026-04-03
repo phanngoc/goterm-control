@@ -34,16 +34,14 @@ type StreamCallbacks struct {
 
 // Client wraps the claude CLI subprocess.
 type Client struct {
-	model        string
 	systemPrompt string
 }
 
 // New creates a Claude client backed by the claude CLI subprocess.
-// apiKey, maxTokens, and executor are unused — the CLI manages auth and tools.
-func New(apiKey, model string, maxTokens int, systemPrompt string, executor *tools.Executor) *Client {
-	log.Printf("claude: subprocess client (model=%s)", model)
+// The CLI manages its own auth and tools; we only need the system prompt.
+func New(systemPrompt string, executor *tools.Executor) *Client {
+	log.Printf("claude: subprocess client initialized")
 	return &Client{
-		model:        model,
 		systemPrompt: systemPrompt,
 	}
 }
@@ -80,9 +78,10 @@ type pendingCall struct {
 }
 
 // SendMessage sends userText to the claude CLI and streams events via callbacks.
+// modelID is the resolved model to use for this call.
 // memoryContext is appended to the system prompt (new sessions) or prepended to
 // the user message (resumed sessions) to inject cross-session memory.
-func (c *Client) SendMessage(ctx context.Context, sess *session.Session, userText string, memoryContext string, cb StreamCallbacks) error {
+func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID string, userText string, memoryContext string, cb StreamCallbacks) error {
 	sessionID := sess.GetSessionID()
 	isNewSession := sessionID == ""
 
@@ -98,7 +97,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, userTex
 		}
 	}
 
-	args := buildArgs(c.model, sessionID, isNewSession, systemPrompt)
+	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)
 
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
 

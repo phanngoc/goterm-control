@@ -4,28 +4,37 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ngocp/goterm-control/internal/models"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	Claude   ClaudeConfig   `yaml:"claude"`
+	Models   ModelsConfig   `yaml:"models"`
 	Security SecurityConfig `yaml:"security"`
 	Tools    ToolsConfig    `yaml:"tools"`
 	Session  SessionConfig  `yaml:"session"`
 	Memory   MemoryConfig   `yaml:"memory"`
 }
 
+// ClaudeConfig is kept for backward compatibility — the claude CLI subprocess config.
+type ClaudeConfig struct {
+	APIKey       string `yaml:"api_key"`
+	Model        string `yaml:"model"`         // default model ID
+	MaxTokens    int    `yaml:"max_tokens"`
+	SystemPrompt string `yaml:"system_prompt"`
+}
+
+// ModelsConfig defines available models and custom providers.
+type ModelsConfig struct {
+	Default  string                `yaml:"default"`  // default model ID (overrides claude.model)
+	Custom   []models.Model        `yaml:"custom"`   // additional model definitions
+}
+
 type TelegramConfig struct {
 	Token   string `yaml:"token"`
 	Timeout int    `yaml:"timeout"`
-}
-
-type ClaudeConfig struct {
-	APIKey       string `yaml:"api_key"`
-	Model        string `yaml:"model"`
-	MaxTokens    int    `yaml:"max_tokens"`
-	SystemPrompt string `yaml:"system_prompt"`
 }
 
 type SecurityConfig struct {
@@ -96,6 +105,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Memory.MaxEntries == 0 {
 		cfg.Memory.MaxEntries = 5
+	}
+
+	// Resolve default model: models.default takes priority over claude.model
+	if cfg.Models.Default == "" {
+		cfg.Models.Default = cfg.Claude.Model
 	}
 
 	return &cfg, nil

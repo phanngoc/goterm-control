@@ -14,6 +14,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
+	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -28,6 +29,7 @@ type Handler struct {
 	engine     *execution.Engine
 	transcript *transcript.Writer
 	memory     *memory.Store
+	resolver   *models.Resolver
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -42,6 +44,7 @@ func NewHandler(
 	engine *execution.Engine,
 	transcriptWriter *transcript.Writer,
 	memoryStore *memory.Store,
+	resolver *models.Resolver,
 ) *Handler {
 	return &Handler{
 		bot:              bot,
@@ -51,6 +54,7 @@ func NewHandler(
 		engine:           engine,
 		transcript:       transcriptWriter,
 		memory:           memoryStore,
+		resolver:         resolver,
 		approvalRequests: make(map[string]chan bool),
 	}
 }
@@ -86,35 +90,128 @@ func (h *Handler) Handle(update tgbotapi.Update) {
 }
 
 func (h *Handler) handleCommand(msg *tgbotapi.Message) {
+	chatID := msg.Chat.ID
+
 	switch msg.Command() {
 	case "start":
-		h.sendText(msg.Chat.ID, fmt.Sprintf(
-			"👋 *GoTerm Control*\n\nI'm your Mac AI assistant powered by Claude.\n\nCommands:\n• /reset — clear conversation history\n• /status — show session info\n• /cancel — cancel current request\n\nJust send me any message and I'll help you control your Mac!",
-		))
+		h.sendText(chatID,
+			"👋 *GoTerm Control*\n\n"+
+				"I'm your Mac AI assistant powered by Claude.\n\n"+
+				"Commands:\n"+
+				"• /reset — clear conversation history\n"+
+				"• /status — show session info\n"+
+				"• /models — list available models\n"+
+				"• /model `<name>` — switch model\n"+
+				"• /cancel — cancel current request\n\n"+
+				"Just send me any message and I'll help you control your Mac!",
+		)
+
 	case "reset":
-		h.sessions.Reset(msg.Chat.ID)
-		h.sendText(msg.Chat.ID, "🔄 Conversation history cleared.")
+		h.sessions.Reset(chatID)
+		h.resolver.ClearOverride(chatID)
+		h.sendText(chatID, "🔄 Conversation history cleared.")
+
 	case "status":
-		sess := h.sessions.Get(msg.Chat.ID)
+		sess := h.sessions.Get(chatID)
 		sessionID := sess.GetSessionID()
 		if sessionID == "" {
 			sessionID = "none"
 		} else if len(sessionID) > 8 {
 			sessionID = sessionID[:8] + "..."
 		}
-		h.sendText(msg.Chat.ID, fmt.Sprintf(
-			"📊 *Session Status*\n\nChat ID: `%d`\nTurns: %d\nSession: `%s`\nModel: `%s`\nTokens: %d in / %d out\nQueue: %d pending",
-			msg.Chat.ID, sess.GetMessageCount(), sessionID, h.cfg.Claude.Model,
+		m := h.resolver.Resolve(chatID)
+		modelName := "unknown"
+		if m != nil {
+			modelName = m.ID
+		}
+		h.sendText(chatID, fmt.Sprintf(
+			"📊 *Session Status*\n\n"+
+				"Chat ID: `%d`\n"+
+				"Turns: %d\n"+
+				"Session: `%s`\n"+
+				"Model: `%s`\n"+
+				"Tokens: %d in / %d out\n"+
+				"Queue: %d pending",
+			chatID, sess.GetMessageCount(), sessionID, modelName,
 			sess.InputTokens, sess.OutputTokens,
-			h.engine.QueueDepth(msg.Chat.ID),
+			h.engine.QueueDepth(chatID),
 		))
+
+	case "models":
+		h.handleModelsCommand(chatID)
+
+	case "model":
+		h.handleModelCommand(chatID, msg.CommandArguments())
+
 	case "cancel":
-		sess := h.sessions.Get(msg.Chat.ID)
+		sess := h.sessions.Get(chatID)
 		sess.Cancel()
-		h.sendText(msg.Chat.ID, "🛑 Request cancelled.")
+		h.sendText(chatID, "🛑 Request cancelled.")
+
 	default:
-		h.sendText(msg.Chat.ID, fmt.Sprintf("Unknown command: /%s\n\nTry /start for help.", msg.Command()))
+		h.sendText(chatID, fmt.Sprintf("Unknown command: /%s\n\nTry /start for help.", msg.Command()))
 	}
+}
+
+func (h *Handler) handleModelsCommand(chatID int64) {
+	active := h.resolver.Resolve(chatID)
+	all := h.resolver.List()
+
+	var sb strings.Builder
+	sb.WriteString("🤖 *Available Models*\n\n")
+
+	for i := range all {
+		m := &all[i]
+		isActive := active != nil && m.ID == active.ID
+		sb.WriteString(models.FormatModelInfo(m, isActive))
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("Switch: `/model <name or alias>`\n")
+	sb.WriteString("Reset to default: `/model default`")
+
+	h.sendText(chatID, sb.String())
+}
+
+func (h *Handler) handleModelCommand(chatID int64, arg string) {
+	arg = strings.TrimSpace(arg)
+
+	if arg == "" {
+		// Show current model
+		m := h.resolver.Resolve(chatID)
+		if m != nil {
+			h.sendText(chatID, fmt.Sprintf("Current model: `%s` (%s)\n\nUse `/model <name>` to switch.", m.ID, m.Name))
+		}
+		return
+	}
+
+	if arg == "default" || arg == "reset" {
+		h.resolver.ClearOverride(chatID)
+		// Reset session so new model takes effect cleanly
+		h.sessions.Reset(chatID)
+		m := h.resolver.Resolve(chatID)
+		name := "default"
+		if m != nil {
+			name = m.ID
+		}
+		h.sendText(chatID, fmt.Sprintf("🔄 Reset to default model: `%s`\nSession cleared for clean start.", name))
+		return
+	}
+
+	m, err := h.resolver.SetOverride(chatID, arg)
+	if err != nil {
+		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
+		return
+	}
+
+	// Reset session so the new model starts fresh (Claude CLI sessions are model-bound)
+	h.sessions.Reset(chatID)
+	h.sendText(chatID, fmt.Sprintf(
+		"✅ Switched to `%s` (%s)\n"+
+			"Context: %dk tokens · Cost: $%.1f/$%.1f per 1M\n"+
+			"Session cleared for clean start.",
+		m.ID, m.Name, m.ContextWindow/1000, m.Cost.Input, m.Cost.Output,
+	))
 }
 
 func (h *Handler) handleMessage(msg *tgbotapi.Message) {
@@ -125,11 +222,16 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 	// Cancel any in-flight or queued request for this session
 	sess.Cancel()
 
-	// Create a cancellable context BEFORE enqueuing so that queued-but-not-yet-started
-	// requests can be cancelled via /cancel. Without this, context.Background() would
-	// make queued requests uncancellable.
+	// Create a cancellable context BEFORE enqueuing
 	ctx, cancel := context.WithCancel(context.Background())
 	sess.SetCancel(cancel)
+
+	// Resolve model for this chat
+	resolvedModel := h.resolver.Resolve(chatID)
+	modelID := ""
+	if resolvedModel != nil {
+		modelID = resolvedModel.ID
+	}
 
 	// Send placeholder "thinking" message
 	placeholder := h.sendText(chatID, "⏳ _Thinking..._")
@@ -146,9 +248,8 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	// Enqueue the Claude call through the execution engine.
-	// ctx is already cancellable via sess.Cancel().
 	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
-		return h.runClaude(ctx, sess, chatID, userText, memoryContext, placeholder)
+		return h.runClaude(ctx, sess, chatID, modelID, userText, memoryContext, placeholder)
 	})
 
 	if err != nil {
@@ -157,9 +258,7 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 }
 
 // runClaude executes a single Claude CLI call with streaming, transcript recording, and memory extraction.
-// ctx is already cancellable via sess.Cancel() (set in handleMessage before enqueue).
-func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID int64, userText, memoryContext string, placeholderMsgID int) (*execution.RunResult, error) {
-	// Derive a child context so cleanup is scoped to this run.
+func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID int64, modelID, userText, memoryContext string, placeholderMsgID int) (*execution.RunResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -230,7 +329,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		},
 	}
 
-	if err := h.claude.SendMessage(ctx, sess, userText, memoryContext, cb); err != nil {
+	if err := h.claude.SendMessage(ctx, sess, modelID, userText, memoryContext, cb); err != nil {
 		if ctx.Err() != nil {
 			result.Status = execution.RunCanceled
 			streamer.Finalize()
@@ -278,7 +377,6 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	data := cb.Data
 	chatID := cb.Message.Chat.ID
 
-	// Answer the callback immediately (removes loading spinner)
 	answer := tgbotapi.NewCallback(cb.ID, "")
 	_, _ = h.bot.Request(answer)
 
@@ -290,7 +388,6 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	h.approvalMu.Unlock()
 
 	if !ok {
-		// Stale button
 		edit := tgbotapi.NewEditMessageText(chatID, cb.Message.MessageID, "_(expired)_")
 		edit.ParseMode = "Markdown"
 		_, _ = h.bot.Send(edit)
@@ -314,7 +411,6 @@ func (h *Handler) sendText(chatID int64, text string) int {
 	msg.ParseMode = "Markdown"
 	sent, err := h.bot.Send(msg)
 	if err != nil {
-		// Retry without markdown
 		msg2 := tgbotapi.NewMessage(chatID, stripMarkdown(text))
 		sent, err = h.bot.Send(msg2)
 		if err != nil {
