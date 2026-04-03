@@ -1,4 +1,6 @@
 goterm
+nanoclaw
 .env
 *.env
+!.env.example
 config.local.yaml
