@@ -137,6 +137,9 @@ func buildMessages(msgs []agent.Message) []sdk.MessageParam {
 			for _, tc := range m.ToolCalls {
 				var input any
 				_ = json.Unmarshal(tc.Input, &input)
+				if input == nil {
+					input = map[string]any{} // API requires input to be an object, not null
+				}
 				blocks = append(blocks, sdk.NewToolUseBlock(tc.ID, input, tc.Name))
 			}
 			out = append(out, sdk.NewAssistantMessage(blocks...))

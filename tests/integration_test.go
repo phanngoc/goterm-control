@@ -375,9 +375,8 @@ func TestLive_TelegramSendMessage(t *testing.T) {
 	}
 	t.Logf("telegram: logged in as @%s", bot.Self.UserName)
 
-	// Send a test message
-	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("🧪 NanoClaw integration test\n\nTimestamp: %s\nBot: @%s", time.Now().Format(time.RFC3339), bot.Self.UserName))
-	msg.ParseMode = "Markdown"
+	// Send a test message (plain text — avoids Markdown parse issues with special chars)
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("NanoClaw integration test\n\nTimestamp: %s\nBot: %s", time.Now().Format(time.RFC3339), bot.Self.UserName))
 	sent, err := bot.Send(msg)
 	if err != nil {
 		t.Fatalf("send message failed: %v", err)
@@ -386,7 +385,7 @@ func TestLive_TelegramSendMessage(t *testing.T) {
 
 	// Edit the message (simulates streaming behavior)
 	edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID,
-		fmt.Sprintf("🧪 NanoClaw integration test\n\nTimestamp: %s\nBot: @%s\n\n✅ Edit verified!", time.Now().Format(time.RFC3339), bot.Self.UserName))
+		fmt.Sprintf("NanoClaw integration test\n\nTimestamp: %s\nBot: %s\n\nEdit verified!", time.Now().Format(time.RFC3339), bot.Self.UserName))
 	_, err = bot.Send(edit)
 	if err != nil {
 		t.Fatalf("edit message failed: %v", err)
