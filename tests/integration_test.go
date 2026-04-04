@@ -43,8 +43,8 @@ func skipUnlessLive(t *testing.T) {
 
 func loadDotEnv(t *testing.T) {
 	t.Helper()
-	// Try loading .env from project root
-	for _, path := range []string{".env", "../.env"} {
+	// Try loading .env from project root (go test cwd varies)
+	for _, path := range []string{".env", "../.env", "../../.env"} {
 		f, err := os.Open(path)
 		if err != nil {
 			continue
@@ -90,23 +90,67 @@ func (a *toolAdapter) Execute(ctx context.Context, name string, input json.RawMe
 }
 
 func buildToolDefs() []agent.ToolDef {
+	return allToolDefs()
+}
+
+func allToolDefs() []agent.ToolDef {
 	return []agent.ToolDef{
-		{Name: "run_shell", Description: "Execute a shell command", InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"command": map[string]any{"type": "string", "description": "Shell command to execute"},
-			},
-			"required": []string{"command"},
+		{Name: "run_shell", Description: "Execute a shell command on the Mac. Returns stdout+stderr.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"command":     map[string]any{"type": "string", "description": "Shell command"},
+				"working_dir": map[string]any{"type": "string", "description": "Working directory"},
+				"timeout":     map[string]any{"type": "integer", "description": "Timeout seconds"},
+			}, "required": []string{"command"},
 		}},
-		{Name: "read_file", Description: "Read file contents", InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "File path"},
-			},
-			"required": []string{"path"},
+		{Name: "read_file", Description: "Read file contents. Max 100KB.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"path":   map[string]any{"type": "string", "description": "File path"},
+				"offset": map[string]any{"type": "integer", "description": "Start line (1-indexed)"},
+				"limit":  map[string]any{"type": "integer", "description": "Number of lines"},
+			}, "required": []string{"path"},
 		}},
-		{Name: "get_system_info", Description: "Get system info", InputSchema: map[string]any{
+		{Name: "write_file", Description: "Write content to a file. Creates parent dirs.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"path":    map[string]any{"type": "string", "description": "File path"},
+				"content": map[string]any{"type": "string", "description": "Content to write"},
+				"append":  map[string]any{"type": "boolean", "description": "Append mode"},
+			}, "required": []string{"path", "content"},
+		}},
+		{Name: "list_dir", Description: "List directory contents with sizes.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"path":        map[string]any{"type": "string", "description": "Directory path"},
+				"recursive":   map[string]any{"type": "boolean", "description": "Recursive listing"},
+				"show_hidden": map[string]any{"type": "boolean", "description": "Show hidden files"},
+			},
+		}},
+		{Name: "search_files", Description: "Search files by name or content.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"path":           map[string]any{"type": "string", "description": "Search directory"},
+				"pattern":        map[string]any{"type": "string", "description": "Search pattern"},
+				"search_content": map[string]any{"type": "boolean", "description": "Search file contents"},
+			}, "required": []string{"pattern"},
+		}},
+		{Name: "get_clipboard", Description: "Get clipboard contents.", InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{},
+		}},
+		{Name: "set_clipboard", Description: "Set clipboard to text.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"text": map[string]any{"type": "string", "description": "Text to copy"},
+			}, "required": []string{"text"},
+		}},
+		{Name: "get_system_info", Description: "Get system information: OS, CPU, memory, disk.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{},
+		}},
+		{Name: "list_processes", Description: "List running processes.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"filter":  map[string]any{"type": "string", "description": "Filter by name"},
+				"sort_by": map[string]any{"type": "string", "description": "Sort: cpu, memory, pid"},
+			},
+		}},
+		{Name: "run_applescript", Description: "Run AppleScript code.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"script": map[string]any{"type": "string", "description": "AppleScript code"},
+			}, "required": []string{"script"},
 		}},
 	}
 }
@@ -924,6 +968,410 @@ func TestLive_MemoryTelegramRoundtrip(t *testing.T) {
 
 	if !strings.Contains(result.Text, "NanoClaw2026") {
 		t.Errorf("expected WiFi password from memory, got: %q", result.Text)
+	}
+}
+
+// ============================================================
+// Test 14: Tool — run_shell (agent executes shell commands)
+// ============================================================
+
+func TestLive_ToolRunShell(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
+		UserMessage:  "Use run_shell to run `echo HELLO_NANOCLAW` and tell me the output.",
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	if len(usedTools) == 0 || usedTools[0] != "run_shell" {
+		t.Errorf("expected run_shell to be called, got: %v", usedTools)
+	}
+	if !strings.Contains(result.Text, "HELLO_NANOCLAW") {
+		t.Errorf("expected response to contain HELLO_NANOCLAW, got: %q", result.Text)
+	}
+}
+
+// ============================================================
+// Test 15: Tool — write_file + read_file roundtrip
+// ============================================================
+
+func TestLive_ToolWriteReadFile(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	tmpDir := t.TempDir()
+	filePath := tmpDir + "/nanoclaw_test.txt"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var usedTools []string
+
+	// Ask Claude to write a file, then read it back
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
+		UserMessage:  fmt.Sprintf("Write the text 'NanoClaw was here 2026' to the file %s using write_file, then read it back using read_file and tell me what it says.", filePath),
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	// Should have called write_file and read_file
+	hasWrite, hasRead := false, false
+	for _, tool := range usedTools {
+		if tool == "write_file" {
+			hasWrite = true
+		}
+		if tool == "read_file" {
+			hasRead = true
+		}
+	}
+	if !hasWrite {
+		t.Error("expected write_file to be called")
+	}
+	if !hasRead {
+		t.Error("expected read_file to be called")
+	}
+
+	// Verify file actually exists on disk
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+	if !strings.Contains(string(data), "NanoClaw was here 2026") {
+		t.Errorf("file content doesn't match: %q", string(data))
+	}
+	t.Logf("file on disk: %q", string(data))
+}
+
+// ============================================================
+// Test 16: Tool — list_dir
+// ============================================================
+
+func TestLive_ToolListDir(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be very brief.",
+		UserMessage:  "Use list_dir to list the contents of /tmp and tell me how many items are there.",
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	if len(usedTools) == 0 || usedTools[0] != "list_dir" {
+		t.Errorf("expected list_dir, got: %v", usedTools)
+	}
+}
+
+// ============================================================
+// Test 17: Tool — clipboard roundtrip (set + get)
+// ============================================================
+
+func TestLive_ToolClipboard(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
+		UserMessage:  "Use set_clipboard to put 'NANOCLAW_CLIP_TEST' on the clipboard, then use get_clipboard to read it back and confirm.",
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	hasSet, hasGet := false, false
+	for _, tool := range usedTools {
+		if tool == "set_clipboard" {
+			hasSet = true
+		}
+		if tool == "get_clipboard" {
+			hasGet = true
+		}
+	}
+	if !hasSet {
+		t.Error("expected set_clipboard to be called")
+	}
+	if !hasGet {
+		t.Error("expected get_clipboard to be called")
+	}
+	if !strings.Contains(result.Text, "NANOCLAW_CLIP_TEST") {
+		t.Errorf("expected response to confirm clipboard content, got: %q", result.Text)
+	}
+}
+
+// ============================================================
+// Test 18: Tool — get_system_info + list_processes (chained)
+// ============================================================
+
+func TestLive_ToolSystemInfoAndProcesses(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
+		UserMessage:  "Use get_system_info to check what Mac model I have, then use list_processes to find if 'Finder' is running. Report both answers.",
+		Tools:        allToolDefs(),
+		MaxTokens:    1024,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	hasSysInfo, hasProcs := false, false
+	for _, tool := range usedTools {
+		if tool == "get_system_info" {
+			hasSysInfo = true
+		}
+		if tool == "list_processes" {
+			hasProcs = true
+		}
+	}
+	if !hasSysInfo {
+		t.Error("expected get_system_info to be called")
+	}
+	if !hasProcs {
+		t.Error("expected list_processes to be called")
+	}
+	if result.Iterations < 2 {
+		t.Errorf("expected >=2 iterations for multi-tool chain, got %d", result.Iterations)
+	}
+}
+
+// ============================================================
+// Test 19: Tool — search_files
+// ============================================================
+
+func TestLive_ToolSearchFiles(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	// Create a temp dir with known files to search
+	tmpDir := t.TempDir()
+	os.WriteFile(tmpDir+"/hello.txt", []byte("hello world"), 0644)
+	os.WriteFile(tmpDir+"/goodbye.txt", []byte("farewell"), 0644)
+	os.WriteFile(tmpDir+"/hello.go", []byte("package main"), 0644)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
+		UserMessage:  fmt.Sprintf("Use search_files to find all files with 'hello' in their name in %s. How many matches?", tmpDir),
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	if len(usedTools) == 0 || usedTools[0] != "search_files" {
+		t.Errorf("expected search_files, got: %v", usedTools)
+	}
+	// Should find 2 files: hello.txt and hello.go
+	if !strings.Contains(result.Text, "2") {
+		t.Logf("warning: expected '2' matches mentioned, got: %q", result.Text)
+	}
+}
+
+// ============================================================
+// Test 20: Tool — run_applescript
+// ============================================================
+
+func TestLive_ToolAppleScript(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
+		UserMessage:  `Use run_applescript with the script: return "NanoClaw AppleScript Works"`,
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	if len(usedTools) == 0 || usedTools[0] != "run_applescript" {
+		t.Errorf("expected run_applescript, got: %v", usedTools)
+	}
+	if !strings.Contains(result.Text, "NanoClaw AppleScript Works") {
+		t.Logf("warning: expected AppleScript output in response")
+	}
+}
+
+// ============================================================
+// Test 21: Tool — multi-tool chain (complex task)
+// ============================================================
+
+func TestLive_ToolMultiStepTask(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := anthropicClient.New(apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
+
+	tmpDir := t.TempDir()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You are helpful. Use tools to complete tasks. Be brief in your final answer.",
+		UserMessage: fmt.Sprintf(`Do these steps:
+1. Use write_file to create %s/task.txt with content "Step 1 done"
+2. Use run_shell to append " - Step 2 done" to the file: echo " - Step 2 done" >> %s/task.txt
+3. Use read_file to read the final content
+4. Tell me what the file contains.`, tmpDir, tmpDir),
+		Tools:     allToolDefs(),
+		MaxTokens: 1024,
+		OnToolCall: func(name, _ string) {
+			usedTools = append(usedTools, name)
+			t.Logf("  tool: %s", name)
+		},
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("iterations: %d", result.Iterations)
+	t.Logf("response: %q", result.Text)
+
+	// Should have used at least 3 tools
+	if len(usedTools) < 3 {
+		t.Errorf("expected >=3 tool calls, got %d: %v", len(usedTools), usedTools)
+	}
+
+	// Verify file on disk
+	data, err := os.ReadFile(tmpDir + "/task.txt")
+	if err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+	content := string(data)
+	t.Logf("file on disk: %q", content)
+
+	if !strings.Contains(content, "Step 1") {
+		t.Error("file missing Step 1")
+	}
+	if !strings.Contains(content, "Step 2") {
+		t.Error("file missing Step 2")
 	}
 }
 
