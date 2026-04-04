@@ -17,6 +17,7 @@ import (
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/agent"
 	"github.com/ngocp/goterm-control/internal/channel"
+	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/gateway"
@@ -124,8 +125,17 @@ func runGateway(args []string) {
 		cancel()
 	}()
 
-	// Create the Anthropic provider
-	provider := anthropicClient.New(cfg.Claude.APIKey)
+	// Create model provider: use CLI for OAuth tokens, direct API for API keys
+	var provider agent.ModelProvider
+	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
+		// OAuth subscription token — must use claude CLI subprocess
+		log.Println("gateway: using Claude CLI provider (OAuth token detected)")
+		provider = claude.NewCLIProvider()
+	} else {
+		// Direct API key (sk-ant-api03-...)
+		log.Println("gateway: using direct Anthropic API provider")
+		provider = anthropicClient.New(cfg.Claude.APIKey)
+	}
 
 	// Model resolver
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
@@ -268,7 +278,12 @@ func runChat(args []string) {
 		log.Fatalf("config: %v", err)
 	}
 
-	provider := anthropicClient.New(cfg.Claude.APIKey)
+	var chatProvider agent.ModelProvider
+	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
+		chatProvider = claude.NewCLIProvider()
+	} else {
+		chatProvider = anthropicClient.New(cfg.Claude.APIKey)
+	}
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
 
 	modelID := resolver.Default()
@@ -314,7 +329,7 @@ func runChat(args []string) {
 		}
 
 		result, err := agent.RunAgent(ctx, agent.RunParams{
-			Provider:     provider,
+			Provider:     chatProvider,
 			ToolExecutor: &toolAdapter{executor: executor},
 			ModelID:      modelID,
 			SystemPrompt: cfg.Claude.SystemPrompt,
@@ -370,6 +385,19 @@ func buildToolDefs() []agent.ToolDef {
 		{"list_processes", "List running processes"},
 		{"kill_process", "Kill a process"},
 		{"browse_url", "Open URL in browser"},
+		// Browser automation (agent-browser)
+		{"browser_navigate", "Navigate browser to a URL. Opens the page in a headless Chrome browser."},
+		{"browser_snapshot", "Get an accessibility snapshot of the current page with element refs (@e1, @e2, etc). Use -i for interactive elements only."},
+		{"browser_click", "Click an element by its ref (e.g. @e3). Always snapshot first to get refs."},
+		{"browser_fill", "Clear and type text into an input field by ref. Use for form fields."},
+		{"browser_type", "Append text to an input field by ref (does not clear first)."},
+		{"browser_select", "Select a dropdown option by ref and value."},
+		{"browser_scroll", "Scroll the page in a direction (up/down/left/right)."},
+		{"browser_screenshot", "Take a screenshot of the current browser page."},
+		{"browser_get_text", "Get text, HTML, value, title, or URL from an element or page."},
+		{"browser_eval", "Execute JavaScript code in the browser and return the result."},
+		{"browser_wait", "Wait for an element ref to appear, text to be visible, or a number of milliseconds."},
+		{"browser_back", "Navigate back in browser history."},
 	}
 
 	// Import tool schemas from claude package tools
@@ -437,6 +465,51 @@ func findToolSchema(name string) map[string]any {
 		"browse_url": {"type": "object", "properties": map[string]any{
 			"url": map[string]any{"type": "string", "description": "URL to open"},
 		}, "required": []string{"url"}},
+
+		// Browser automation tools (agent-browser)
+		"browser_navigate": {"type": "object", "properties": map[string]any{
+			"url": map[string]any{"type": "string", "description": "URL to navigate to"},
+		}, "required": []string{"url"}},
+		"browser_snapshot": {"type": "object", "properties": map[string]any{
+			"selector":    map[string]any{"type": "string", "description": "CSS selector to scope the snapshot"},
+			"interactive": map[string]any{"type": "boolean", "description": "Show only interactive elements (default true)"},
+		}},
+		"browser_click": {"type": "object", "properties": map[string]any{
+			"ref":     map[string]any{"type": "string", "description": "Element ref from snapshot (e.g. @e3)"},
+			"new_tab": map[string]any{"type": "boolean", "description": "Open in new tab"},
+		}, "required": []string{"ref"}},
+		"browser_fill": {"type": "object", "properties": map[string]any{
+			"ref":  map[string]any{"type": "string", "description": "Element ref for the input field"},
+			"text": map[string]any{"type": "string", "description": "Text to fill (clears field first)"},
+		}, "required": []string{"ref", "text"}},
+		"browser_type": {"type": "object", "properties": map[string]any{
+			"ref":  map[string]any{"type": "string", "description": "Element ref for the input field"},
+			"text": map[string]any{"type": "string", "description": "Text to type (appends, does not clear)"},
+		}, "required": []string{"ref", "text"}},
+		"browser_select": {"type": "object", "properties": map[string]any{
+			"ref":   map[string]any{"type": "string", "description": "Element ref for the dropdown"},
+			"value": map[string]any{"type": "string", "description": "Value to select"},
+		}, "required": []string{"ref", "value"}},
+		"browser_scroll": {"type": "object", "properties": map[string]any{
+			"direction": map[string]any{"type": "string", "description": "Scroll direction: up, down, left, right (default: down)"},
+			"pixels":    map[string]any{"type": "integer", "description": "Pixels to scroll (default: 300)"},
+		}},
+		"browser_screenshot": {"type": "object", "properties": map[string]any{
+			"path": map[string]any{"type": "string", "description": "Output file path (default: /tmp/browser-screenshot.png)"},
+		}},
+		"browser_get_text": {"type": "object", "properties": map[string]any{
+			"ref":      map[string]any{"type": "string", "description": "Element ref to get text from (omit for full page)"},
+			"property": map[string]any{"type": "string", "description": "Property: text, html, value, title, url (default: text)"},
+		}},
+		"browser_eval": {"type": "object", "properties": map[string]any{
+			"expression": map[string]any{"type": "string", "description": "JavaScript expression to evaluate"},
+		}, "required": []string{"expression"}},
+		"browser_wait": {"type": "object", "properties": map[string]any{
+			"ref":  map[string]any{"type": "string", "description": "Element ref to wait for"},
+			"text": map[string]any{"type": "string", "description": "Text to wait for on page"},
+			"ms":   map[string]any{"type": "integer", "description": "Milliseconds to wait"},
+		}},
+		"browser_back": {"type": "object", "properties": map[string]any{}},
 	}
 	if s, ok := schemas[name]; ok {
 		return s

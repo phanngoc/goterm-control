@@ -26,6 +26,7 @@ import (
 
 	"github.com/ngocp/goterm-control/internal/agent"
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
+	"github.com/ngocp/goterm-control/internal/claude"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
@@ -77,6 +78,25 @@ func requireEnv(t *testing.T, key string) string {
 		t.Fatalf("required env var %s is not set", key)
 	}
 	return v
+}
+
+// makeProvider returns the right ModelProvider based on token type.
+// OAuth tokens (sk-ant-oat...) use CLI subprocess; API keys use direct API.
+func makeProvider(apiKey string) agent.ModelProvider {
+	if strings.HasPrefix(apiKey, "sk-ant-oat") {
+		return claude.NewCLIProvider()
+	}
+	return anthropicClient.New(apiKey)
+}
+
+// makeToolProvider returns a provider for tests that need tool calling (direct API only).
+// OAuth tokens don't support custom tools — the CLI manages its own tool set.
+func makeToolProvider(t *testing.T, apiKey string) agent.ModelProvider {
+	t.Helper()
+	if strings.HasPrefix(apiKey, "sk-ant-oat") {
+		t.Skip("skipping: tool-use tests require direct API key (sk-ant-api03-...), not OAuth token. Set ANTHROPIC_API_KEY to a direct key.")
+	}
+	return anthropicClient.New(apiKey)
 }
 
 // toolAdapter bridges tools.Executor to agent.ToolExecutor.
@@ -152,6 +172,54 @@ func allToolDefs() []agent.ToolDef {
 				"script": map[string]any{"type": "string", "description": "AppleScript code"},
 			}, "required": []string{"script"},
 		}},
+		// Browser automation
+		{Name: "browser_navigate", Description: "Navigate browser to a URL.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "URL to navigate to"},
+			}, "required": []string{"url"},
+		}},
+		{Name: "browser_snapshot", Description: "Get accessibility snapshot with element refs (@e1, @e2).", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"selector": map[string]any{"type": "string", "description": "CSS selector scope"},
+			},
+		}},
+		{Name: "browser_click", Description: "Click element by ref.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"ref": map[string]any{"type": "string", "description": "Element ref (e.g. @e3)"},
+			}, "required": []string{"ref"},
+		}},
+		{Name: "browser_fill", Description: "Clear and type in input field.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"ref":  map[string]any{"type": "string", "description": "Input field ref"},
+				"text": map[string]any{"type": "string", "description": "Text to fill"},
+			}, "required": []string{"ref", "text"},
+		}},
+		{Name: "browser_get_text", Description: "Get text/title/url from element or page.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"ref":      map[string]any{"type": "string", "description": "Element ref"},
+				"property": map[string]any{"type": "string", "description": "text, html, value, title, url"},
+			},
+		}},
+		{Name: "browser_eval", Description: "Execute JavaScript in browser.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"expression": map[string]any{"type": "string", "description": "JS expression"},
+			}, "required": []string{"expression"},
+		}},
+		{Name: "browser_scroll", Description: "Scroll page.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"direction": map[string]any{"type": "string", "description": "up/down/left/right"},
+			},
+		}},
+		{Name: "browser_back", Description: "Navigate back.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{},
+		}},
+		{Name: "browser_wait", Description: "Wait for element, text, or time.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"ref":  map[string]any{"type": "string", "description": "Element ref to wait for"},
+				"text": map[string]any{"type": "string", "description": "Text to wait for"},
+				"ms":   map[string]any{"type": "integer", "description": "Milliseconds to wait"},
+			},
+		}},
 	}
 }
 
@@ -164,7 +232,7 @@ func TestLive_AnthropicStreaming(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeProvider(apiKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -186,7 +254,9 @@ func TestLive_AnthropicStreaming(t *testing.T) {
 			text.WriteString(ev.Text)
 		case "end":
 			gotEnd = true
-			t.Logf("usage: input=%d output=%d", ev.Usage.OutputTokens, ev.Usage.OutputTokens)
+			if ev.Usage != nil {
+				t.Logf("usage: input=%d output=%d", ev.Usage.InputTokens, ev.Usage.OutputTokens)
+			}
 		case "error":
 			t.Fatalf("stream error: %v", ev.Error)
 		}
@@ -212,7 +282,7 @@ func TestLive_AgentLoopSimple(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeProvider(apiKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -256,7 +326,7 @@ func TestLive_AgentLoopWithTools(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -303,7 +373,7 @@ func TestLive_ContextEngineWithAgent(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey) // multi-turn context needs direct API
 	engine := agentctx.NewEngine(200_000) // claude context window
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -357,7 +427,7 @@ func TestLive_ModelResolverAllModels(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeProvider(apiKey)
 	resolver := models.NewResolver("claude-haiku-4-5", nil)
 
 	for _, m := range resolver.List() {
@@ -464,7 +534,10 @@ func TestLive_FullRoundtrip(t *testing.T) {
 	}
 	t.Logf("step 1: telegram bot @%s ready", bot.Self.UserName)
 
-	// --- Step 2: Create Anthropic provider ---
+	// --- Step 2: Create provider (tool-use requires direct API) ---
+	if strings.HasPrefix(apiKey, "sk-ant-oat") {
+		t.Skip("skipping: FullRoundtrip requires direct API key for tool-use")
+	}
 	provider := anthropicClient.New(apiKey)
 	t.Log("step 2: anthropic provider ready")
 
@@ -569,7 +642,7 @@ func TestLive_MultiTurnConversation(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey) // multi-turn needs direct API (CLI is stateless)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
@@ -772,7 +845,7 @@ func TestLive_MemoryInjectionWithClaude(t *testing.T) {
 	}
 
 	// Now ask Claude with memory injected into system prompt
-	client := anthropicClient.New(apiKey)
+	client := makeProvider(apiKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -807,7 +880,7 @@ func TestLive_MemoryFullLifecycle(t *testing.T) {
 
 	dir := t.TempDir()
 	store := memory.NewStore(dir)
-	client := anthropicClient.New(apiKey)
+	client := makeProvider(apiKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -926,12 +999,12 @@ func TestLive_MemoryTelegramRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	store := memory.NewStore(dir)
 
-	// Pre-seed memory
+	// Pre-seed memory with non-sensitive project info
 	store.Append(memory.Entry{
 		SessionID: "old_session",
-		Keywords:  []string{"wifi", "password", "network", "office"},
-		Facts:     []string{"WiFi password: NanoClaw2026!", "Network name: OfficeNet-5G"},
-		Summary:   "Shared the office WiFi credentials.",
+		Keywords:  []string{"project", "mascot", "nanoclaw", "dragon"},
+		Facts:     []string{"Project mascot name: Drakey the Dragon"},
+		Summary:   "Discussed the project mascot named Drakey the Dragon.",
 	})
 
 	// Send placeholder
@@ -942,8 +1015,8 @@ func TestLive_MemoryTelegramRoundtrip(t *testing.T) {
 	}
 
 	// Build memory + call agent
-	memCtx := memory.BuildMemoryContext(store, "what is the wifi password", 3)
-	client := anthropicClient.New(apiKey)
+	memCtx := memory.BuildMemoryContext(store, "what is the project mascot", 3)
+	client := makeProvider(apiKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -952,7 +1025,7 @@ func TestLive_MemoryTelegramRoundtrip(t *testing.T) {
 		Provider:     client,
 		ModelID:      "claude-haiku-4-5",
 		SystemPrompt: "Be very brief. Use memory context to answer." + memCtx,
-		UserMessage:  "What's the office WiFi password?",
+		UserMessage:  "What is our project mascot name?",
 		MaxTokens:    100,
 	})
 	if err != nil {
@@ -966,8 +1039,8 @@ func TestLive_MemoryTelegramRoundtrip(t *testing.T) {
 	edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, editText)
 	bot.Send(edit)
 
-	if !strings.Contains(result.Text, "NanoClaw2026") {
-		t.Errorf("expected WiFi password from memory, got: %q", result.Text)
+	if !strings.Contains(result.Text, "Drakey") {
+		t.Errorf("expected mascot name from memory, got: %q", result.Text)
 	}
 }
 
@@ -980,7 +1053,7 @@ func TestLive_ToolRunShell(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1021,7 +1094,7 @@ func TestLive_ToolWriteReadFile(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	tmpDir := t.TempDir()
@@ -1087,7 +1160,7 @@ func TestLive_ToolListDir(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1125,7 +1198,7 @@ func TestLive_ToolClipboard(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -1178,7 +1251,7 @@ func TestLive_ToolSystemInfoAndProcesses(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -1231,7 +1304,7 @@ func TestLive_ToolSearchFiles(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	// Create a temp dir with known files to search
@@ -1279,7 +1352,7 @@ func TestLive_ToolAppleScript(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1320,7 +1393,7 @@ func TestLive_ToolMultiStepTask(t *testing.T) {
 	loadDotEnv(t)
 	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
 
-	client := anthropicClient.New(apiKey)
+	client := makeToolProvider(t, apiKey)
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	tmpDir := t.TempDir()
@@ -1372,6 +1445,154 @@ func TestLive_ToolMultiStepTask(t *testing.T) {
 	}
 	if !strings.Contains(content, "Step 2") {
 		t.Error("file missing Step 2")
+	}
+}
+
+// ============================================================
+// Test 22: Browser — navigate + snapshot + get title
+// ============================================================
+
+func TestLive_ToolBrowserNavigateAndSnapshot(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := makeToolProvider(t, apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 30, MaxOutputBytes: 8192})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: `You control a headless browser via browser_* tools. Always use browser_navigate first to open a URL, then browser_snapshot to see the page content with element refs. Be brief.`,
+		UserMessage:  "Navigate to https://example.com and tell me the page title and what links are on the page. Use browser_navigate then browser_snapshot.",
+		Tools:        allToolDefs(),
+		MaxTokens:    1024,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name); t.Logf("  tool: %s", name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	hasNav, hasSnap := false, false
+	for _, tool := range usedTools {
+		if tool == "browser_navigate" {
+			hasNav = true
+		}
+		if tool == "browser_snapshot" {
+			hasSnap = true
+		}
+	}
+	if !hasNav {
+		t.Error("expected browser_navigate to be called")
+	}
+	if !hasSnap {
+		t.Error("expected browser_snapshot to be called")
+	}
+	if !strings.Contains(strings.ToLower(result.Text), "example") {
+		t.Errorf("expected response to mention 'example', got: %q", result.Text)
+	}
+}
+
+// ============================================================
+// Test 23: Browser — eval JavaScript
+// ============================================================
+
+func TestLive_ToolBrowserEval(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := makeToolProvider(t, apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 30, MaxOutputBytes: 8192})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: "You control a headless browser. Be brief.",
+		UserMessage:  "Navigate to https://example.com, then use browser_eval to run `document.title` and tell me the result.",
+		Tools:        allToolDefs(),
+		MaxTokens:    512,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name); t.Logf("  tool: %s", name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("response: %q", result.Text)
+
+	hasEval := false
+	for _, tool := range usedTools {
+		if tool == "browser_eval" {
+			hasEval = true
+		}
+	}
+	if !hasEval {
+		t.Error("expected browser_eval to be called")
+	}
+	if !strings.Contains(result.Text, "Example Domain") {
+		t.Logf("warning: expected 'Example Domain' in response")
+	}
+}
+
+// ============================================================
+// Test 24: Browser — click link and get new page
+// ============================================================
+
+func TestLive_ToolBrowserClickAndNavigate(t *testing.T) {
+	skipUnlessLive(t)
+	loadDotEnv(t)
+	apiKey := requireEnv(t, "ANTHROPIC_API_KEY")
+
+	client := makeToolProvider(t, apiKey)
+	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 30, MaxOutputBytes: 8192})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	var usedTools []string
+	result, err := agent.RunAgent(ctx, agent.RunParams{
+		Provider:     client,
+		ToolExecutor: &toolAdapter{executor: executor},
+		ModelID:      "claude-haiku-4-5",
+		SystemPrompt: `You control a headless browser. Workflow: browser_navigate → browser_snapshot → find refs → browser_click → browser_snapshot again. Be brief.`,
+		UserMessage:  "Go to https://example.com, take a snapshot to see the links, click the 'More information...' link, then take another snapshot and tell me what page you ended up on.",
+		Tools:        allToolDefs(),
+		MaxTokens:    1024,
+		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name); t.Logf("  tool: %s", name) },
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	t.Logf("tools used: %v", usedTools)
+	t.Logf("iterations: %d", result.Iterations)
+	t.Logf("response: %q", result.Text)
+
+	hasClick := false
+	for _, tool := range usedTools {
+		if tool == "browser_click" {
+			hasClick = true
+		}
+	}
+	if !hasClick {
+		t.Error("expected browser_click to be called")
+	}
+	if result.Iterations < 3 {
+		t.Logf("note: expected >=3 iterations (navigate + snapshot + click + snapshot), got %d", result.Iterations)
 	}
 }
 
