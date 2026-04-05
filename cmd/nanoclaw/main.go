@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -146,17 +147,17 @@ func runGateway(args []string) {
 
 	// Gateway RPC server
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
+	startTime := time.Now()
 	deps := gateway.Deps{
 		Sessions: sessions,
 		Resolver: resolver,
 		Provider: provider,
 		System:   cfg.Claude.SystemPrompt,
 		DataDir:  cfg.Session.DataDir,
-		Uptime:   nil,
+		Uptime:   func() time.Duration { return time.Since(startTime) },
 	}
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), "dashboard/dist")
-	deps.Uptime = srv.Uptime
 
 	// Also start Telegram bot in background if configured
 	if cfg.Telegram.Token != "" {
