@@ -92,7 +92,33 @@ func sessionToInfo(s *session.Session) SessionInfo {
 }
 
 func handleSessionsList(deps Deps) (json.RawMessage, error) {
+	// Reload sessions from disk to pick up sessions created by other processes (Telegram bot)
+	deps.Sessions.ReloadFromDisk()
+
 	all := deps.Sessions.List()
+
+	// Also scan transcript directory for sessions not in the store
+	transcriptDir := filepath.Join(deps.DataDir, "transcripts")
+	files, _ := transcript.ListTranscripts(transcriptDir)
+	known := make(map[string]bool, len(all))
+	for _, s := range all {
+		known[s.ID] = true
+	}
+	for _, f := range files {
+		base := filepath.Base(f)
+		sessionID := base[:len(base)-len(".jsonl")]
+		if !known[sessionID] {
+			// Create a stub session from transcript metadata
+			events, err := transcript.ReadLast(f, 1)
+			s := &session.Session{ID: sessionID}
+			if err == nil && len(events) > 0 {
+				s.ChatID = events[0].ChatID
+				s.UpdatedAt = events[0].Timestamp
+			}
+			all = append(all, s)
+		}
+	}
+
 	infos := make([]SessionInfo, 0, len(all))
 	for _, s := range all {
 		infos = append(infos, sessionToInfo(s))

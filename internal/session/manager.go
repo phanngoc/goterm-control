@@ -69,6 +69,32 @@ func (m *Manager) Get(chatID int64) *Session {
 	return s
 }
 
+// ReloadFromDisk re-reads sessions.json, merging any new sessions from other processes.
+func (m *Manager) ReloadFromDisk() {
+	if m.store == nil {
+		return
+	}
+	loaded, err := m.store.Load()
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for chatID, s := range loaded {
+		if _, ok := m.sessions[chatID]; !ok {
+			m.sessions[chatID] = s
+		} else if s.UpdatedAt.After(m.sessions[chatID].UpdatedAt) {
+			// Update if disk version is newer (another process wrote it)
+			existing := m.sessions[chatID]
+			existing.ClaudeSessionID = s.ClaudeSessionID
+			existing.MessageCount = s.MessageCount
+			existing.InputTokens = s.InputTokens
+			existing.OutputTokens = s.OutputTokens
+			existing.UpdatedAt = s.UpdatedAt
+		}
+	}
+}
+
 // List returns all active sessions.
 func (m *Manager) List() []*Session {
 	m.mu.RLock()
