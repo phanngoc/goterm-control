@@ -154,7 +154,10 @@ func handleTranscriptGet(deps Deps, params json.RawMessage) (json.RawMessage, er
 	return json.Marshal(events)
 }
 
-// --- Send (with tool execution + session context) ---
+// --- Send (with session persistence + transcript) ---
+
+// dashboardChatID is a fixed chatID for dashboard sessions (not a real Telegram chat).
+const dashboardChatID int64 = 1
 
 func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	var p SendParams
@@ -164,6 +167,9 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 	if p.Message == "" {
 		return nil, fmt.Errorf("message is required")
 	}
+
+	// Get or create dashboard session
+	sess := deps.Sessions.Get(dashboardChatID)
 
 	modelID := deps.Resolver.Default()
 	if p.ModelID != "" {
@@ -191,8 +197,25 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 		return nil, err
 	}
 
+	// Persist transcript
+	tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
+	now := time.Now()
+	tw.Append(sess.ID, transcript.Event{
+		Type: transcript.EventUserMessage, Timestamp: now,
+		SessionID: sess.ID, Content: p.Message,
+	})
+	tw.Append(sess.ID, transcript.Event{
+		Type: transcript.EventAssistantText, Timestamp: now,
+		SessionID: sess.ID, Content: result.Text,
+	})
+
+	// Update session counters
+	sess.IncrementMessages()
+	deps.Sessions.MarkDirty()
+
 	return json.Marshal(map[string]any{
 		"text":       result.Text,
+		"session_id": sess.ID,
 		"iterations": result.Iterations,
 		"usage":      result.Usage,
 	})

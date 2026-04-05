@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useStore } from './stores/store'
+import { useStore, ChatMessage } from './stores/store'
 import { useGateway } from './hooks/useGateway'
 import SessionList from './components/SessionList'
 import ChatView from './components/ChatView'
@@ -14,17 +14,46 @@ export default function App() {
   const setStatus = useStore(s => s.setStatus)
   const activeSessionId = useStore(s => s.activeSessionId)
 
-  // Load sessions + status on connect
+  const setActiveSessionId = useStore(s => s.setActiveSessionId)
+  const setMessages = useStore(s => s.setMessages)
+
+  // Load sessions + status on connect, auto-open latest session
   useEffect(() => {
     if (!connected) return
-    call('sessions.list').then(setSessions).catch(() => {})
-    call('status').then(setStatus).catch(() => {})
+
+    const loadAll = async () => {
+      try {
+        const [sessions, status] = await Promise.all([
+          call('sessions.list'),
+          call('status'),
+        ])
+        setSessions(sessions || [])
+        setStatus(status)
+
+        // Auto-open the most recent session if we have one and nothing is active
+        if (sessions?.length > 0 && !useStore.getState().activeSessionId) {
+          const latest = sessions.sort((a: any, b: any) =>
+            new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+          )[0]
+          setActiveSessionId(latest.id)
+
+          // Load its transcript
+          const events = await call('transcript.get', { session_id: latest.id })
+          if (Array.isArray(events) && events.length > 0) {
+            setMessages(eventsToMessages(events))
+            setTab('chat')
+          }
+        }
+      } catch {}
+    }
+
+    loadAll()
     const interval = setInterval(() => {
-      call('sessions.list').then(setSessions).catch(() => {})
+      call('sessions.list').then((s: any) => setSessions(s || [])).catch(() => {})
       call('status').then(setStatus).catch(() => {})
     }, 10_000)
     return () => clearInterval(interval)
-  }, [connected, call, setSessions, setStatus])
+  }, [connected, call, setSessions, setStatus, setActiveSessionId, setMessages, setTab])
 
   // Auto-switch to chat when session selected
   useEffect(() => {
@@ -62,4 +91,27 @@ export default function App() {
       </main>
     </div>
   )
+}
+
+function eventsToMessages(events: any[]): ChatMessage[] {
+  const msgs: ChatMessage[] = []
+  let currentTools: string[] = []
+  for (const ev of events) {
+    switch (ev.type) {
+      case 'user_message':
+        msgs.push({ role: 'user', content: ev.content || '', timestamp: ev.ts })
+        break
+      case 'tool_call':
+        currentTools.push(ev.tool_name || '')
+        break
+      case 'assistant_text':
+        msgs.push({
+          role: 'assistant', content: ev.content || '', timestamp: ev.ts,
+          tools: currentTools.length > 0 ? [...currentTools] : undefined,
+        })
+        currentTools = []
+        break
+    }
+  }
+  return msgs
 }
