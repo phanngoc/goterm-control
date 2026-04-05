@@ -13,11 +13,35 @@ export default function App() {
   const setSessions = useStore(s => s.setSessions)
   const setStatus = useStore(s => s.setStatus)
   const activeSessionId = useStore(s => s.activeSessionId)
-
   const setActiveSessionId = useStore(s => s.setActiveSessionId)
   const setMessages = useStore(s => s.setMessages)
 
-  // Load sessions + status on connect, auto-open latest session
+  // Sync URL ↔ state: read on load, write on change
+  useEffect(() => {
+    const path = location.pathname
+    if (path.startsWith('/chat/')) {
+      const id = path.slice(6)
+      if (id) {
+        setActiveSessionId(id)
+        setTab('chat')
+      }
+    } else if (path === '/status') {
+      setTab('status')
+    }
+  }, [setActiveSessionId, setTab])
+
+  // Update URL when session/tab changes
+  useEffect(() => {
+    if (tab === 'chat' && activeSessionId && activeSessionId !== 'new') {
+      history.replaceState(null, '', `/chat/${activeSessionId}`)
+    } else if (tab === 'status') {
+      history.replaceState(null, '', '/status')
+    } else if (tab === 'sessions') {
+      history.replaceState(null, '', '/')
+    }
+  }, [tab, activeSessionId])
+
+  // Load sessions + status on connect
   useEffect(() => {
     if (!connected) return
 
@@ -30,18 +54,12 @@ export default function App() {
         setSessions(sessions || [])
         setStatus(status)
 
-        // Auto-open the most recent session if we have one and nothing is active
-        if (sessions?.length > 0 && !useStore.getState().activeSessionId) {
-          const latest = sessions.sort((a: any, b: any) =>
-            new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-          )[0]
-          setActiveSessionId(latest.id)
-
-          // Load its transcript
-          const events = await call('transcript.get', { session_id: latest.id })
+        // If URL points to a session, load its transcript
+        const urlSessionId = useStore.getState().activeSessionId
+        if (urlSessionId && urlSessionId !== 'new') {
+          const events = await call('transcript.get', { session_id: urlSessionId })
           if (Array.isArray(events) && events.length > 0) {
             setMessages(eventsToMessages(events))
-            setTab('chat')
           }
         }
       } catch {}
@@ -53,7 +71,7 @@ export default function App() {
       call('status').then(setStatus).catch(() => {})
     }, 10_000)
     return () => clearInterval(interval)
-  }, [connected, call, setSessions, setStatus, setActiveSessionId, setMessages, setTab])
+  }, [connected, call, setSessions, setStatus, setMessages])
 
   // Auto-switch to chat when session selected
   useEffect(() => {
@@ -62,17 +80,18 @@ export default function App() {
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">
-      {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
         <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold tracking-tight">NanoClaw</h1>
+          <h1 className="text-lg font-semibold tracking-tight cursor-pointer" onClick={() => { setTab('sessions'); setActiveSessionId(null) }}>
+            NanoClaw
+          </h1>
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>
         <nav className="flex gap-1">
           {(['sessions', 'chat', 'status'] as const).map(t => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => { setTab(t); if (t === 'sessions') setActiveSessionId(null) }}
               className={`px-3 py-1 text-sm rounded-md transition-colors ${
                 tab === t ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
               }`}
@@ -83,7 +102,6 @@ export default function App() {
         </nav>
       </header>
 
-      {/* Content */}
       <main className="flex-1 overflow-hidden">
         {tab === 'sessions' && <SessionList call={call} />}
         {tab === 'chat' && <ChatView call={call} />}

@@ -47,7 +47,12 @@ export default function SessionList({ call }: { call: (m: string, p?: any) => Pr
           <p className="text-lg">No sessions yet</p>
           <p className="text-sm mt-1">Send a message on Telegram or start a new chat</p>
           <button
-            onClick={() => { setActiveSessionId('new'); setTab('chat') }}
+            onClick={() => {
+              const id = 'chat_' + Date.now()
+              setActiveSessionId(id)
+              setMessages([])
+              setTab('chat')
+            }}
             className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
           >
             New Chat
@@ -62,7 +67,12 @@ export default function SessionList({ call }: { call: (m: string, p?: any) => Pr
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-medium text-gray-300">Sessions</h2>
         <button
-          onClick={() => { setActiveSessionId('new'); setTab('chat') }}
+          onClick={() => {
+            const id = 'chat_' + Date.now()
+            setActiveSessionId(id)
+            setMessages([])
+            setTab('chat')
+          }}
           className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
         >
           + New Chat

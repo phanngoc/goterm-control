@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -57,7 +58,19 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 
 	if s.dashboardDir != "" {
-		mux.Handle("/", http.FileServer(http.Dir(s.dashboardDir)))
+		fs := http.FileServer(http.Dir(s.dashboardDir))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// SPA fallback: serve index.html for routes like /chat/xxx, /status
+			path := r.URL.Path
+			if path != "/" && path != "" {
+				// Check if it's a real file (js, css, etc.)
+				if _, err := os.Stat(s.dashboardDir + path); err != nil {
+					// Not a file — serve index.html for client-side routing
+					r.URL.Path = "/"
+				}
+			}
+			fs.ServeHTTP(w, r)
+		})
 		log.Printf("gateway: serving dashboard from %s", s.dashboardDir)
 	}
 
