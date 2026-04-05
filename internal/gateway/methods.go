@@ -180,9 +180,91 @@ func handleTranscriptGet(deps Deps, params json.RawMessage) (json.RawMessage, er
 	return json.Marshal(events)
 }
 
-// --- Send (with session persistence + transcript) ---
+// --- Streaming Send ---
 
-// dashboardChatID is a fixed chatID for dashboard sessions (not a real Telegram chat).
+// NewStreamSendHandler creates a StreamSendHandler that runs the agent with
+// realtime events emitted to the WS client.
+func NewStreamSendHandler(deps Deps) StreamSendHandler {
+	return func(ctx context.Context, req Request, emit func(StreamEvent)) {
+		var p SendParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			emit(StreamEvent{Type: "stream", Event: "error", Data: err.Error()})
+			return
+		}
+		if p.Message == "" {
+			emit(StreamEvent{Type: "stream", Event: "error", Data: "message is required"})
+			return
+		}
+
+		sess := deps.Sessions.Get(dashboardChatID)
+
+		modelID := deps.Resolver.Default()
+		if p.ModelID != "" {
+			if m := deps.Resolver.Lookup(p.ModelID); m != nil {
+				modelID = m.ID
+			}
+		}
+		m := deps.Resolver.Lookup(modelID)
+		maxTokens := 8192
+		if m != nil {
+			maxTokens = m.MaxTokens
+		}
+
+		result, err := agent.RunAgent(ctx, agent.RunParams{
+			Provider:     deps.Provider,
+			ToolExecutor: deps.ToolExecutor,
+			ModelID:      modelID,
+			SystemPrompt: deps.System,
+			UserMessage:  p.Message,
+			Tools:        deps.Tools,
+			MaxTokens:    maxTokens,
+			OnText: func(text string) {
+				emit(StreamEvent{Type: "stream", Event: "text", Data: text})
+			},
+			OnToolCall: func(name, input string) {
+				emit(StreamEvent{Type: "stream", Event: "tool", Data: name})
+			},
+		})
+
+		// Persist transcript
+		tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
+		now := time.Now()
+		tw.Append(sess.ID, transcript.Event{
+			Type: transcript.EventUserMessage, Timestamp: now,
+			SessionID: sess.ID, Content: p.Message,
+		})
+
+		responseText := ""
+		if result != nil {
+			responseText = result.Text
+		}
+		if responseText != "" {
+			tw.Append(sess.ID, transcript.Event{
+				Type: transcript.EventAssistantText, Timestamp: now,
+				SessionID: sess.ID, Content: responseText,
+			})
+		}
+		sess.IncrementMessages()
+		deps.Sessions.MarkDirty()
+
+		// Send final response
+		if err != nil {
+			emit(StreamEvent{Type: "stream", Event: "error", Data: err.Error()})
+		}
+
+		finalResult, _ := json.Marshal(map[string]any{
+			"text":       responseText,
+			"session_id": sess.ID,
+			"iterations": 0,
+		})
+		// Write as a proper Response (not StreamEvent)
+		emit(StreamEvent{Type: "response", Data: string(finalResult)})
+	}
+}
+
+// --- Send (non-streaming fallback, for CLI) ---
+
+// dashboardChatID is a fixed chatID for dashboard sessions.
 const dashboardChatID int64 = 1
 
 func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.RawMessage, error) {

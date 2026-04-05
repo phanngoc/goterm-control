@@ -20,29 +20,37 @@ export function useGateway() {
       console.log('[gateway] connected')
       ready.current = true
       setConnected(true)
-      // Flush waiting calls
       waiters.current.forEach(fn => fn())
       waiters.current = []
     }
 
     socket.onclose = (e) => {
-      console.log('[gateway] disconnected', e.code, e.reason || '')
+      console.log('[gateway] disconnected', e.code)
       ready.current = false
       setConnected(false)
-      // Don't reconnect if we closed intentionally
-      if (e.code !== 1000) {
-        setTimeout(connect, 3000)
-      }
+      if (e.code !== 1000) setTimeout(connect, 3000)
     }
 
-    socket.onerror = (e) => {
-      console.error('[gateway] error', e)
-      socket.close()
-    }
+    socket.onerror = () => socket.close()
 
     socket.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
+
+        // Handle streaming events (partial text/tool during "send")
+        if (msg.type === 'stream') {
+          const store = useStore.getState()
+          if (msg.event === 'text') {
+            store.appendStreamingText(msg.data)
+          } else if (msg.event === 'tool') {
+            store.addStreamingTool(msg.data)
+          } else if (msg.event === 'error') {
+            store.setStreamingError(msg.data)
+          }
+          return
+        }
+
+        // Handle normal RPC responses
         const p = pending.current.get(msg.id)
         if (p) {
           pending.current.delete(msg.id)
@@ -58,14 +66,10 @@ export function useGateway() {
 
   useEffect(() => {
     connect()
-    return () => {
-      ready.current = false
-      ws.current?.close()
-    }
+    return () => { ready.current = false; ws.current?.close() }
   }, [connect])
 
   const call = useCallback(async <T = any>(method: string, params?: any): Promise<T> => {
-    // Wait for connection if not ready yet
     if (!ready.current) {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10_000)
@@ -77,12 +81,15 @@ export function useGateway() {
     return new Promise((resolve, reject) => {
       pending.current.set(id, { resolve, reject })
       ws.current!.send(JSON.stringify({ id, method, params }))
-      setTimeout(() => {
-        if (pending.current.has(id)) {
-          pending.current.delete(id)
-          reject(new Error('Request timeout'))
-        }
-      }, 120_000)
+      // No timeout for send — streaming keeps it alive
+      if (method !== 'send') {
+        setTimeout(() => {
+          if (pending.current.has(id)) {
+            pending.current.delete(id)
+            reject(new Error('Request timeout'))
+          }
+        }, 30_000)
+      }
     })
   }, [])
 

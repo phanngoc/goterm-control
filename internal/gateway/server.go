@@ -17,25 +17,30 @@ var upgrader = websocket.Upgrader{
 }
 
 // Server is a WebSocket JSON-RPC server for remote control of the agent.
+// StreamSendHandler handles streaming "send" requests, emitting partial events.
+type StreamSendHandler func(ctx context.Context, req Request, emit func(StreamEvent))
+
 type Server struct {
-	addr         string
-	dashboardDir string
-	handler      MethodHandler
-	httpSrv      *http.Server
-	startedAt    time.Time
-	mu           sync.Mutex
-	clients      map[*websocket.Conn]bool
+	addr          string
+	dashboardDir  string
+	handler       MethodHandler
+	streamHandler StreamSendHandler
+	httpSrv       *http.Server
+	startedAt     time.Time
+	mu            sync.Mutex
+	clients       map[*websocket.Conn]bool
 }
 
 // MethodHandler processes RPC method calls.
 type MethodHandler func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error)
 
-func NewServer(addr string, handler MethodHandler, dashboardDir string) *Server {
+func NewServer(addr string, handler MethodHandler, streamHandler StreamSendHandler, dashboardDir string) *Server {
 	return &Server{
-		addr:         addr,
-		dashboardDir: dashboardDir,
-		handler:      handler,
-		clients:      make(map[*websocket.Conn]bool),
+		addr:          addr,
+		dashboardDir:  dashboardDir,
+		handler:       handler,
+		streamHandler: streamHandler,
+		clients:       make(map[*websocket.Conn]bool),
 	}
 }
 
@@ -131,6 +136,23 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		// Handle requests async so long-running sends don't block the read loop
 		go func(req Request) {
+			// For "send", use streaming handler that sends partial events
+			if req.Method == "send" && s.streamHandler != nil {
+				s.streamHandler(context.Background(), req, func(ev StreamEvent) {
+					ev.ID = req.ID
+					if ev.Type == "response" {
+						// Final response — send as proper Response
+						writeJSON(Response{
+							ID:     req.ID,
+							Result: json.RawMessage(ev.Data),
+						})
+					} else {
+						writeJSON(ev)
+					}
+				})
+				return
+			}
+
 			result, err := s.handler(context.Background(), req.Method, req.Params)
 
 			var resp Response

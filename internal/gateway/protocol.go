@@ -24,9 +24,10 @@ type RPCError struct {
 
 // StreamEvent is sent during streaming responses.
 type StreamEvent struct {
-	ID   string `json:"id"`
-	Type string `json:"type"` // "text", "tool_call", "tool_result", "end", "error"
-	Data string `json:"data,omitempty"`
+	ID    string `json:"id"`
+	Type  string `json:"type"`  // "stream" or "response"
+	Event string `json:"event,omitempty"` // "text", "tool", "error", "end"
+	Data  string `json:"data,omitempty"`
 }
 
 // SendParams are the parameters for the "send" method.

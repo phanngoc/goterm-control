@@ -53,6 +53,15 @@ interface Store {
   sending: boolean
   setSending: (v: boolean) => void
 
+  // Streaming state
+  streamingText: string
+  streamingTools: string[]
+  streamingError: string | null
+  appendStreamingText: (text: string) => void
+  addStreamingTool: (name: string) => void
+  setStreamingError: (err: string) => void
+  resetStreaming: () => void
+
   // Status
   status: any
   setStatus: (s: any) => void
@@ -75,6 +84,14 @@ export const useStore = create<Store>((set) => ({
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   sending: false,
   setSending: (sending) => set({ sending }),
+
+  streamingText: '',
+  streamingTools: [],
+  streamingError: null,
+  appendStreamingText: (text) => set((s) => ({ streamingText: s.streamingText + text })),
+  addStreamingTool: (name) => set((s) => ({ streamingTools: [...s.streamingTools, name] })),
+  setStreamingError: (err) => set({ streamingError: err }),
+  resetStreaming: () => set({ streamingText: '', streamingTools: [], streamingError: null }),
 
   status: null,
   setStatus: (status) => set({ status }),

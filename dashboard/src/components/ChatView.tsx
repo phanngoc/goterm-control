@@ -22,6 +22,10 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
     inputRef.current?.focus()
   }, [activeSessionId])
 
+  const resetStreaming = useStore(s => s.resetStreaming)
+  const streamingText = useStore(s => s.streamingText)
+  const streamingTools = useStore(s => s.streamingTools)
+
   const send = async () => {
     const text = input.trim()
     if (!text || sending) return
@@ -29,25 +33,32 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
 
     addMessage({ role: 'user', content: text, timestamp: new Date().toISOString() })
     setSending(true)
+    resetStreaming()
 
     try {
       const result = await call('send', {
         message: text,
         session_id: activeSessionId === 'new' ? undefined : activeSessionId,
       })
+      // Use streamed text if available (more complete), else use result
+      const finalText = useStore.getState().streamingText || result.text || '(no response)'
+      const tools = useStore.getState().streamingTools
       addMessage({
         role: 'assistant',
-        content: result.text || '(no response)',
+        content: finalText,
         timestamp: new Date().toISOString(),
+        tools: tools.length > 0 ? tools : undefined,
       })
     } catch (e: any) {
+      const streamedSoFar = useStore.getState().streamingText
       addMessage({
         role: 'assistant',
-        content: `Error: ${e.message}`,
+        content: streamedSoFar || `Error: ${e.message}`,
         timestamp: new Date().toISOString(),
       })
     } finally {
       setSending(false)
+      resetStreaming()
     }
   }
 
@@ -73,8 +84,19 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
         {sending && (
           <div className="flex gap-2 items-start">
             <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-xs shrink-0">N</div>
-            <div className="px-3 py-2 rounded-xl bg-gray-800 text-gray-300 text-sm">
-              <span className="animate-pulse">Thinking...</span>
+            <div className="max-w-[80%] px-3 py-2 rounded-xl bg-gray-800 text-gray-200 text-sm">
+              {streamingTools.length > 0 && (
+                <div className="text-xs text-gray-400 mb-1">
+                  🔧 {streamingTools.join(' → ')}
+                </div>
+              )}
+              {streamingText ? (
+                <div className="prose prose-sm prose-invert max-w-none [&_pre]:bg-gray-900 [&_pre]:rounded-lg [&_pre]:p-2 [&_code]:text-violet-300 [&_p]:my-1">
+                  <Markdown>{streamingText}</Markdown>
+                </div>
+              ) : (
+                <span className="animate-pulse text-gray-400">Thinking...</span>
+              )}
             </div>
           </div>
         )}
