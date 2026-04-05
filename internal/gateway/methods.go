@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
@@ -43,6 +44,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleTranscriptGet(deps, params)
 		case "send":
 			return handleSend(ctx, deps, params)
+		case "cancel":
+			return handleCancel(deps)
 		default:
 			return nil, fmt.Errorf("unknown method: %s", method)
 		}
@@ -197,6 +200,15 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		}
 
 		sess := deps.Sessions.Get(dashboardChatID)
+		tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
+
+		// Persist user message IMMEDIATELY so it survives reload
+		tw.Append(sess.ID, transcript.Event{
+			Type: transcript.EventUserMessage, Timestamp: time.Now(),
+			SessionID: sess.ID, Content: p.Message,
+		})
+		sess.IncrementMessages()
+		deps.Sessions.MarkDirty()
 
 		modelID := deps.Resolver.Default()
 		if p.ModelID != "" {
@@ -210,7 +222,14 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			maxTokens = m.MaxTokens
 		}
 
-		result, err := agent.RunAgent(ctx, agent.RunParams{
+		// 5-minute timeout for agent execution
+		agentCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+
+		// Track streamed text for persistence
+		var streamedText strings.Builder
+
+		result, err := agent.RunAgent(agentCtx, agent.RunParams{
 			Provider:     deps.Provider,
 			ToolExecutor: deps.ToolExecutor,
 			ModelID:      modelID,
@@ -219,37 +238,35 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			Tools:        deps.Tools,
 			MaxTokens:    maxTokens,
 			OnText: func(text string) {
+				streamedText.WriteString(text)
 				emit(StreamEvent{Type: "stream", Event: "text", Data: text})
 			},
 			OnToolCall: func(name, input string) {
-				emit(StreamEvent{Type: "stream", Event: "tool", Data: name})
+				summary := toolSummary(name, input)
+				emit(StreamEvent{Type: "stream", Event: "tool", Data: summary})
 			},
 		})
 
-		// Persist transcript
-		tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
-		now := time.Now()
-		tw.Append(sess.ID, transcript.Event{
-			Type: transcript.EventUserMessage, Timestamp: now,
-			SessionID: sess.ID, Content: p.Message,
-		})
-
+		// Persist assistant response
 		responseText := ""
-		if result != nil {
+		if result != nil && result.Text != "" {
 			responseText = result.Text
+		} else if streamedText.Len() > 0 {
+			responseText = streamedText.String()
 		}
 		if responseText != "" {
 			tw.Append(sess.ID, transcript.Event{
-				Type: transcript.EventAssistantText, Timestamp: now,
+				Type: transcript.EventAssistantText, Timestamp: time.Now(),
 				SessionID: sess.ID, Content: responseText,
 			})
 		}
-		sess.IncrementMessages()
-		deps.Sessions.MarkDirty()
 
-		// Send final response
 		if err != nil {
-			emit(StreamEvent{Type: "stream", Event: "error", Data: err.Error()})
+			errMsg := err.Error()
+			if agentCtx.Err() != nil {
+				errMsg = "Request timed out (5 min limit). Partial response saved."
+			}
+			emit(StreamEvent{Type: "stream", Event: "error", Data: errMsg})
 		}
 
 		finalResult, _ := json.Marshal(map[string]any{
@@ -260,6 +277,42 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		// Write as a proper Response (not StreamEvent)
 		emit(StreamEvent{Type: "response", Data: string(finalResult)})
 	}
+}
+
+func handleCancel(deps Deps) (json.RawMessage, error) {
+	sess := deps.Sessions.Get(dashboardChatID)
+	sess.Cancel()
+	return json.Marshal(map[string]string{"status": "cancelled"})
+}
+
+// toolSummary extracts a short label from tool name + input, max 15 chars in parentheses.
+// e.g. Bash(cd stock_deb) or Read(main.go) or WebSearch(crewai)
+func toolSummary(name, input string) string {
+	snippet := extractSnippet(name, input)
+	if snippet == "" {
+		return name
+	}
+	if len([]rune(snippet)) > 15 {
+		snippet = string([]rune(snippet)[:15])
+	}
+	return name + "(" + snippet + ")"
+}
+
+func extractSnippet(name, input string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(input), &m) != nil {
+		return ""
+	}
+	// Try common fields in priority order
+	for _, key := range []string{"command", "path", "url", "query", "pattern", "script", "expression", "name", "ref", "text", "message", "prompt", "description"} {
+		if v, ok := m[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // --- Send (non-streaming fallback, for CLI) ---

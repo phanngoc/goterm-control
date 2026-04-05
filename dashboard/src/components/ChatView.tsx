@@ -116,13 +116,22 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
             className="flex-1 bg-gray-800 text-gray-100 rounded-xl px-4 py-2.5 text-sm resize-none border border-gray-700 focus:border-blue-500 focus:outline-none placeholder-gray-500"
             disabled={sending}
           />
-          <button
-            onClick={send}
-            disabled={sending || !input.trim()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            Send
-          </button>
+          {sending ? (
+            <button
+              onClick={() => call('cancel').catch(() => {})}
+              className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-500 transition-colors"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={send}
+              disabled={!input.trim()}
+              className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Send
+            </button>
+          )}
         </div>
       </div>
     </div>
