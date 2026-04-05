@@ -20,6 +20,8 @@ import (
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
+	"github.com/ngocp/goterm-control/internal/memory"
+	"path/filepath"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
@@ -148,12 +150,16 @@ func runGateway(args []string) {
 	// Gateway RPC server
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	startTime := time.Now()
+	// Memory store for cross-session context
+	memoryStore := memory.NewStore(filepath.Join(cfg.Session.DataDir, "memory"))
+
 	deps := gateway.Deps{
 		Sessions: sessions,
 		Resolver: resolver,
 		Provider: provider,
 		System:   cfg.Claude.SystemPrompt,
 		DataDir:  cfg.Session.DataDir,
+		Memory:   memoryStore,
 		Uptime:   func() time.Duration { return time.Since(startTime) },
 	}
 

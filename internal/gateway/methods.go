@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -24,6 +25,7 @@ type Deps struct {
 	Tools         []agent.ToolDef
 	System        string // system prompt
 	DataDir       string // data directory for transcripts
+	Memory        *memory.Store
 	Uptime        func() time.Duration
 }
 
@@ -231,14 +233,47 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		agentCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 
-		// Inject workspace context into system prompt
+		// --- 1. Load session history from transcript ---
+		var sessionMessages []agent.Message
+		transcriptPath := filepath.Join(deps.DataDir, "transcripts", sessionID+".jsonl")
+		if events, err := transcript.ReadAll(transcriptPath); err == nil {
+			sessionMessages = transcriptToMessages(events)
+			// Keep last 20 turns max to fit context window
+			if len(sessionMessages) > 40 {
+				sessionMessages = sessionMessages[len(sessionMessages)-40:]
+			}
+		}
+
+		// --- 2. Build rich system prompt ---
 		home, _ := os.UserHomeDir()
 		workspace := home + "/goterm-workspace"
 		os.MkdirAll(workspace, 0755)
-		systemPrompt := deps.System + fmt.Sprintf("\n\n## Workspace\n"+
+
+		systemPrompt := deps.System
+
+		// Workspace context
+		systemPrompt += fmt.Sprintf("\n\n## Workspace\n"+
 			"- Working directory: %s\n"+
 			"- Always `cd` here before running commands.\n"+
 			"- User's projects live in subdirectories of this workspace.\n", workspace)
+
+		// Timezone + identity
+		systemPrompt += fmt.Sprintf("\n\n## Runtime\n"+
+			"- Current time: %s\n"+
+			"- User: %s\n"+
+			"- Session: %s\n"+
+			"- Platform: macOS\n",
+			time.Now().Format("2006-01-02 15:04:05 MST"),
+			os.Getenv("USER"),
+			sessionID)
+
+		// --- 3. Memory injection ---
+		if deps.Memory != nil {
+			memCtx := memory.BuildMemoryContext(deps.Memory, p.Message, 5)
+			if memCtx != "" {
+				systemPrompt += memCtx
+			}
+		}
 
 		// Track streamed text for persistence
 		var streamedText strings.Builder
@@ -249,6 +284,7 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			ModelID:      modelID,
 			SystemPrompt: systemPrompt,
 			UserMessage:  p.Message,
+			Messages:     sessionMessages, // ← session history injected!
 			Tools:        deps.Tools,
 			MaxTokens:    maxTokens,
 			OnText: func(text string) {
@@ -275,6 +311,14 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			})
 		}
 
+		// Extract and save memory for future sessions
+		if deps.Memory != nil && responseText != "" {
+			entry := memory.ExtractFacts(sessionID, 0, p.Message, responseText)
+			if len(entry.Keywords) > 0 || len(entry.Facts) > 0 {
+				deps.Memory.Append(entry)
+			}
+		}
+
 		if err != nil {
 			errMsg := err.Error()
 			if agentCtx.Err() != nil {
@@ -291,6 +335,24 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		// Write as a proper Response (not StreamEvent)
 		emit(StreamEvent{Type: "response", Data: string(finalResult)})
 	}
+}
+
+// transcriptToMessages converts transcript events to agent.Message for context injection.
+func transcriptToMessages(events []transcript.Event) []agent.Message {
+	var msgs []agent.Message
+	for _, ev := range events {
+		switch ev.Type {
+		case transcript.EventUserMessage:
+			if ev.Content != "" {
+				msgs = append(msgs, agent.Message{Role: "user", Content: ev.Content})
+			}
+		case transcript.EventAssistantText:
+			if ev.Content != "" {
+				msgs = append(msgs, agent.Message{Role: "assistant", Content: ev.Content})
+			}
+		}
+	}
+	return msgs
 }
 
 func handleCancel(deps Deps) (json.RawMessage, error) {
