@@ -297,34 +297,28 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			streamer.Write(chunk)
 		},
 		OnToolCall: func(name string, inputJSON string) {
+			// Log to transcript but don't show full tool input to user (openclaw pattern)
 			addEvent(transcript.Event{Type: transcript.EventToolCall, ToolName: name, ToolInput: inputJSON})
-			notice := FormatToolCall(name, inputJSON)
-			streamer.Append(notice)
+			// Compact tool progress — shows as "🔧 Tool1 → Tool2 → ..."
+			streamer.NoteTool(name)
 		},
 		OnToolResult: func(name string, toolResult tools.ToolResult) {
+			// Log to transcript only — tool results not shown to user
 			addEvent(transcript.Event{Type: transcript.EventToolResult, ToolName: name, Content: toolResult.Output, IsError: toolResult.IsError})
 
+			// Exception: screenshots still sent as photos
 			if toolResult.IsImage {
 				streamer.Flush()
 				path := toolResult.ImagePath
-				log.Printf("handler: screenshot detected path=%q", path)
 				for i := 0; i < 6; i++ {
 					if _, err := os.Stat(path); err == nil {
 						break
 					}
-					log.Printf("handler: waiting for screenshot file (attempt %d)…", i+1)
 					time.Sleep(500 * time.Millisecond)
 				}
-				if _, err := os.Stat(path); err != nil {
-					log.Printf("handler: screenshot file not ready: %v", err)
-					streamer.Append(fmt.Sprintf("\n❌ _Screenshot file not found: %s_\n", path))
-					return
+				if _, err := os.Stat(path); err == nil {
+					streamer.SendPhoto(path, "📸 Screenshot")
 				}
-				streamer.SendPhoto(path, "📸 Screenshot")
-				streamer.Append("\n📸 _Screenshot sent above._\n")
-			} else {
-				notice := FormatToolResult(name, toolResult.Output, toolResult.IsError)
-				streamer.Append(notice)
 			}
 		},
 	}
@@ -336,7 +330,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			return result, nil
 		}
 		log.Printf("claude error: %v", err)
-		streamer.Append(fmt.Sprintf("\n\n❌ Error: %v", err))
+		streamer.Write(fmt.Sprintf("\n\n❌ Error: %v", err))
 		result.Status = execution.RunFailed
 		result.Error = err
 	}
