@@ -200,15 +200,19 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			return
 		}
 
-		sess := deps.Sessions.Get(dashboardChatID)
+		// Use session_id from client, or create a default
+		sessionID := p.SessionID
+		if sessionID == "" {
+			sessionID = fmt.Sprintf("chat_%d", dashboardChatID)
+		}
+
 		tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
 
 		// Persist user message IMMEDIATELY so it survives reload
-		tw.Append(sess.ID, transcript.Event{
+		tw.Append(sessionID, transcript.Event{
 			Type: transcript.EventUserMessage, Timestamp: time.Now(),
-			SessionID: sess.ID, Content: p.Message,
+			SessionID: sessionID, Content: p.Message,
 		})
-		sess.IncrementMessages()
 		deps.Sessions.MarkDirty()
 
 		modelID := deps.Resolver.Default()
@@ -265,9 +269,9 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			responseText = streamedText.String()
 		}
 		if responseText != "" {
-			tw.Append(sess.ID, transcript.Event{
+			tw.Append(sessionID, transcript.Event{
 				Type: transcript.EventAssistantText, Timestamp: time.Now(),
-				SessionID: sess.ID, Content: responseText,
+				SessionID: sessionID, Content: responseText,
 			})
 		}
 
@@ -281,7 +285,7 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 
 		finalResult, _ := json.Marshal(map[string]any{
 			"text":       responseText,
-			"session_id": sess.ID,
+			"session_id": sessionID,
 			"iterations": 0,
 		})
 		// Write as a proper Response (not StreamEvent)
@@ -339,8 +343,10 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 		return nil, fmt.Errorf("message is required")
 	}
 
-	// Get or create dashboard session
-	sess := deps.Sessions.Get(dashboardChatID)
+	sessionID := p.SessionID
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("chat_%d", dashboardChatID)
+	}
 
 	modelID := deps.Resolver.Default()
 	if p.ModelID != "" {
@@ -371,22 +377,19 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 	// Persist transcript
 	tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
 	now := time.Now()
-	tw.Append(sess.ID, transcript.Event{
+	tw.Append(sessionID, transcript.Event{
 		Type: transcript.EventUserMessage, Timestamp: now,
-		SessionID: sess.ID, Content: p.Message,
+		SessionID: sessionID, Content: p.Message,
 	})
-	tw.Append(sess.ID, transcript.Event{
+	tw.Append(sessionID, transcript.Event{
 		Type: transcript.EventAssistantText, Timestamp: now,
-		SessionID: sess.ID, Content: result.Text,
+		SessionID: sessionID, Content: result.Text,
 	})
-
-	// Update session counters
-	sess.IncrementMessages()
 	deps.Sessions.MarkDirty()
 
 	return json.Marshal(map[string]any{
 		"text":       result.Text,
-		"session_id": sess.ID,
+		"session_id": sessionID,
 		"iterations": result.Iterations,
 		"usage":      result.Usage,
 	})
