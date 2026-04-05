@@ -228,11 +228,13 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		defer cancel()
 
 		// Inject workspace context into system prompt
-		cwd, _ := os.Getwd()
-		systemPrompt := deps.System + fmt.Sprintf("\n\n## Workspace Context\n"+
-			"- Current working directory: %s\n"+
-			"- When the user refers to a project, check this directory and its subdirectories first.\n"+
-			"- Always `cd` to the relevant project directory before running commands.\n", cwd)
+		home, _ := os.UserHomeDir()
+		workspace := home + "/goterm-workspace"
+		os.MkdirAll(workspace, 0755)
+		systemPrompt := deps.System + fmt.Sprintf("\n\n## Workspace\n"+
+			"- Working directory: %s\n"+
+			"- Always `cd` here before running commands.\n"+
+			"- User's projects live in subdirectories of this workspace.\n", workspace)
 
 		// Track streamed text for persistence
 		var streamedText strings.Builder
