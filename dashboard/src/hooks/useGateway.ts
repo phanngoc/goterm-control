@@ -25,11 +25,14 @@ export function useGateway() {
       waiters.current = []
     }
 
-    socket.onclose = () => {
-      console.log('[gateway] disconnected, reconnecting in 3s...')
+    socket.onclose = (e) => {
+      console.log('[gateway] disconnected', e.code, e.reason || '')
       ready.current = false
       setConnected(false)
-      setTimeout(connect, 3000)
+      // Don't reconnect if we closed intentionally
+      if (e.code !== 1000) {
+        setTimeout(connect, 3000)
+      }
     }
 
     socket.onerror = (e) => {

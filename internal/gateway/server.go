@@ -96,6 +96,28 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("gateway: client connected from %s", r.RemoteAddr)
 
+	// Write mutex — gorilla websocket doesn't allow concurrent writes
+	var writeMu sync.Mutex
+	writeJSON := func(v any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteJSON(v)
+	}
+
+	// Keep-alive: send ping every 30s so connection doesn't drop
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			writeMu.Lock()
+			err := conn.WriteMessage(websocket.PingMessage, nil)
+			writeMu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -107,20 +129,22 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		result, err := s.handler(context.Background(), req.Method, req.Params)
+		// Handle requests async so long-running sends don't block the read loop
+		go func(req Request) {
+			result, err := s.handler(context.Background(), req.Method, req.Params)
 
-		var resp Response
-		resp.ID = req.ID
-		if err != nil {
-			resp.Error = &RPCError{Code: -1, Message: err.Error()}
-		} else {
-			resp.Result = result
-		}
+			var resp Response
+			resp.ID = req.ID
+			if err != nil {
+				resp.Error = &RPCError{Code: -1, Message: err.Error()}
+			} else {
+				resp.Result = result
+			}
 
-		respBytes, _ := json.Marshal(resp)
-		if err := conn.WriteMessage(websocket.TextMessage, respBytes); err != nil {
-			break
-		}
+			if err := writeJSON(resp); err != nil {
+				log.Printf("gateway: write error: %v", err)
+			}
+		}(req)
 	}
 
 	log.Printf("gateway: client disconnected")
