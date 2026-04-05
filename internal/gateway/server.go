@@ -14,23 +14,25 @@ import (
 
 // Server is a WebSocket JSON-RPC server for remote control of the agent.
 type Server struct {
-	addr      string
-	handler   MethodHandler
-	httpSrv   *http.Server
-	startedAt time.Time
-	mu        sync.Mutex
-	clients   map[*websocket.Conn]bool
+	addr         string
+	dashboardDir string
+	handler      MethodHandler
+	httpSrv      *http.Server
+	startedAt    time.Time
+	mu           sync.Mutex
+	clients      map[*websocket.Conn]bool
 }
 
 // MethodHandler processes RPC method calls.
 type MethodHandler func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error)
 
 // NewServer creates a gateway server.
-func NewServer(addr string, handler MethodHandler) *Server {
+func NewServer(addr string, handler MethodHandler, dashboardDir string) *Server {
 	return &Server{
-		addr:    addr,
-		handler: handler,
-		clients: make(map[*websocket.Conn]bool),
+		addr:         addr,
+		dashboardDir: dashboardDir,
+		handler:      handler,
+		clients:      make(map[*websocket.Conn]bool),
 	}
 }
 
@@ -41,9 +43,16 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/ws", websocket.Handler(s.handleWS))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","uptime":"%s"}`, time.Since(s.startedAt).Round(time.Second))
 	})
+
+	// Serve dashboard static files if dist/ exists
+	if s.dashboardDir != "" {
+		mux.Handle("/", http.FileServer(http.Dir(s.dashboardDir)))
+		log.Printf("gateway: serving dashboard from %s", s.dashboardDir)
+	}
 
 	s.httpSrv = &http.Server{Addr: s.addr, Handler: mux}
 

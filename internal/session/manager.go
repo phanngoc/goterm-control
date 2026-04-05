@@ -69,6 +69,17 @@ func (m *Manager) Get(chatID int64) *Session {
 	return s
 }
 
+// List returns all active sessions.
+func (m *Manager) List() []*Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
 // Reset clears history for a chat.
 func (m *Manager) Reset(chatID int64) {
 	m.mu.RLock()

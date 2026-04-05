@@ -4,21 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/transcript"
 )
 
 // Deps holds the dependencies needed by RPC method handlers.
 type Deps struct {
-	Sessions *session.Manager
-	Resolver *models.Resolver
-	Provider agent.ModelProvider
-	Tools    []agent.ToolDef
-	System   string // system prompt
-	Uptime   func() time.Duration
+	Sessions      *session.Manager
+	Resolver      *models.Resolver
+	Provider      agent.ModelProvider
+	ToolExecutor  agent.ToolExecutor
+	Tools         []agent.ToolDef
+	System        string // system prompt
+	DataDir       string // data directory for transcripts
+	Uptime        func() time.Duration
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -29,6 +33,14 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleStatus(deps)
 		case "models.list":
 			return handleModelsList(deps)
+		case "sessions.list":
+			return handleSessionsList(deps)
+		case "sessions.get":
+			return handleSessionsGet(deps, params)
+		case "sessions.reset":
+			return handleSessionsReset(deps, params)
+		case "transcript.get":
+			return handleTranscriptGet(deps, params)
 		case "send":
 			return handleSend(ctx, deps, params)
 		default:
@@ -38,20 +50,111 @@ func NewMethodHandler(deps Deps) MethodHandler {
 }
 
 func handleStatus(deps Deps) (json.RawMessage, error) {
+	sessions := deps.Sessions.List()
 	result := StatusResult{
-		Running:       true,
-		Uptime:        deps.Uptime().Round(time.Second).String(),
-		DefaultModel:  deps.Resolver.Default(),
-		ActiveSessions: 0,
-		Channels:       []string{"telegram", "gateway"},
+		Running:        true,
+		Uptime:         deps.Uptime().Round(time.Second).String(),
+		DefaultModel:   deps.Resolver.Default(),
+		ActiveSessions: len(sessions),
+		Channels:       []string{"telegram", "gateway", "dashboard"},
 	}
 	return json.Marshal(result)
 }
 
 func handleModelsList(deps Deps) (json.RawMessage, error) {
-	all := deps.Resolver.List()
-	return json.Marshal(all)
+	return json.Marshal(deps.Resolver.List())
 }
+
+// --- Session methods ---
+
+type SessionInfo struct {
+	ID              string `json:"id"`
+	ChatID          int64  `json:"chat_id"`
+	ClaudeSessionID string `json:"claude_session_id,omitempty"`
+	MessageCount    int    `json:"message_count"`
+	InputTokens     int    `json:"input_tokens"`
+	OutputTokens    int    `json:"output_tokens"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+func sessionToInfo(s *session.Session) SessionInfo {
+	return SessionInfo{
+		ID:              s.ID,
+		ChatID:          s.ChatID,
+		ClaudeSessionID: s.GetSessionID(),
+		MessageCount:    s.GetMessageCount(),
+		InputTokens:     s.InputTokens,
+		OutputTokens:    s.OutputTokens,
+		CreatedAt:       s.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       s.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func handleSessionsList(deps Deps) (json.RawMessage, error) {
+	all := deps.Sessions.List()
+	infos := make([]SessionInfo, 0, len(all))
+	for _, s := range all {
+		infos = append(infos, sessionToInfo(s))
+	}
+	return json.Marshal(infos)
+}
+
+type sessionIDParam struct {
+	ID     string `json:"id"`
+	ChatID int64  `json:"chat_id"`
+}
+
+func handleSessionsGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	var p sessionIDParam
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	s := deps.Sessions.Get(p.ChatID)
+	return json.Marshal(sessionToInfo(s))
+}
+
+func handleSessionsReset(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	var p sessionIDParam
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	deps.Sessions.Reset(p.ChatID)
+	return json.Marshal(map[string]string{"status": "reset"})
+}
+
+// --- Transcript methods ---
+
+type transcriptParam struct {
+	SessionID string `json:"session_id"`
+	Last      int    `json:"last"` // 0 = all
+}
+
+func handleTranscriptGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	var p transcriptParam
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.SessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+
+	path := filepath.Join(deps.DataDir, "transcripts", p.SessionID+".jsonl")
+
+	var events []transcript.Event
+	var err error
+	if p.Last > 0 {
+		events, err = transcript.ReadLast(path, p.Last)
+	} else {
+		events, err = transcript.ReadAll(path)
+	}
+	if err != nil {
+		return json.Marshal([]transcript.Event{})
+	}
+	return json.Marshal(events)
+}
+
+// --- Send (with tool execution + session context) ---
 
 func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	var p SendParams
@@ -64,8 +167,7 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 
 	modelID := deps.Resolver.Default()
 	if p.ModelID != "" {
-		m := deps.Resolver.Lookup(p.ModelID)
-		if m != nil {
+		if m := deps.Resolver.Lookup(p.ModelID); m != nil {
 			modelID = m.ID
 		}
 	}
@@ -78,7 +180,7 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 
 	result, err := agent.RunAgent(ctx, agent.RunParams{
 		Provider:     deps.Provider,
-		ToolExecutor: nil, // gateway send doesn't execute tools for now
+		ToolExecutor: deps.ToolExecutor,
 		ModelID:      modelID,
 		SystemPrompt: deps.System,
 		UserMessage:  p.Message,
