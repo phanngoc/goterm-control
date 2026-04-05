@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/agent"
@@ -151,10 +151,11 @@ func runGateway(args []string) {
 		Resolver: resolver,
 		Provider: provider,
 		System:   cfg.Claude.SystemPrompt,
-		Uptime:   nil, // set after server creation
+		DataDir:  cfg.Session.DataDir,
+		Uptime:   nil,
 	}
 
-	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps))
+	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), "dashboard/dist")
 	deps.Uptime = srv.Uptime
 
 	// Also start Telegram bot in background if configured
@@ -190,7 +191,7 @@ func runSend(args []string) {
 		os.Exit(1)
 	}
 
-	ws, err := websocket.Dial(*addr, "", "http://localhost/")
+	ws, _, err := websocket.DefaultDialer.Dial(*addr, nil)
 	if err != nil {
 		log.Fatalf("connect: %v (is the gateway running?)", err)
 	}
@@ -200,12 +201,12 @@ func runSend(args []string) {
 	paramsJSON, _ := json.Marshal(params)
 
 	req := gateway.Request{ID: "1", Method: "send", Params: paramsJSON}
-	if err := websocket.JSON.Send(ws, req); err != nil {
+	if err := ws.WriteJSON(req); err != nil {
 		log.Fatalf("send: %v", err)
 	}
 
 	var resp gateway.Response
-	if err := websocket.JSON.Receive(ws, &resp); err != nil {
+	if err := ws.ReadJSON(&resp); err != nil {
 		log.Fatalf("receive: %v", err)
 	}
 
@@ -228,7 +229,7 @@ func runStatus(args []string) {
 	addr := fs.String("addr", "ws://127.0.0.1:18789/ws", "Gateway WebSocket address")
 	fs.Parse(args)
 
-	ws, err := websocket.Dial(*addr, "", "http://localhost/")
+	ws, _, err := websocket.DefaultDialer.Dial(*addr, nil)
 	if err != nil {
 		fmt.Println("Gateway: offline")
 		os.Exit(1)
@@ -236,10 +237,10 @@ func runStatus(args []string) {
 	defer ws.Close()
 
 	req := gateway.Request{ID: "1", Method: "status"}
-	websocket.JSON.Send(ws, req)
+	ws.WriteJSON(req)
 
 	var resp gateway.Response
-	websocket.JSON.Receive(ws, &resp)
+	ws.ReadJSON(&resp)
 
 	if resp.Error != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Error.Message)

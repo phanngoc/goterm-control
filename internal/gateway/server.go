@@ -9,8 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true }, // allow all origins for dev
+}
 
 // Server is a WebSocket JSON-RPC server for remote control of the agent.
 type Server struct {
@@ -26,7 +30,6 @@ type Server struct {
 // MethodHandler processes RPC method calls.
 type MethodHandler func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error)
 
-// NewServer creates a gateway server.
 func NewServer(addr string, handler MethodHandler, dashboardDir string) *Server {
 	return &Server{
 		addr:         addr,
@@ -36,19 +39,18 @@ func NewServer(addr string, handler MethodHandler, dashboardDir string) *Server 
 	}
 }
 
-// Start begins listening for WebSocket connections. Blocks until ctx is canceled.
+// Start begins listening for WebSocket + HTTP connections.
 func (s *Server) Start(ctx context.Context) error {
 	s.startedAt = time.Now()
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", websocket.Handler(s.handleWS))
+	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","uptime":"%s"}`, time.Since(s.startedAt).Round(time.Second))
 	})
 
-	// Serve dashboard static files if dist/ exists
 	if s.dashboardDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(s.dashboardDir)))
 		log.Printf("gateway: serving dashboard from %s", s.dashboardDir)
@@ -70,29 +72,39 @@ func (s *Server) Start(ctx context.Context) error {
 	return err
 }
 
-// Uptime returns the server uptime.
 func (s *Server) Uptime() time.Duration {
 	return time.Since(s.startedAt)
 }
 
-func (s *Server) handleWS(ws *websocket.Conn) {
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("gateway: ws upgrade failed: %v", err)
+		return
+	}
+
 	s.mu.Lock()
-	s.clients[ws] = true
+	s.clients[conn] = true
 	s.mu.Unlock()
 
 	defer func() {
 		s.mu.Lock()
-		delete(s.clients, ws)
+		delete(s.clients, conn)
 		s.mu.Unlock()
-		ws.Close()
+		conn.Close()
 	}()
 
-	log.Printf("gateway: client connected from %s", ws.Request().RemoteAddr)
+	log.Printf("gateway: client connected from %s", r.RemoteAddr)
 
 	for {
-		var req Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
 			break
+		}
+
+		var req Request
+		if err := json.Unmarshal(msg, &req); err != nil {
+			continue
 		}
 
 		result, err := s.handler(context.Background(), req.Method, req.Params)
@@ -105,7 +117,8 @@ func (s *Server) handleWS(ws *websocket.Conn) {
 			resp.Result = result
 		}
 
-		if err := websocket.JSON.Send(ws, resp); err != nil {
+		respBytes, _ := json.Marshal(resp)
+		if err := conn.WriteMessage(websocket.TextMessage, respBytes); err != nil {
 			break
 		}
 	}
