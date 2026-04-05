@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -297,10 +298,9 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			streamer.Write(chunk)
 		},
 		OnToolCall: func(name string, inputJSON string) {
-			// Log to transcript but don't show full tool input to user (openclaw pattern)
 			addEvent(transcript.Event{Type: transcript.EventToolCall, ToolName: name, ToolInput: inputJSON})
-			// Compact tool progress — shows as "🔧 Tool1 → Tool2 → ..."
-			streamer.NoteTool(name)
+			// Compact tool progress with short snippet: Bash(cd stock_d) → Read(main.go)
+			streamer.NoteTool(toolLabel(name, inputJSON))
 		},
 		OnToolResult: func(name string, toolResult tools.ToolResult) {
 			// Log to transcript only — tool results not shown to user
@@ -397,6 +397,27 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	}
 	edit := tgbotapi.NewEditMessageText(chatID, cb.Message.MessageID, label)
 	_, _ = h.bot.Send(edit)
+}
+
+// toolLabel creates a short label like Bash(cd stock_d) or Read(main.go)
+func toolLabel(name, inputJSON string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(inputJSON), &m) != nil {
+		return name
+	}
+	for _, key := range []string{"command", "path", "file_path", "url", "query", "pattern", "script", "expression", "name", "ref", "text", "glob", "regex"} {
+		if v, ok := m[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if s != "" {
+				r := []rune(s)
+				if len(r) > 15 {
+					s = string(r[:15])
+				}
+				return name + "(" + s + ")"
+			}
+		}
+	}
+	return name
 }
 
 // sendText sends a plain/markdown message and returns the message ID.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -226,6 +227,13 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		agentCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 
+		// Inject workspace context into system prompt
+		cwd, _ := os.Getwd()
+		systemPrompt := deps.System + fmt.Sprintf("\n\n## Workspace Context\n"+
+			"- Current working directory: %s\n"+
+			"- When the user refers to a project, check this directory and its subdirectories first.\n"+
+			"- Always `cd` to the relevant project directory before running commands.\n", cwd)
+
 		// Track streamed text for persistence
 		var streamedText strings.Builder
 
@@ -233,7 +241,7 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			Provider:     deps.Provider,
 			ToolExecutor: deps.ToolExecutor,
 			ModelID:      modelID,
-			SystemPrompt: deps.System,
+			SystemPrompt: systemPrompt,
 			UserMessage:  p.Message,
 			Tools:        deps.Tools,
 			MaxTokens:    maxTokens,
@@ -304,7 +312,7 @@ func extractSnippet(name, input string) string {
 		return ""
 	}
 	// Try common fields in priority order
-	for _, key := range []string{"command", "path", "url", "query", "pattern", "script", "expression", "name", "ref", "text", "message", "prompt", "description"} {
+	for _, key := range []string{"command", "path", "file_path", "url", "query", "pattern", "script", "expression", "name", "ref", "text", "message", "prompt", "description", "glob", "regex"} {
 		if v, ok := m[key]; ok {
 			s := fmt.Sprintf("%v", v)
 			if s != "" {
