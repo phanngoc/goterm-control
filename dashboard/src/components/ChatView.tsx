@@ -87,7 +87,7 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
             <div className="max-w-[80%] px-3 py-2 rounded-xl bg-gray-800 text-gray-200 text-sm">
               {streamingTools.length > 0 && (
                 <div className="text-xs text-gray-400 mb-1">
-                  🔧 {streamingTools.join(' → ')}
+                  🔧 {compactTools(streamingTools)}
                 </div>
               )}
               {streamingText ? (
@@ -155,7 +155,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       }`}>
         {message.tools && message.tools.length > 0 && (
           <div className="text-xs text-gray-400 mb-1">
-            🔧 {message.tools.join(' → ')}
+            🔧 {compactTools(message.tools)}
           </div>
         )}
         <div className="prose prose-sm prose-invert max-w-none [&_pre]:bg-gray-900 [&_pre]:rounded-lg [&_pre]:p-2 [&_code]:text-violet-300 [&_p]:my-1">
@@ -167,4 +167,27 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     </div>
   )
+}
+
+// Show first 5 unique tools + count of extras. Groups consecutive duplicates.
+// e.g. ["Read(a.go)", "Read(b.go)", "Read(c.go)", "Bash(ls)"] → "Read ×3 → Bash(ls)"
+function compactTools(tools: string[]): string {
+  if (tools.length === 0) return ''
+  const groups: { name: string; label: string; count: number }[] = []
+  for (const t of tools) {
+    const name = t.split('(')[0]
+    const last = groups[groups.length - 1]
+    if (last && last.name === name) {
+      last.count++
+      last.label = t
+    } else {
+      groups.push({ name, label: t, count: 1 })
+    }
+  }
+  const shown = groups.slice(0, 5).map(g =>
+    g.count > 1 ? `${g.name} ×${g.count}` : g.label
+  )
+  const remaining = groups.slice(5).reduce((sum, g) => sum + g.count, 0)
+  if (remaining > 0) shown.push(`+${remaining} more`)
+  return shown.join(' → ')
 }
