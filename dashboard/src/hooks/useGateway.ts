@@ -1,25 +1,41 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useStore } from '../stores/store'
 
-// JSON-RPC over WebSocket — connects to the NanoClaw gateway
 export function useGateway() {
   const ws = useRef<WebSocket | null>(null)
   const pending = useRef<Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>>(new Map())
   const idCounter = useRef(0)
   const setConnected = useStore(s => s.setConnected)
+  const ready = useRef(false)
+  const waiters = useRef<Array<() => void>>([])
 
   const connect = useCallback(() => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${location.host}/ws`
+    console.log('[gateway] connecting to', url)
     const socket = new WebSocket(url)
     ws.current = socket
 
-    socket.onopen = () => setConnected(true)
-    socket.onclose = () => {
-      setConnected(false)
-      setTimeout(connect, 3000) // auto-reconnect
+    socket.onopen = () => {
+      console.log('[gateway] connected')
+      ready.current = true
+      setConnected(true)
+      // Flush waiting calls
+      waiters.current.forEach(fn => fn())
+      waiters.current = []
     }
-    socket.onerror = () => socket.close()
+
+    socket.onclose = () => {
+      console.log('[gateway] disconnected, reconnecting in 3s...')
+      ready.current = false
+      setConnected(false)
+      setTimeout(connect, 3000)
+    }
+
+    socket.onerror = (e) => {
+      console.error('[gateway] error', e)
+      socket.close()
+    }
 
     socket.onmessage = (e) => {
       try {
@@ -39,13 +55,21 @@ export function useGateway() {
 
   useEffect(() => {
     connect()
-    return () => { ws.current?.close() }
+    return () => {
+      ready.current = false
+      ws.current?.close()
+    }
   }, [connect])
 
   const call = useCallback(async <T = any>(method: string, params?: any): Promise<T> => {
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-      throw new Error('Not connected')
+    // Wait for connection if not ready yet
+    if (!ready.current) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10_000)
+        waiters.current.push(() => { clearTimeout(timeout); resolve() })
+      })
     }
+
     const id = String(++idCounter.current)
     return new Promise((resolve, reject) => {
       pending.current.set(id, { resolve, reject })
@@ -53,7 +77,7 @@ export function useGateway() {
       setTimeout(() => {
         if (pending.current.has(id)) {
           pending.current.delete(id)
-          reject(new Error('Timeout'))
+          reject(new Error('Request timeout'))
         }
       }, 120_000)
     })
