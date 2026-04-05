@@ -157,7 +157,7 @@ func runGateway(args []string) {
 		Uptime:   func() time.Duration { return time.Since(startTime) },
 	}
 
-	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), "dashboard/dist")
+	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), "dashboard/dist")
 
 	// Also start Telegram bot in background if configured
 	if cfg.Telegram.Token != "" {
