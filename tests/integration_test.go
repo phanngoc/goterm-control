@@ -546,8 +546,8 @@ func TestLive_FullRoundtrip(t *testing.T) {
 	t.Log("step 3: tool executor ready")
 
 	// --- Step 4: Send "thinking" placeholder ---
-	placeholder := tgbotapi.NewMessage(chatID, "⏳ _NanoClaw integration test — thinking..._")
-	placeholder.ParseMode = "Markdown"
+	placeholder := tgbotapi.NewMessage(chatID, "⏳ <i>NanoClaw integration test — thinking...</i>")
+	placeholder.ParseMode = "HTML"
 	placeholderMsg, err := bot.Send(placeholder)
 	if err != nil {
 		t.Fatalf("send placeholder: %v", err)
@@ -608,12 +608,12 @@ func TestLive_FullRoundtrip(t *testing.T) {
 	}
 
 	edit := tgbotapi.NewEditMessageText(chatID, placeholderMsg.MessageID,
-		fmt.Sprintf("🧪 *NanoClaw Full Roundtrip Test*\n\n%s\n\n_iterations: %d | tokens: %d in / %d out_",
+		fmt.Sprintf("🧪 <b>NanoClaw Full Roundtrip Test</b>\n\n%s\n\n<i>iterations: %d | tokens: %d in / %d out</i>",
 			finalText, result.Iterations, result.Usage.InputTokens, result.Usage.OutputTokens))
-	edit.ParseMode = "Markdown"
+	edit.ParseMode = "HTML"
 	_, err = bot.Send(edit)
 	if err != nil {
-		// Retry without markdown
+		// Retry without HTML formatting
 		edit2 := tgbotapi.NewEditMessageText(chatID, placeholderMsg.MessageID, finalText)
 		bot.Send(edit2)
 	}

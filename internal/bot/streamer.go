@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -126,7 +125,7 @@ func (s *Streamer) renderDisplay() string {
 	}
 
 	if assistantText == "" {
-		return "⏳ _Thinking..._"
+		return "⏳ <i>Thinking...</i>"
 	}
 
 	return assistantText
@@ -141,7 +140,7 @@ func (s *Streamer) toolStatusLine() string {
 	if s.toolCount > len(s.toolNames) {
 		names += fmt.Sprintf(" (+%d more)", s.toolCount-len(s.toolNames))
 	}
-	return fmt.Sprintf("🔧 _%s_", names)
+	return fmt.Sprintf("🔧 <i>%s</i>", names)
 }
 
 func (s *Streamer) sendText(text string) {
@@ -149,13 +148,16 @@ func (s *Streamer) sendText(text string) {
 		return
 	}
 
-	if utf8.RuneCountInString(text) <= maxTelegramMsg {
-		s.editCurrent(text)
+	// Convert markdown to Telegram HTML
+	html := markdownToTelegramHTML(text)
+
+	if len(html) <= maxTelegramMsg {
+		s.editCurrent(html)
 		return
 	}
 
-	// Smart split: respect paragraph boundaries and code fences
-	chunks := smartSplit(text, maxTelegramMsg)
+	// Split respecting HTML tag and entity boundaries
+	chunks := chunkHTML(html, maxTelegramMsg)
 	if len(chunks) == 0 {
 		return
 	}
@@ -166,10 +168,10 @@ func (s *Streamer) sendText(text string) {
 	// Send remaining chunks as new messages
 	for _, chunk := range chunks[1:] {
 		msg := tgbotapi.NewMessage(s.chatID, chunk)
-		msg.ParseMode = "Markdown"
+		msg.ParseMode = "HTML"
 		sent, err := s.bot.Send(msg)
 		if err != nil {
-			msg2 := tgbotapi.NewMessage(s.chatID, stripMarkdown(chunk))
+			msg2 := tgbotapi.NewMessage(s.chatID, stripHTML(chunk))
 			sent, err = s.bot.Send(msg2)
 		}
 		if err != nil {
@@ -192,10 +194,10 @@ func (s *Streamer) sendText(text string) {
 func (s *Streamer) editCurrent(text string) {
 	if s.messageID == 0 {
 		msg := tgbotapi.NewMessage(s.chatID, text)
-		msg.ParseMode = "Markdown"
+		msg.ParseMode = "HTML"
 		sent, err := s.bot.Send(msg)
 		if err != nil {
-			msg2 := tgbotapi.NewMessage(s.chatID, stripMarkdown(text))
+			msg2 := tgbotapi.NewMessage(s.chatID, stripHTML(text))
 			sent, err = s.bot.Send(msg2)
 		}
 		if err != nil {
@@ -209,10 +211,10 @@ func (s *Streamer) editCurrent(text string) {
 	}
 
 	edit := tgbotapi.NewEditMessageText(s.chatID, s.messageID, text)
-	edit.ParseMode = "Markdown"
+	edit.ParseMode = "HTML"
 	_, err := s.bot.Send(edit)
 	if err != nil {
-		edit2 := tgbotapi.NewEditMessageText(s.chatID, s.messageID, stripMarkdown(text))
+		edit2 := tgbotapi.NewEditMessageText(s.chatID, s.messageID, stripHTML(text))
 		edit2.ParseMode = ""
 		_, _ = s.bot.Send(edit2)
 	}
@@ -248,14 +250,16 @@ func (s *Streamer) SendPhoto(path string, caption string) {
 
 // SendRaw sends a new message (not an edit).
 func (s *Streamer) SendRaw(text string, markup *tgbotapi.InlineKeyboardMarkup) (int, error) {
-	msg := tgbotapi.NewMessage(s.chatID, text)
-	msg.ParseMode = "Markdown"
+	html := markdownToTelegramHTML(text)
+	msg := tgbotapi.NewMessage(s.chatID, html)
+	msg.ParseMode = "HTML"
 	if markup != nil {
 		msg.ReplyMarkup = markup
 	}
 	sent, err := s.bot.Send(msg)
 	if err != nil {
-		msg.ParseMode = ""
+		msg := tgbotapi.NewMessage(s.chatID, stripHTML(html))
+		msg.ReplyMarkup = markup
 		sent, err = s.bot.Send(msg)
 	}
 	return sent.MessageID, err
@@ -289,68 +293,6 @@ func filterContent(text string) string {
 	return text
 }
 
-// --- Smart chunking ---
-
-// smartSplit splits text at paragraph boundaries (\n\n), respecting code fences.
-func smartSplit(text string, limit int) []string {
-	if utf8.RuneCountInString(text) <= limit {
-		return []string{text}
-	}
-
-	var chunks []string
-	remaining := text
-
-	for utf8.RuneCountInString(remaining) > limit {
-		// Find the best split point within the limit
-		runes := []rune(remaining)
-		cutAt := limit
-
-		// Try splitting at paragraph boundary (\n\n)
-		searchRegion := string(runes[:cutAt])
-		lastParaBreak := strings.LastIndex(searchRegion, "\n\n")
-		if lastParaBreak > limit/4 { // don't split too early
-			cutAt = utf8.RuneCountInString(searchRegion[:lastParaBreak])
-		} else {
-			// Try splitting at single newline
-			lastNewline := strings.LastIndex(searchRegion, "\n")
-			if lastNewline > limit/4 {
-				cutAt = utf8.RuneCountInString(searchRegion[:lastNewline])
-			}
-		}
-
-		// Check if we're inside a code fence — if so, find the closing fence
-		chunk := string(runes[:cutAt])
-		if isInsideCodeFence(chunk) {
-			// Extend to include the closing fence
-			closingIdx := strings.Index(string(runes[cutAt:]), "```")
-			if closingIdx >= 0 && closingIdx < limit/2 {
-				cutAt += utf8.RuneCountInString(string(runes[cutAt:][:closingIdx+3]))
-			}
-		}
-
-		chunks = append(chunks, strings.TrimSpace(string(runes[:cutAt])))
-		remaining = strings.TrimSpace(string(runes[cutAt:]))
-	}
-
-	if remaining != "" {
-		chunks = append(chunks, remaining)
-	}
-
-	return chunks
-}
-
-// isInsideCodeFence checks if text ends with an unclosed ``` block.
-func isInsideCodeFence(text string) bool {
-	count := strings.Count(text, "```")
-	return count%2 != 0 // odd = unclosed
-}
-
-// --- Formatting helpers (kept for backward compat but simplified) ---
-
-func stripMarkdown(s string) string {
-	r := strings.NewReplacer("```", "", "`", "", "**", "", "__", "", "*", "", "_", "")
-	return r.Replace(s)
-}
 
 func truncate(s string, maxRunes int) string {
 	runes := []rune(s)
