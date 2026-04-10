@@ -21,12 +21,12 @@ import (
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
-	"github.com/ngocp/goterm-control/internal/memory"
 	"path/filepath"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
 
@@ -144,15 +144,21 @@ func runGateway(args []string) {
 	// Model resolver
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
 
-	// Session manager
-	store := session.NewStore(cfg.Session.DataDir + "/sessions.json")
-	sessions := session.NewManager(store, 0)
+	// Storage — SQLite database
+	db, err := storage.Open(filepath.Join(cfg.Session.DataDir, "goterm.db"))
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+	defer db.Close()
+
+	// Session manager (SQLite-backed)
+	sessions := session.NewManager(storage.NewSessionStore(db), 0)
 
 	// Gateway RPC server
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	startTime := time.Now()
-	// Memory store for cross-session context
-	memoryStore := memory.NewStore(filepath.Join(cfg.Session.DataDir, "memory"))
+	// Memory store (SQLite with FTS5)
+	memoryStore := storage.NewMemoryStore(db)
 
 	deps := gateway.Deps{
 		Sessions: sessions,

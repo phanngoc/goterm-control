@@ -16,9 +16,23 @@ type Session struct {
 	MessageCount    int       `json:"message_count"`
 	InputTokens     int       `json:"input_tokens"`
 	OutputTokens    int       `json:"output_tokens"`
+	CompactSummary  string    `json:"compact_summary,omitempty"`
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
+}
+
+// SessionSnapshot is a mutex-free copy of session fields for persistence.
+type SessionSnapshot struct {
+	ID              string
+	ChatID          int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	ClaudeSessionID string
+	MessageCount    int
+	InputTokens     int
+	OutputTokens    int
+	CompactSummary  string
 }
 
 func New(chatID int64) *Session {
@@ -96,4 +110,51 @@ func (s *Session) Cancel() {
 	if fn != nil {
 		fn()
 	}
+}
+
+// Snapshot returns a mutex-free copy of all session fields for safe persistence.
+func (s *Session) Snapshot() SessionSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SessionSnapshot{
+		ID:              s.ID,
+		ChatID:          s.ChatID,
+		CreatedAt:       s.CreatedAt,
+		UpdatedAt:       s.UpdatedAt,
+		ClaudeSessionID: s.ClaudeSessionID,
+		MessageCount:    s.MessageCount,
+		InputTokens:     s.InputTokens,
+		OutputTokens:    s.OutputTokens,
+		CompactSummary:  s.CompactSummary,
+	}
+}
+
+// NewFromDB creates a Session from database fields (used by SQLite store).
+func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessionID string, msgCount, inTok, outTok int, compactSummary string) *Session {
+	return &Session{
+		ID:              id,
+		ChatID:          chatID,
+		CreatedAt:       created,
+		UpdatedAt:       updated,
+		ClaudeSessionID: claudeSessionID,
+		MessageCount:    msgCount,
+		InputTokens:     inTok,
+		OutputTokens:    outTok,
+		CompactSummary:  compactSummary,
+	}
+}
+
+// GetCompactSummary returns the persisted compaction summary.
+func (s *Session) GetCompactSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.CompactSummary
+}
+
+// SetCompactSummary stores a compaction summary for persistence.
+func (s *Session) SetCompactSummary(summary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CompactSummary = summary
+	s.UpdatedAt = time.Now()
 }

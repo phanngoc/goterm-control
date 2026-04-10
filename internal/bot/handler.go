@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/ngocp/goterm-control/internal/agent"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -21,6 +22,11 @@ import (
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
 
+// MessageStore is an optional interface for persisting conversation messages to SQLite.
+type MessageStore interface {
+	Append(sessionID string, msg agent.Message) error
+}
+
 // Handler processes Telegram updates.
 type Handler struct {
 	bot        *tgbotapi.BotAPI
@@ -29,7 +35,8 @@ type Handler struct {
 	cfg        *config.Config
 	engine     *execution.Engine
 	transcript *transcript.Writer
-	memory     *memory.Store
+	memory     memory.MemoryBackend
+	messages   MessageStore // optional SQLite message store
 	resolver   *models.Resolver
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
@@ -44,7 +51,8 @@ func NewHandler(
 	cfg *config.Config,
 	engine *execution.Engine,
 	transcriptWriter *transcript.Writer,
-	memoryStore *memory.Store,
+	memoryStore memory.MemoryBackend,
+	messages MessageStore,
 	resolver *models.Resolver,
 ) *Handler {
 	return &Handler{
@@ -55,6 +63,7 @@ func NewHandler(
 		engine:           engine,
 		transcript:       transcriptWriter,
 		memory:           memoryStore,
+		messages:         messages,
 		resolver:         resolver,
 		approvalRequests: make(map[string]chan bool),
 	}
@@ -343,10 +352,22 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		addEvent(transcript.Event{Type: transcript.EventAssistantText, Content: respText})
 	}
 
-	// Flush transcript to disk
+	// Flush transcript to disk (JSONL audit trail)
 	if h.transcript != nil {
 		if err := h.transcript.AppendAll(sess.ID, events); err != nil {
 			log.Printf("handler: transcript write error: %v", err)
+		}
+	}
+
+	// Persist messages to SQLite (queryable history)
+	if h.messages != nil {
+		if err := h.messages.Append(sess.ID, agent.Message{Role: "user", Content: userText}); err != nil {
+			log.Printf("handler: message store user error: %v", err)
+		}
+		if respText != "" {
+			if err := h.messages.Append(sess.ID, agent.Message{Role: "assistant", Content: respText}); err != nil {
+				log.Printf("handler: message store assistant error: %v", err)
+			}
 		}
 	}
 

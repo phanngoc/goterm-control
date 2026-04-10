@@ -6,11 +6,18 @@ import (
 	"time"
 )
 
+// SessionPersister is the interface for session persistence backends.
+// Both the JSON file Store and SQLite store implement this.
+type SessionPersister interface {
+	Load() (map[int64]*Session, error)
+	Save(sessions map[int64]*Session) error
+}
+
 // Manager stores sessions keyed by chat ID with disk persistence and idle reset.
 type Manager struct {
 	mu          sync.RWMutex
 	sessions    map[int64]*Session
-	store       *Store
+	store       SessionPersister
 	idleTimeout time.Duration
 
 	// Debounced save: after any mutation, schedule a save after saveCooldown.
@@ -21,7 +28,7 @@ type Manager struct {
 
 // NewManager creates a manager with persistence and idle timeout.
 // If store is nil, sessions are in-memory only.
-func NewManager(store *Store, idleTimeout time.Duration) *Manager {
+func NewManager(store SessionPersister, idleTimeout time.Duration) *Manager {
 	m := &Manager{
 		sessions:    make(map[int64]*Session),
 		store:       store,

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
@@ -53,18 +55,23 @@ func New(cfg *config.Config) (*Bot, error) {
 		AllowedPaths:   cfg.Tools.AllowedPaths,
 	})
 
-	// Session persistence
-	store := session.NewStore(filepath.Join(cfg.Session.DataDir, "sessions.json"))
-	idleTimeout := time.Duration(cfg.Session.IdleTimeout) * time.Minute
-	sessions := session.NewManager(store, idleTimeout)
+	// Storage — SQLite database
+	db, err := storage.Open(filepath.Join(cfg.Session.DataDir, "goterm.db"))
+	if err != nil {
+		return nil, fmt.Errorf("storage: %w", err)
+	}
 
-	// Transcript writer
+	// Session persistence (SQLite-backed)
+	idleTimeout := time.Duration(cfg.Session.IdleTimeout) * time.Minute
+	sessions := session.NewManager(storage.NewSessionStore(db), idleTimeout)
+
+	// Transcript writer (JSONL audit trail — kept alongside SQLite)
 	transcriptWriter := transcript.NewWriter(filepath.Join(cfg.Session.DataDir, "transcripts"))
 
-	// Memory store
-	var memoryStore *memory.Store
+	// Memory store (SQLite with FTS5)
+	var memoryStore memory.MemoryBackend
 	if cfg.Memory.Enabled {
-		memoryStore = memory.NewStore(filepath.Join(cfg.Session.DataDir, "memory"))
+		memoryStore = storage.NewMemoryStore(db)
 	}
 
 	// Model resolver — builtin Claude models + custom models from config
@@ -76,10 +83,13 @@ func New(cfg *config.Config) (*Bot, error) {
 
 	claudeClient := claude.New(cfg.Claude.SystemPrompt, executor)
 
+	// Message store (SQLite — conversation history)
+	messageStore := storage.NewMessageStore(db)
+
 	// Execution engine
 	engine := execution.NewEngine(execution.Hooks{})
 
-	handler := NewHandler(api, sessions, claudeClient, cfg, engine, transcriptWriter, memoryStore, resolver)
+	handler := NewHandler(api, sessions, claudeClient, cfg, engine, transcriptWriter, memoryStore, messageStore, resolver)
 
 	return &Bot{
 		api:      api,
