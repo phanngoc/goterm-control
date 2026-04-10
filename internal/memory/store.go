@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+// MemoryBackend is the interface for memory storage backends.
+// Both the JSONL Store and SQLite store implement this.
+type MemoryBackend interface {
+	Append(entry Entry) error
+	Search(query string, limit int) ([]Entry, error)
+	ReadAll() ([]Entry, error)
+}
+
 // Entry is a single memory record extracted from a conversation turn.
 type Entry struct {
 	ID        string    `json:"id"`

@@ -25,7 +25,7 @@ type Deps struct {
 	Tools         []agent.ToolDef
 	System        string // system prompt
 	DataDir       string // data directory for transcripts
-	Memory        *memory.Store
+	Memory        memory.MemoryBackend
 	Uptime        func() time.Duration
 }
 

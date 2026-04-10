@@ -8,7 +8,7 @@ import (
 // BuildMemoryContext searches the memory store for entries relevant to the user's
 // message and formats them as a section to inject into the system prompt or
 // prepend to the user message.
-func BuildMemoryContext(store *Store, userMessage string, maxEntries int) string {
+func BuildMemoryContext(store MemoryBackend, userMessage string, maxEntries int) string {
 	if store == nil || userMessage == "" {
 		return ""
 	}
