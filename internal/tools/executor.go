@@ -43,6 +43,13 @@ type ExecutorConfig struct {
 	AllowedPaths   []string
 }
 
+// Shutdown stops any managed resources (e.g. Chrome process).
+func (e *Executor) Shutdown() {
+	if e.browser != nil {
+		e.browser.Shutdown()
+	}
+}
+
 func (e *Executor) Run(ctx context.Context, name string, input json.RawMessage) ToolResult {
 	var (
 		out string

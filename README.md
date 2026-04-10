@@ -1,15 +1,17 @@
 # NanoClaw
 
-Lean AI agent for remote host control. One binary, one process, no microservices.
+Lean AI agent that gives Claude full control over your computer. One binary, one process, no microservices.
 
-NanoClaw gives Claude full control over your Mac through Telegram or a local CLI.
-It runs an agentic loop — the model calls tools, sees results, and keeps going
+NanoClaw turns any machine — Linux, macOS, or Windows (via WSL) — into an
+AI-controlled workstation you can command from Telegram or a local CLI.
+It runs an agentic loop: the model calls tools, sees results, and keeps going
 until the task is done. Think of it as a personal, self-hosted Claude Code
 that you talk to from anywhere.
 
 **Philosophy:**
+- Full computer control — shell, files, processes, clipboard, browser, screenshots
+- Cross-platform — runs wherever Go compiles (Linux, macOS, Windows/WSL)
 - Small enough to understand (~45 source files, 14 packages)
-- Full host control — agents run on your machine
 - Built for one user — bespoke, not a framework
 - Customization = code changes, not config sprawl
 
@@ -20,9 +22,12 @@ that you talk to from anywhere.
 git clone https://github.com/phanngoc/goterm-control.git
 cd goterm-control
 
+# Authenticate with Claude CLI (uses your Pro/Max subscription)
+claude login
+
 # Set up credentials
 cp .env.example .env
-# Edit .env: add TELEGRAM_TOKEN and ANTHROPIC_API_KEY
+# Edit .env: add TELEGRAM_TOKEN (optional, for Telegram access)
 
 # Build
 go build -o nanoclaw ./cmd/nanoclaw/
@@ -30,21 +35,35 @@ go build -o nanoclaw ./cmd/nanoclaw/
 # Interactive chat (no Telegram needed)
 ./nanoclaw chat
 
-# Or start the gateway (Telegram + WebSocket RPC)
+# Or start the gateway (Telegram + Web Dashboard + WebSocket RPC)
 ./nanoclaw gateway
 ```
 
 ### Prerequisites
 
 - Go 1.22+
-- An Anthropic API key (set `ANTHROPIC_API_KEY` in `.env`)
+- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and logged in (`claude login`)
+  - Uses your Claude Pro/Max subscription via OAuth2 — no API key needed
+  - Or alternatively, set `ANTHROPIC_API_KEY` for direct API access
 - For Telegram: a bot token from [@BotFather](https://t.me/BotFather)
+
+### Authentication
+
+NanoClaw supports two authentication modes, auto-detected at startup:
+
+| Mode | Token prefix | How it works |
+|---|---|---|
+| **Claude CLI (recommended)** | `sk-ant-oat...` | Uses `claude` CLI subprocess with your Pro/Max subscription. No per-token billing. |
+| **Direct API** | `sk-ant-api03...` | Calls Anthropic Messages API directly. Pay-per-use. |
+
+Run `claude login` and NanoClaw picks up the OAuth token automatically.
+To use a direct API key instead, set `ANTHROPIC_API_KEY` in `.env`.
 
 ### Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for Claude |
+| `ANTHROPIC_API_KEY` | No | Anthropic API key (only if not using Claude CLI OAuth) |
 | `TELEGRAM_TOKEN` | For Telegram | Telegram bot token |
 
 ## Commands
@@ -92,31 +111,53 @@ Once the gateway is running with a Telegram token:
 ## Architecture
 
 ```
-                    ┌──────────────┐
-                    │   Telegram   │
-                    │   Channel    │
-                    └──────┬───────┘
-                           │
-┌──────────┐       ┌───────▼────────┐       ┌──────────────┐
-│  CLI     │       │    Handler /   │       │   Execution  │
-│  Channel ├──────►│    Gateway     ├──────►│   Engine     │
-└──────────┘       │    (RPC)       │       │  (FIFO/chat) │
-                   └───────┬────────┘       └──────┬───────┘
-                           │                       │
-                   ┌───────▼────────┐       ┌──────▼───────┐
-                   │  Model         │       │   Agent      │
-                   │  Resolver      │       │   Loop       │
-                   └───────┬────────┘       └──────┬───────┘
-                           │                       │
-                   ┌───────▼────────┐       ┌──────▼───────┐
-                   │  Anthropic     │◄──────│   Context    │
-                   │  Direct API    │       │   Engine     │
-                   └───────┬────────┘       └──────────────┘
-                           │
-                   ┌───────▼────────┐
-                   │  Tool Executor │
-                   │  (14 tools)    │
-                   └────────────────┘
+┌───────────┐  ┌──────────────┐  ┌───────────────┐
+│  Telegram │  │ Web Dashboard│  │   CLI Chat    │
+│  Bot      │  │  (React SPA) │  │  (nanoclaw    │
+└─────┬─────┘  └──────┬───────┘  │   chat)       │
+      │               │          └───────┬───────┘
+      │          WebSocket               │
+      │               │            direct call
+      ▼               ▼                  ▼
+┌─────────────────────────────────────────────────┐
+│              Gateway (JSON-RPC)                  │
+│         session mgmt · model resolver            │
+└──────────────────────┬──────────────────────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │   Agent Loop    │  ← up to 50 iterations
+              │  (stream + tool │     per request
+              │   call cycle)   │
+              └────────┬────────┘
+                       │
+          ┌────────────┼────────────┐
+          ▼            │            ▼
+┌──────────────┐       │    ┌──────────────┐
+│  Claude CLI  │       │    │  Anthropic   │
+│  (OAuth2     │       │    │  Direct API  │
+│  subscription│       │    │  (sk-ant-api)│
+│  sk-ant-oat) │       │    └──────────────┘
+└──────────────┘       │
+                       ▼
+        ┌──────────────────────────────┐
+        │        Tool Executor         │
+        ├──────────────┬───────────────┤
+        │ System Tools │ Browser Tools │
+        │ · run_shell  │ · navigate    │
+        │ · read/write │ · click/fill  │
+        │ · screenshot │ · snapshot    │
+        │ · clipboard  │ · eval JS     │
+        │ · processes  │ · screenshot  │
+        │ · sysinfo    │ · scroll/wait │
+        └──────────────┴───────────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+   ┌─────────┐  ┌───────────┐  ┌──────────┐
+   │ Context │  │  Memory   │  │Transcript│
+   │ Engine  │  │  (JSONL)  │  │  (JSONL) │
+   └─────────┘  └───────────┘  └──────────┘
 ```
 
 ### The Agent Loop (the core)
@@ -145,26 +186,29 @@ tool calls, read results, and keep working until the task is done.
 
 ### Packages
 
-| Package | Purpose | Inspired by |
-|---|---|---|
-| `agent/` | Core agentic loop with retry and tool execution | openclaw `pi-embedded-runner` |
-| `anthropic/` | Direct Anthropic Messages API with streaming | openclaw provider plugins |
-| `channel/` | Channel abstraction (Telegram, CLI) | openclaw `channels/plugins` |
-| `context/` | Token counting, budget assembly, compaction | openclaw `context-engine` |
-| `gateway/` | WebSocket JSON-RPC server for remote control | openclaw `gateway` |
-| `execution/` | Per-session FIFO queue (prevents concurrent calls) | openclaw `process/command-queue` |
-| `session/` | Persistent sessions with idle timeout | openclaw `config/sessions` |
-| `memory/` | Cross-session keyword memory | openclaw LanceDB memory |
-| `models/` | Model catalog with aliases and per-session override | openclaw `model-catalog` |
-| `transcript/` | JSONL event recording per session | openclaw session transcripts |
-| `tools/` | 14 Mac control tools (shell, files, screenshot, ...) | openclaw agent tools |
-| `config/` | YAML config with env var overrides | openclaw config system |
-| `bot/` | Telegram bot with streaming message edits | openclaw Telegram channel |
-| `claude/` | Claude CLI subprocess (fallback provider) | — |
+| Package | Purpose |
+|---|---|
+| `agent/` | Core agentic loop with retry and tool execution |
+| `anthropic/` | Direct Anthropic Messages API client (streaming) |
+| `claude/` | Claude CLI subprocess provider (OAuth2 subscription) |
+| `browser/` | Chrome DevTools Protocol (CDP) client for browser automation |
+| `bot/` | Telegram bot with streaming message edits |
+| `channel/` | Channel abstraction (Telegram, CLI) |
+| `config/` | YAML config with env var overrides |
+| `context/` | Token counting, budget assembly, compaction |
+| `execution/` | Per-session FIFO queue (prevents concurrent calls) |
+| `gateway/` | WebSocket JSON-RPC server + static file serving (dashboard) |
+| `memory/` | Cross-session keyword memory |
+| `models/` | Model catalog with aliases and per-session override |
+| `session/` | Persistent session management |
+| `tools/` | System control tools (shell, files, screenshot, browser, ...) |
+| `transcript/` | JSONL event recording per session |
 
 ### Tools
 
-The agent has 14 tools for full Mac control:
+The agent has 25 tools for full computer control:
+
+**System tools:**
 
 | Tool | What it does |
 |---|---|
@@ -176,12 +220,28 @@ The agent has 14 tools for full Mac control:
 | `take_screenshot` | Capture screen |
 | `get_clipboard` | Read clipboard |
 | `set_clipboard` | Write to clipboard |
-| `run_applescript` | Control Mac apps via AppleScript |
-| `open_app` | Open applications or files |
+| `run_applescript` | Control apps via AppleScript (macOS) |
+| `open_app` | Open applications or files (`open`/`xdg-open`) |
 | `get_system_info` | Hardware, OS, CPU, memory, disk |
 | `list_processes` | Running processes with filter/sort |
 | `kill_process` | Kill by PID or name (TERM/KILL) |
-| `browse_url` | Open URL in default browser |
+| `browse_url` | Fetch URL content or open in browser |
+
+**Browser automation tools (Chrome DevTools Protocol):**
+
+| Tool | What it does |
+|---|---|
+| `browser_navigate` | Navigate to a URL (auto-launches Chrome) |
+| `browser_snapshot` | DOM snapshot with interactive element refs |
+| `browser_click` | Click an element by ref |
+| `browser_fill` | Clear and type into an input field |
+| `browser_type` | Append text to an input field |
+| `browser_select` | Select a dropdown option |
+| `browser_scroll` | Scroll page in any direction |
+| `browser_screenshot` | Screenshot the current page |
+| `browser_get_text` | Get text, HTML, value, or URL from elements |
+| `browser_eval` | Execute JavaScript in the browser |
+| `browser_wait` | Wait for element, text, or timeout |
 
 ### Data Persistence
 
@@ -214,10 +274,10 @@ Edit `config.yaml`:
 
 ```yaml
 claude:
-  api_key: ""                    # or set ANTHROPIC_API_KEY env var
+  api_key: ""                    # auto-detected from claude CLI OAuth; or set ANTHROPIC_API_KEY
   model: "claude-sonnet-4-6"     # default model
   system_prompt: |
-    You are an AI assistant with full control over a Mac...
+    You are an AI assistant with full control over this computer...
 
 models:
   default: ""                    # override claude.model
@@ -242,8 +302,8 @@ tools:
   max_output_bytes: 8192         # truncation limit
 ```
 
-Minimal config — most fields have sensible defaults. Set `ANTHROPIC_API_KEY`
-and `TELEGRAM_TOKEN` in `.env` and you're running.
+Minimal config — most fields have sensible defaults. Run `claude login`
+and optionally set `TELEGRAM_TOKEN` in `.env` and you're running.
 
 ## Development
 
@@ -268,20 +328,23 @@ cmd/
   nanoclaw/main.go          CLI entry point (gateway, chat, send, status, models)
   goterm/main.go            Legacy Telegram-only entry point
 
+dashboard/                  React web dashboard (Vite + TailwindCSS)
+
 internal/
   agent/                    Core agent loop + types
   anthropic/                Direct Anthropic API client
   bot/                      Telegram bot (handler, streamer)
+  browser/                  Chrome DevTools Protocol (CDP) client
   channel/                  Channel interface + CLI implementation
-  claude/                   Claude CLI subprocess (fallback)
+  claude/                   Claude CLI subprocess (OAuth2 provider)
   config/                   YAML config loading
   context/                  Context engine (tokens, assembly, compaction)
   execution/                Per-session FIFO execution queue
-  gateway/                  WebSocket JSON-RPC server
+  gateway/                  WebSocket JSON-RPC server + dashboard hosting
   memory/                   Cross-session keyword memory
   models/                   Model catalog + resolver
   session/                  Persistent session management
-  tools/                    14 Mac control tools
+  tools/                    System + browser control tools
   transcript/               JSONL event recording
 ```
 
@@ -291,7 +354,7 @@ internal/
   execute without confirmation. This is intentional for a personal bot.
 - Restrict access via `security.allowed_user_ids` in config.
 - The gateway binds to `127.0.0.1` by default (localhost only).
-- API keys are read from `.env` (gitignored) or environment variables.
+- Auth via Claude CLI OAuth2 (subscription) or API keys from `.env` (gitignored).
 
 ## Compared to openclaw
 
@@ -303,8 +366,9 @@ radically simplified:
 | Language | TypeScript | Go |
 | Binary | Node.js + many deps | Single static binary (13MB) |
 | Source files | 1000+ | 45 |
-| Providers | 40+ (plugin system) | Claude (direct API + CLI fallback) |
-| Channels | 20+ (plugin system) | Telegram + CLI + Gateway |
+| Auth | API keys only | Claude CLI OAuth2 or API key |
+| Providers | 40+ (plugin system) | Claude (CLI OAuth + direct API) |
+| Channels | 20+ (plugin system) | Telegram + Web Dashboard + CLI |
 | Memory | LanceDB + embeddings | JSONL + keyword search |
 | Config | ~200 config fields | ~15 config fields |
 | Context engine | Pluggable with DAG branching | Simple budget-based trimming |

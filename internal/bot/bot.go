@@ -34,6 +34,19 @@ func New(cfg *config.Config) (*Bot, error) {
 	api.Debug = false
 	log.Printf("bot: logged in as @%s", api.Self.UserName)
 
+	// Register commands with Telegram menu
+	commands := tgbotapi.NewSetMyCommands(
+		tgbotapi.BotCommand{Command: "start", Description: "Show welcome message and help"},
+		tgbotapi.BotCommand{Command: "reset", Description: "Clear conversation history"},
+		tgbotapi.BotCommand{Command: "status", Description: "Show session info"},
+		tgbotapi.BotCommand{Command: "models", Description: "List available models"},
+		tgbotapi.BotCommand{Command: "model", Description: "Switch model (e.g. /model sonnet)"},
+		tgbotapi.BotCommand{Command: "cancel", Description: "Cancel current request"},
+	)
+	if _, err := api.Request(commands); err != nil {
+		log.Printf("bot: warning: failed to set commands menu: %v", err)
+	}
+
 	executor := tools.New(tools.ExecutorConfig{
 		ShellTimeout:   cfg.Tools.ShellTimeout,
 		MaxOutputBytes: cfg.Tools.MaxOutputBytes,
