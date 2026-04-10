@@ -15,14 +15,18 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"net"
+	"path/filepath"
+	"runtime"
+
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/agent"
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
-	"path/filepath"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
+	"github.com/ngocp/goterm-control/internal/daemon"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -64,6 +68,29 @@ func main() {
 
 	switch os.Args[1] {
 	case "gateway":
+		// Check for gateway subcommands (install, uninstall, start, stop, restart, status)
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "install":
+				runGatewayInstall(os.Args[3:])
+				return
+			case "uninstall":
+				runGatewayUninstall(os.Args[3:])
+				return
+			case "start":
+				runGatewayStart(os.Args[3:])
+				return
+			case "stop":
+				runGatewayStop(os.Args[3:])
+				return
+			case "restart":
+				runGatewayRestart(os.Args[3:])
+				return
+			case "status":
+				runGatewayServiceStatus(os.Args[3:])
+				return
+			}
+		}
 		runGateway(os.Args[2:])
 	case "send":
 		runSend(os.Args[2:])
@@ -89,12 +116,18 @@ Usage:
   nanoclaw <command> [flags]
 
 Commands:
-  gateway   Start the gateway (Telegram + WebSocket RPC server)
-  send      Send a message to the agent via gateway
-  status    Show gateway status
-  models    List available models
-  chat      Interactive CLI chat with the agent (no gateway needed)
-  help      Show this help`)
+  gateway            Start the gateway in foreground
+  gateway install    Install as a background service (systemd/launchd)
+  gateway uninstall  Remove the background service
+  gateway start      Start the installed service
+  gateway stop       Stop the installed service
+  gateway restart    Restart the installed service
+  gateway status     Show service status and health
+  send               Send a message to the agent via gateway
+  status             Show gateway status (via WebSocket)
+  models             List available models
+  chat               Interactive CLI chat with the agent (no gateway needed)
+  help               Show this help`)
 }
 
 // --- gateway command ---
@@ -430,6 +463,273 @@ func buildToolDefs() []agent.ToolDef {
 		})
 	}
 	return defs
+}
+
+// --- gateway service commands ---
+
+func resolveAbsPath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
+}
+
+func resolveBinaryPath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return exe, nil
+	}
+	// Warn if binary is in a temp directory (e.g. go run)
+	if strings.Contains(real, "/tmp/") || strings.Contains(real, "/temp/") {
+		fmt.Fprintln(os.Stderr, "Warning: binary is in a temp directory — install from a stable path")
+	}
+	return real, nil
+}
+
+func buildInstallEnv(configPath, envPath string) map[string]string {
+	env := map[string]string{}
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		env["HOME"] = home
+	}
+
+	// Load .env to capture API keys
+	if envPath != "" {
+		loadEnv(envPath)
+	}
+	// Load config to capture API keys
+	if configPath != "" {
+		cfg, err := config.Load(configPath)
+		if err == nil {
+			if cfg.Claude.APIKey != "" {
+				env["ANTHROPIC_API_KEY"] = cfg.Claude.APIKey
+			}
+			if cfg.Telegram.Token != "" {
+				env["TELEGRAM_TOKEN"] = cfg.Telegram.Token
+			}
+		}
+	}
+
+	// Also pick up from current env (env overrides config)
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		env["ANTHROPIC_API_KEY"] = v
+	}
+	if v := os.Getenv("TELEGRAM_TOKEN"); v != "" {
+		env["TELEGRAM_TOKEN"] = v
+	}
+
+	return env
+}
+
+func runGatewayInstall(args []string) {
+	fs := flag.NewFlagSet("gateway install", flag.ExitOnError)
+	port := fs.Int("port", 18789, "Gateway port")
+	bind := fs.String("bind", "127.0.0.1", "Bind address")
+	configPath := fs.String("config", "config.yaml", "Path to config file")
+	envPath := fs.String("env", ".env", "Path to .env file")
+	force := fs.Bool("force", false, "Force reinstall even if already installed")
+	fs.Parse(args)
+
+	svc, err := daemon.Resolve()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	// Check if already installed
+	if !*force {
+		installed, _ := svc.IsInstalled()
+		if installed {
+			fmt.Printf("Service already installed (%s). Use --force to reinstall.\n", svc.Label())
+			fmt.Printf("Unit: %s\n", svc.UnitPath())
+			return
+		}
+	}
+
+	binPath, err := resolveBinaryPath()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	absConfig := resolveAbsPath(*configPath)
+	absEnv := resolveAbsPath(*envPath)
+
+	installArgs := daemon.InstallArgs{
+		BinaryPath:  binPath,
+		Port:        *port,
+		Bind:        *bind,
+		ConfigPath:  absConfig,
+		EnvFile:     absEnv,
+		Environment: buildInstallEnv(absConfig, absEnv),
+		Description: "NanoClaw Gateway",
+		Force:       *force,
+	}
+
+	ctx := context.Background()
+	if err := svc.Install(ctx, installArgs); err != nil {
+		log.Fatalf("install failed: %v", err)
+	}
+
+	fmt.Printf("Service installed via %s\n", svc.Label())
+	fmt.Printf("Unit: %s\n", svc.UnitPath())
+
+	// Health check
+	fmt.Print("Waiting for gateway to become healthy...")
+	result, err := daemon.WaitForHealthy(ctx, *port, *bind, daemon.HealthOpts{})
+	if err != nil {
+		fmt.Printf(" timeout\n")
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Check logs: journalctl --user -u %s\n", "nanoclaw-gateway")
+	} else {
+		fmt.Printf(" ok (%s, %d attempts)\n", result.Elapsed.Round(time.Millisecond), result.Attempts)
+	}
+
+	// Linger check (Linux only)
+	if runtime.GOOS == "linux" {
+		daemon.PromptLinger()
+	}
+
+	fmt.Println()
+	fmt.Println("Manage with:")
+	fmt.Println("  nanoclaw gateway status   — check health")
+	fmt.Println("  nanoclaw gateway restart   — restart service")
+	fmt.Println("  nanoclaw gateway stop      — stop service")
+	fmt.Println("  nanoclaw gateway uninstall — remove service")
+}
+
+func runGatewayUninstall(_ []string) {
+	svc, err := daemon.Resolve()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	if err := svc.Uninstall(context.Background()); err != nil {
+		log.Fatalf("uninstall failed: %v", err)
+	}
+	fmt.Println("Service uninstalled.")
+}
+
+func runGatewayStart(_ []string) {
+	svc, err := daemon.Resolve()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	installed, _ := svc.IsInstalled()
+	if !installed {
+		fmt.Fprintln(os.Stderr, "Service not installed. Run: nanoclaw gateway install")
+		os.Exit(1)
+	}
+
+	if err := svc.Start(context.Background()); err != nil {
+		log.Fatalf("start failed: %v", err)
+	}
+	fmt.Println("Service started.")
+}
+
+func runGatewayStop(_ []string) {
+	svc, err := daemon.Resolve()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	if err := svc.Stop(context.Background()); err != nil {
+		log.Fatalf("stop failed: %v", err)
+	}
+	fmt.Println("Service stopped.")
+}
+
+func runGatewayRestart(args []string) {
+	fs := flag.NewFlagSet("gateway restart", flag.ExitOnError)
+	port := fs.Int("port", 18789, "Gateway port (for health check)")
+	bind := fs.String("bind", "127.0.0.1", "Bind address (for health check)")
+	fs.Parse(args)
+
+	svc, err := daemon.Resolve()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	installed, _ := svc.IsInstalled()
+	if !installed {
+		fmt.Fprintln(os.Stderr, "Service not installed. Run: nanoclaw gateway install")
+		os.Exit(1)
+	}
+
+	if err := svc.Restart(context.Background()); err != nil {
+		log.Fatalf("restart failed: %v", err)
+	}
+
+	fmt.Print("Waiting for gateway to become healthy...")
+	ctx := context.Background()
+	result, err := daemon.WaitForHealthy(ctx, *port, *bind, daemon.HealthOpts{})
+	if err != nil {
+		fmt.Printf(" timeout\n")
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	} else {
+		fmt.Printf(" ok (%s)\n", result.Elapsed.Round(time.Millisecond))
+	}
+}
+
+func runGatewayServiceStatus(args []string) {
+	fs := flag.NewFlagSet("gateway status", flag.ExitOnError)
+	port := fs.Int("port", 18789, "Gateway port (for health probe)")
+	bind := fs.String("bind", "127.0.0.1", "Bind address")
+	fs.Parse(args)
+
+	svc, err := daemon.Resolve()
+	if err != nil {
+		log.Fatalf("daemon: %v", err)
+	}
+
+	// Service installation check
+	installed, _ := svc.IsInstalled()
+	if !installed {
+		fmt.Printf("Service:   not installed\n")
+		fmt.Printf("Backend:   %s\n", svc.Label())
+		return
+	}
+
+	fmt.Printf("Service:   installed (%s)\n", svc.Label())
+	fmt.Printf("Unit:      %s\n", svc.UnitPath())
+
+	// Runtime status
+	rt, err := svc.ReadRuntime()
+	if err != nil {
+		fmt.Printf("Status:    error (%v)\n", err)
+	} else {
+		fmt.Printf("Status:    %s", rt.Status)
+		if rt.SubState != "" && rt.SubState != rt.Status {
+			fmt.Printf(" (%s)", rt.SubState)
+		}
+		fmt.Println()
+		if rt.PID > 0 {
+			fmt.Printf("PID:       %d\n", rt.PID)
+		}
+		if rt.Status == "failed" {
+			fmt.Printf("Exit:      %d (%s)\n", rt.ExitCode, rt.ExitReason)
+		}
+	}
+
+	// HTTP health probe
+	addr := net.JoinHostPort(*bind, fmt.Sprintf("%d", *port))
+	fmt.Printf("Endpoint:  http://%s/health\n", addr)
+
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		fmt.Printf("Health:    unreachable\n")
+	} else {
+		conn.Close()
+		fmt.Printf("Health:    port open\n")
+	}
 }
 
 func findToolSchema(name string) map[string]any {
