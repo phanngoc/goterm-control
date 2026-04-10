@@ -1,0 +1,26 @@
+title: NanoClaw
+description: Lean AI agent that gives Claude full control over your computer
+url: "https://phanngoc.github.io"
+baseurl: "/goterm-control"
+
+markdown: kramdown
+highlighter: rouge
+
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+
+plugins:
+  - jekyll-seo-tag

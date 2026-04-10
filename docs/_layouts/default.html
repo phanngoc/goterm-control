@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page.title }} | {{ site.title }}</title>
+  <meta name="description" content="{{ page.description | default: site.description }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="nav" id="navbar">
+    <div class="nav-inner">
+      <a href="{{ '/' | relative_url }}" class="nav-logo">
+        <span class="nav-logo-icon">&#x1F9BE;</span>
+        <span>NanoClaw</span>
+      </a>
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="nav-links" id="navLinks">
+        <a href="{{ '/' | relative_url }}" {% if page.url == '/' %}class="active"{% endif %}>Home</a>
+        <a href="{{ '/getting-started' | relative_url }}" {% if page.url == '/getting-started' %}class="active"{% endif %}>Getting Started</a>
+        <a href="{{ '/architecture' | relative_url }}" {% if page.url == '/architecture' %}class="active"{% endif %}>Architecture</a>
+        <a href="{{ '/features' | relative_url }}" {% if page.url == '/features' %}class="active"{% endif %}>Features</a>
+        <a href="{{ '/telegram-bot' | relative_url }}" {% if page.url == '/telegram-bot' %}class="active"{% endif %}>Telegram Bot</a>
+        <a href="{{ '/dashboard' | relative_url }}" {% if page.url == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="{{ '/configuration' | relative_url }}" {% if page.url == '/configuration' %}class="active"{% endif %}>Config</a>
+        <a href="{{ '/api-reference' | relative_url }}" {% if page.url == '/api-reference' %}class="active"{% endif %}>API</a>
+        <a href="https://github.com/phanngoc/goterm-control" class="nav-github" target="_blank" rel="noopener">
+          <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <main class="main">
+    {{ content }}
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="footer-logo">
+            <span>&#x1F9BE;</span> NanoClaw
+          </div>
+          <p>Lean AI agent that gives Claude full control over your computer.</p>
+        </div>
+        <div class="footer-links">
+          <h4>Documentation</h4>
+          <a href="{{ '/getting-started' | relative_url }}">Getting Started</a>
+          <a href="{{ '/architecture' | relative_url }}">Architecture</a>
+          <a href="{{ '/features' | relative_url }}">Features & Tools</a>
+          <a href="{{ '/configuration' | relative_url }}">Configuration</a>
+        </div>
+        <div class="footer-links">
+          <h4>Guides</h4>
+          <a href="{{ '/telegram-bot' | relative_url }}">Telegram Bot</a>
+          <a href="{{ '/dashboard' | relative_url }}">Web Dashboard</a>
+          <a href="{{ '/api-reference' | relative_url }}">API Reference</a>
+        </div>
+        <div class="footer-links">
+          <h4>Community</h4>
+          <a href="https://github.com/phanngoc/goterm-control" target="_blank">GitHub</a>
+          <a href="https://github.com/phanngoc/goterm-control/issues" target="_blank">Issues</a>
+          <a href="https://github.com/phanngoc/goterm-control/blob/main/LICENSE" target="_blank">MIT License</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2024-2026 NanoClaw. Built with Go. Powered by Claude.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Mobile nav toggle
+    const toggle = document.getElementById('navToggle');
+    const links = document.getElementById('navLinks');
+    toggle.addEventListener('click', () => {
+      links.classList.toggle('open');
+      toggle.classList.toggle('open');
+    });
+
+    // Navbar scroll effect
+    window.addEventListener('scroll', () => {
+      document.getElementById('navbar').classList.toggle('scrolled', window.scrollY > 20);
+    });
+  </script>
+</body>
+</html>
