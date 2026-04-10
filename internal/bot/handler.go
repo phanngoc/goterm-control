@@ -382,8 +382,8 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	h.approvalMu.Unlock()
 
 	if !ok {
-		edit := tgbotapi.NewEditMessageText(chatID, cb.Message.MessageID, "_(expired)_")
-		edit.ParseMode = "Markdown"
+		edit := tgbotapi.NewEditMessageText(chatID, cb.Message.MessageID, "<i>(expired)</i>")
+		edit.ParseMode = "HTML"
 		_, _ = h.bot.Send(edit)
 		return
 	}
@@ -420,13 +420,14 @@ func toolLabel(name, inputJSON string) string {
 	return name
 }
 
-// sendText sends a plain/markdown message and returns the message ID.
+// sendText converts markdown to Telegram HTML and sends the message.
 func (h *Handler) sendText(chatID int64, text string) int {
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = "Markdown"
+	html := markdownToTelegramHTML(text)
+	msg := tgbotapi.NewMessage(chatID, html)
+	msg.ParseMode = "HTML"
 	sent, err := h.bot.Send(msg)
 	if err != nil {
-		msg2 := tgbotapi.NewMessage(chatID, stripMarkdown(text))
+		msg2 := tgbotapi.NewMessage(chatID, stripHTML(html))
 		sent, err = h.bot.Send(msg2)
 		if err != nil {
 			log.Printf("sendText: %v", err)
