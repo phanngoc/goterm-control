@@ -17,6 +17,7 @@ import (
 
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
@@ -165,14 +166,18 @@ func runGateway(args []string) {
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), "dashboard/dist")
 
-	// Also start Telegram bot in background if configured
+	// Start Telegram bot in background if configured
 	if cfg.Telegram.Token != "" {
-		go func() {
-			// Import the old bot package for Telegram support
-			// For now, the gateway runs standalone — Telegram integration
-			// will be wired through the channel interface
-			log.Printf("gateway: Telegram channel available (use existing goterm binary for now)")
-		}()
+		tgBot, err := bot.New(cfg)
+		if err != nil {
+			log.Printf("gateway: telegram bot init failed: %v", err)
+		} else {
+			go func() {
+				log.Println("gateway: starting Telegram bot")
+				tgBot.Run()
+			}()
+			defer tgBot.Shutdown()
+		}
 	}
 
 	log.Printf("nanoclaw gateway starting on %s", addr)
@@ -393,13 +398,13 @@ func buildToolDefs() []agent.ToolDef {
 		{"list_processes", "List running processes"},
 		{"kill_process", "Kill a process"},
 		{"browse_url", "Open URL in browser"},
-		// Browser automation (agent-browser)
-		{"browser_navigate", "Navigate browser to a URL. Opens the page in a headless Chrome browser."},
-		{"browser_snapshot", "Get an accessibility snapshot of the current page with element refs (@e1, @e2, etc). Use -i for interactive elements only."},
-		{"browser_click", "Click an element by its ref (e.g. @e3). Always snapshot first to get refs."},
-		{"browser_fill", "Clear and type text into an input field by ref. Use for form fields."},
+		// Browser automation (native CDP)
+		{"browser_navigate", "Navigate browser to a URL. Launches Chrome with CDP if needed."},
+		{"browser_snapshot", "Get a DOM snapshot of the current page with element refs (n1, n2, etc). Always snapshot first to get refs."},
+		{"browser_click", "Click an element by its ref (e.g. n3). Always snapshot first to get refs."},
+		{"browser_fill", "Clear and type text into an input field by ref (e.g. n5). Use for form fields."},
 		{"browser_type", "Append text to an input field by ref (does not clear first)."},
-		{"browser_select", "Select a dropdown option by ref and value."},
+		{"browser_select", "Select a dropdown option by ref (e.g. n7) and value."},
 		{"browser_scroll", "Scroll the page in a direction (up/down/left/right)."},
 		{"browser_screenshot", "Take a screenshot of the current browser page."},
 		{"browser_get_text", "Get text, HTML, value, title, or URL from an element or page."},
@@ -474,7 +479,7 @@ func findToolSchema(name string) map[string]any {
 			"url": map[string]any{"type": "string", "description": "URL to open"},
 		}, "required": []string{"url"}},
 
-		// Browser automation tools (agent-browser)
+		// Browser automation tools (native CDP)
 		"browser_navigate": {"type": "object", "properties": map[string]any{
 			"url": map[string]any{"type": "string", "description": "URL to navigate to"},
 		}, "required": []string{"url"}},
@@ -483,7 +488,7 @@ func findToolSchema(name string) map[string]any {
 			"interactive": map[string]any{"type": "boolean", "description": "Show only interactive elements (default true)"},
 		}},
 		"browser_click": {"type": "object", "properties": map[string]any{
-			"ref":     map[string]any{"type": "string", "description": "Element ref from snapshot (e.g. @e3)"},
+			"ref":     map[string]any{"type": "string", "description": "Element ref from snapshot (e.g. n3)"},
 			"new_tab": map[string]any{"type": "boolean", "description": "Open in new tab"},
 		}, "required": []string{"ref"}},
 		"browser_fill": {"type": "object", "properties": map[string]any{

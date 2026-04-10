@@ -15,55 +15,29 @@ GATEWAY_PORT="${GATEWAY_PORT:-19000}"
 
 build() {
   echo "⚙️  Building..."
-  go build -o goterm ./cmd/goterm/
   go build -o nanoclaw ./cmd/nanoclaw/
-  echo "✅ Built: goterm + nanoclaw"
-}
-
-start_telegram() {
-  echo "📱 Starting Telegram bot (@Goterm_bot)..."
-  ./goterm -config config.yaml -env .env &
-  echo "   PID: $!"
+  echo "✅ Built: nanoclaw"
 }
 
 start_gateway() {
-  echo "🌐 Starting gateway on :${GATEWAY_PORT}..."
+  echo "🌐 Starting gateway (+ Telegram bot) on :${GATEWAY_PORT}..."
   ./nanoclaw gateway --config config.yaml --env .env --port "$GATEWAY_PORT" &
   echo "   PID: $!"
 }
 
 stop_all() {
   echo "🛑 Stopping..."
-  pkill -f "./goterm -config" 2>/dev/null || true
   pkill -f "./nanoclaw gateway" 2>/dev/null || true
   sleep 1
 }
 
 case "$MODE" in
-  telegram)
+  gateway|all)
     build
     stop_all
-    start_telegram
-    echo "✅ Telegram bot running. Send messages to @Goterm_bot"
-    ;;
-  gateway)
-    build
-    stop_all
-    start_gateway
-    echo "✅ Gateway running. Use: ./nanoclaw send \"hello\""
-    ;;
-  chat)
-    build
-    echo "💬 Starting interactive chat..."
-    ./nanoclaw chat --config config.yaml --env .env
-    ;;
-  all)
-    build
-    stop_all
-    start_telegram
     start_gateway
     echo ""
-    echo "✅ All services running:"
+    echo "✅ Gateway running (Telegram bot auto-starts if token configured):"
     echo "   📱 Telegram: @Goterm_bot"
     echo "   🌐 Gateway:  ws://127.0.0.1:${GATEWAY_PORT}/ws"
     echo "   📊 Health:   http://127.0.0.1:${GATEWAY_PORT}/health"
@@ -73,6 +47,11 @@ case "$MODE" in
     echo "   ./nanoclaw status                     # check status"
     echo "   ./nanoclaw models                     # list models"
     echo "   ./start.sh stop                       # stop all"
+    ;;
+  chat)
+    build
+    echo "💬 Starting interactive chat..."
+    ./nanoclaw chat --config config.yaml --env .env
     ;;
   stop)
     stop_all
