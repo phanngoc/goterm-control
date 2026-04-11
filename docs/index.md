@@ -42,6 +42,42 @@ layout: default
   </div>
 </section>
 
+<section class="section" style="padding-bottom: 1rem;">
+  <div class="container">
+    <div class="section-header">
+      <h2>Philosophy</h2>
+      <p>What makes BomClaw different from every other AI agent framework.</p>
+    </div>
+    <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.2rem;">
+      <div class="feature-card" style="text-align: center;">
+        <div class="feature-icon purple" style="font-size: 2rem;">&#x1F5A5;&#xFE0F;</div>
+        <h3>Full Computer Control</h3>
+        <p>Shell, files, processes, clipboard, browser, screenshots &mdash; the agent can do anything you can do on your machine.</p>
+      </div>
+      <div class="feature-card" style="text-align: center;">
+        <div class="feature-icon green" style="font-size: 2rem;">&#x1F30D;</div>
+        <h3>Cross-Platform</h3>
+        <p>Runs wherever Go compiles &mdash; Linux, macOS, Windows via WSL. One codebase, every platform.</p>
+      </div>
+      <div class="feature-card" style="text-align: center;">
+        <div class="feature-icon yellow" style="font-size: 2rem;">&#x1F9E9;</div>
+        <h3>Small Enough to Understand</h3>
+        <p>~65 source files, 18 packages. Read the entire codebase in an afternoon. No magic, no abstractions you can't trace.</p>
+      </div>
+      <div class="feature-card" style="text-align: center;">
+        <div class="feature-icon pink" style="font-size: 2rem;">&#x1F464;</div>
+        <h3>Built for One User</h3>
+        <p>Bespoke, not a framework. No multi-tenant auth, no plugin system, no enterprise features you'll never use.</p>
+      </div>
+      <div class="feature-card" style="text-align: center;">
+        <div class="feature-icon blue" style="font-size: 2rem;">&#x2702;&#xFE0F;</div>
+        <h3>Customization = Code</h3>
+        <p>No config sprawl. Want to change behavior? Change the code. It's small enough that you can.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="section">
   <div class="container">
     <div class="stats">
