@@ -6,6 +6,7 @@ claude:
   api_key: ""      # set via ANTHROPIC_API_KEY env var
   model: "claude-sonnet-4-6"   # default model (can also use models.default)
   max_tokens: 8192
+  workspace: "~/goterm-workspace"  # working directory for Claude CLI (default: ~/goterm-workspace)
   system_prompt: |
     You are an AI assistant with full control over a Mac M1 computer. You help the user accomplish any task by:
     - Running shell commands and scripts (bash, python, node, etc.)
