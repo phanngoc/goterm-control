@@ -219,6 +219,12 @@ func runGateway(args []string) {
 		}
 	}
 
+	// Kill any stale process holding our port (prevents "address already in use"
+	// when launchd/systemd auto-restarts after a crash).
+	if err := daemon.KillStaleListeners(*port); err != nil {
+		log.Printf("warning: stale PID cleanup: %v", err)
+	}
+
 	log.Printf("nanoclaw gateway starting on %s", addr)
 	if err := srv.Start(ctx); err != nil {
 		log.Fatalf("gateway: %v", err)
@@ -525,6 +531,11 @@ func buildInstallEnv(configPath, envPath string) map[string]string {
 	}
 	if v := os.Getenv("TELEGRAM_TOKEN"); v != "" {
 		env["TELEGRAM_TOKEN"] = v
+	}
+
+	// Inherit PATH so LaunchAgent can find executables like "claude", "node"
+	if v := os.Getenv("PATH"); v != "" {
+		env["PATH"] = v
 	}
 
 	return env

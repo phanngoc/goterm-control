@@ -53,8 +53,15 @@ func markdownToTelegramHTML(text string) string {
 	inlineCodes := extractInlineCodes(text)
 	text = inlineCodes.text
 
-	// Strip markdown headers
-	text = reHeader.ReplaceAllString(text, "$1")
+	// Extract and protect tables (like code blocks — restored after escaping)
+	tables := extractTables(text)
+	text = tables.text
+
+	// Convert horizontal rules (---, ***, ___) to visual separator
+	text = reHorizontalRule.ReplaceAllString(text, "━━━━━━━━━━━━")
+
+	// Convert markdown headers to bold (via markdown bold, handled after escaping)
+	text = reHeader.ReplaceAllString(text, "**$1**")
 
 	// Convert blockquotes: > text → <blockquote>text</blockquote>
 	text = convertBlockquotes(text)
@@ -113,6 +120,12 @@ func markdownToTelegramHTML(text string) string {
 		text = strings.ReplaceAll(text, fmt.Sprintf("\x00CB%d\x00", i), "<pre><code>"+escaped+"</code></pre>")
 	}
 
+	// Restore tables
+	for i, block := range tables.blocks {
+		escaped := escapeHTML(block)
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x00TB%d\x00", i), "<pre>"+escaped+"</pre>")
+	}
+
 	return text
 }
 
@@ -120,6 +133,7 @@ func markdownToTelegramHTML(text string) string {
 
 var (
 	reHeader         = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	reHorizontalRule = regexp.MustCompile(`(?m)^[\t ]*[-*_]{3,}[\t ]*$`)
 	reLink           = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	reBoldAsterisks  = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	reBoldUnderscores = regexp.MustCompile(`__(.+?)__`)
@@ -130,6 +144,8 @@ var (
 	reCodeBlock      = regexp.MustCompile("```[\\w]*\\n?([\\s\\S]*?)```")
 	reInlineCode     = regexp.MustCompile("`([^`]+)`")
 	reBlockquoteLine = regexp.MustCompile(`(?m)^>\s?(.*)$`)
+	reTableRow       = regexp.MustCompile(`^\|(.+)\|$`)
+	reTableSep       = regexp.MustCompile(`^\|[\s:\-|]+\|$`)
 	reHTMLTag        = regexp.MustCompile(`<[^>]+>`)
 )
 
@@ -162,6 +178,112 @@ func convertBlockquotes(text string) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+// --- Table extraction ---
+
+type tableMatch struct {
+	text   string
+	blocks []string
+}
+
+// extractTables finds markdown tables and replaces them with placeholders.
+// Returns the modified text and the rendered table blocks (plain text, not yet HTML-escaped).
+func extractTables(text string) tableMatch {
+	lines := strings.Split(text, "\n")
+	var result []string
+	var tableRows [][]string
+	var blocks []string
+
+	flushTable := func() {
+		if len(tableRows) == 0 {
+			return
+		}
+		// Calculate column widths
+		var colWidths []int
+		for _, row := range tableRows {
+			for i, cell := range row {
+				if i >= len(colWidths) {
+					colWidths = append(colWidths, 0)
+				}
+				if cellLen := len([]rune(cell)); cellLen > colWidths[i] {
+					colWidths[i] = cellLen
+				}
+			}
+		}
+
+		// Cap column widths for narrow Telegram display
+		for i := range colWidths {
+			if colWidths[i] > 24 {
+				colWidths[i] = 24
+			}
+		}
+
+		// Render rows
+		var pre strings.Builder
+		for ri, row := range tableRows {
+			for ci, cell := range row {
+				if ci >= len(colWidths) {
+					break
+				}
+				runes := []rune(cell)
+				width := colWidths[ci]
+				if len(runes) > width {
+					runes = runes[:width]
+				}
+				pre.WriteString(string(runes))
+				for j := len(runes); j < width; j++ {
+					pre.WriteByte(' ')
+				}
+				if ci < len(row)-1 {
+					pre.WriteString(" | ")
+				}
+			}
+			pre.WriteByte('\n')
+			// Separator after header
+			if ri == 0 {
+				for ci := range colWidths {
+					for j := 0; j < colWidths[ci]; j++ {
+						pre.WriteByte('-')
+					}
+					if ci < len(colWidths)-1 {
+						pre.WriteString("-+-")
+					}
+				}
+				pre.WriteByte('\n')
+			}
+		}
+
+		result = append(result, fmt.Sprintf("\x00TB%d\x00", len(blocks)))
+		blocks = append(blocks, pre.String())
+		tableRows = nil
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip separator rows (|---|---|)
+		if reTableSep.MatchString(trimmed) {
+			continue
+		}
+
+		if reTableRow.MatchString(trimmed) {
+			inner := reTableRow.FindStringSubmatch(trimmed)[1]
+			cells := strings.Split(inner, "|")
+			for i := range cells {
+				cells[i] = strings.TrimSpace(cells[i])
+			}
+			tableRows = append(tableRows, cells)
+			continue
+		}
+
+		// Non-table line — flush any pending table
+		flushTable()
+		result = append(result, line)
+	}
+	flushTable()
+
+	return tableMatch{text: strings.Join(result, "\n"), blocks: blocks}
 }
 
 // --- Code block extraction ---

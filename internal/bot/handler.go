@@ -17,6 +17,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
+	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -38,6 +39,7 @@ type Handler struct {
 	memory     memory.MemoryBackend
 	messages   MessageStore // optional SQLite message store
 	resolver   *models.Resolver
+	queue      *msgqueue.Queue // debounce + collect layer
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -54,6 +56,7 @@ func NewHandler(
 	memoryStore memory.MemoryBackend,
 	messages MessageStore,
 	resolver *models.Resolver,
+	queue *msgqueue.Queue,
 ) *Handler {
 	return &Handler{
 		bot:              bot,
@@ -65,6 +68,7 @@ func NewHandler(
 		memory:           memoryStore,
 		messages:         messages,
 		resolver:         resolver,
+		queue:            queue,
 		approvalRequests: make(map[string]chan bool),
 	}
 }
@@ -225,25 +229,26 @@ func (h *Handler) handleModelCommand(chatID int64, arg string) {
 }
 
 func (h *Handler) handleMessage(msg *tgbotapi.Message) {
-	chatID := msg.Chat.ID
-	sess := h.sessions.Get(chatID)
-	userText := msg.Text
+	h.queue.Submit(msg.Chat.ID, msg.Text)
+}
 
-	// Cancel any in-flight or queued request for this session
+// executeMessage is the Queue callback that runs the full Claude pipeline.
+// Called by the queue after debouncing and collection.
+func (h *Handler) executeMessage(chatID int64, text string) {
+	sess := h.sessions.Get(chatID)
+
+	// Cancel any in-flight request for this session
 	sess.Cancel()
 
-	// Create a cancellable context BEFORE enqueuing
 	ctx, cancel := context.WithCancel(context.Background())
 	sess.SetCancel(cancel)
 
-	// Resolve model for this chat
 	resolvedModel := h.resolver.Resolve(chatID)
 	modelID := ""
 	if resolvedModel != nil {
 		modelID = resolvedModel.ID
 	}
 
-	// Send placeholder "thinking" message
 	placeholder := h.sendText(chatID, "⏳ _Thinking..._")
 	if placeholder == 0 {
 		cancel()
@@ -251,15 +256,13 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Build memory context for injection
 	memoryContext := ""
 	if h.memory != nil {
-		memoryContext = memory.BuildMemoryContext(h.memory, userText, h.cfg.Memory.MaxEntries)
+		memoryContext = memory.BuildMemoryContext(h.memory, text, h.cfg.Memory.MaxEntries)
 	}
 
-	// Enqueue the Claude call through the execution engine.
 	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
-		return h.runClaude(ctx, sess, chatID, modelID, userText, memoryContext, placeholder)
+		return h.runClaude(ctx, sess, chatID, modelID, text, memoryContext, placeholder)
 	})
 
 	if err != nil {

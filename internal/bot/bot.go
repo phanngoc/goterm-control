@@ -12,6 +12,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
+	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -25,6 +26,7 @@ type Bot struct {
 	cfg      *config.Config
 	sessions *session.Manager
 	engine   *execution.Engine
+	queue    *msgqueue.Queue
 }
 
 // New creates and initialises the bot.
@@ -87,9 +89,25 @@ func New(cfg *config.Config) (*Bot, error) {
 	messageStore := storage.NewMessageStore(db)
 
 	// Execution engine
-	engine := execution.NewEngine(execution.Hooks{})
+	engine := execution.NewEngine(execution.Hooks{}, 3)
 
-	handler := NewHandler(api, sessions, claudeClient, cfg, engine, transcriptWriter, memoryStore, messageStore, resolver)
+	// Build handler first (queue needs handler.executeMessage as callback)
+	handler := &Handler{
+		bot:              api,
+		sessions:         sessions,
+		claude:           claudeClient,
+		cfg:              cfg,
+		engine:           engine,
+		transcript:       transcriptWriter,
+		memory:           memoryStore,
+		messages:         messageStore,
+		resolver:         resolver,
+		approvalRequests: make(map[string]chan bool),
+	}
+
+	// Message queue: debounce 800ms + collect while busy
+	queue := msgqueue.New(800*time.Millisecond, handler.executeMessage)
+	handler.queue = queue
 
 	return &Bot{
 		api:      api,
@@ -97,6 +115,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		cfg:      cfg,
 		sessions: sessions,
 		engine:   engine,
+		queue:    queue,
 	}, nil
 }
 
@@ -116,6 +135,7 @@ func (b *Bot) Run() {
 
 // Shutdown performs graceful cleanup.
 func (b *Bot) Shutdown() {
+	b.queue.Close()
 	b.engine.Close()
 	b.sessions.SaveNow()
 	log.Println("bot: shutdown complete")

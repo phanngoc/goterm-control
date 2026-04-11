@@ -102,54 +102,34 @@ func (s *Streamer) flush() {
 		s.mu.Unlock()
 		return
 	}
-	text := s.renderDisplay()
+	assistantText := strings.TrimSpace(s.buf.String())
+	toolLine := s.toolStatusLine()
 	s.dirty = false
 	s.mu.Unlock()
 
-	s.sendText(text)
+	s.sendFormatted(assistantText, toolLine)
 }
 
-// renderDisplay builds the display text: assistant text + optional tool status line.
-// Must be called with mu held.
-func (s *Streamer) renderDisplay() string {
-	assistantText := strings.TrimSpace(s.buf.String())
+// sendFormatted converts assistant markdown to Telegram HTML, appends the
+// tool status line (already HTML), and sends the combined message.
+// This avoids corrupting the tool status by running it through markdownToTelegramHTML.
+func (s *Streamer) sendFormatted(assistantText, toolLine string) {
+	var html string
 
-	if assistantText == "" && s.toolCount > 0 {
-		// Only tools running, no text yet
-		return "⏳ " + s.toolStatusLine()
+	switch {
+	case assistantText == "" && toolLine != "":
+		html = "⏳ " + toolLine
+	case assistantText != "" && toolLine != "":
+		html = markdownToTelegramHTML(assistantText) + "\n\n" + toolLine
+	case assistantText == "":
+		html = "⏳ <i>Thinking...</i>"
+	default:
+		html = markdownToTelegramHTML(assistantText)
 	}
 
-	if s.toolCount > 0 && assistantText != "" {
-		// Text + tool progress
-		return assistantText + "\n\n" + s.toolStatusLine()
-	}
-
-	if assistantText == "" {
-		return "⏳ <i>Thinking...</i>"
-	}
-
-	return assistantText
-}
-
-// toolStatusLine returns a compact tool progress indicator.
-func (s *Streamer) toolStatusLine() string {
-	if s.toolCount == 0 {
-		return ""
-	}
-	names := strings.Join(s.toolNames, " → ")
-	if s.toolCount > len(s.toolNames) {
-		names += fmt.Sprintf(" (+%d more)", s.toolCount-len(s.toolNames))
-	}
-	return fmt.Sprintf("🔧 <i>%s</i>", names)
-}
-
-func (s *Streamer) sendText(text string) {
-	if text == "" {
+	if html == "" {
 		return
 	}
-
-	// Convert markdown to Telegram HTML
-	html := markdownToTelegramHTML(text)
 
 	if len(html) <= maxTelegramMsg {
 		s.editCurrent(html)
@@ -162,10 +142,8 @@ func (s *Streamer) sendText(text string) {
 		return
 	}
 
-	// Edit current message with first chunk
 	s.editCurrent(chunks[0])
 
-	// Send remaining chunks as new messages
 	for _, chunk := range chunks[1:] {
 		msg := tgbotapi.NewMessage(s.chatID, chunk)
 		msg.ParseMode = "HTML"
@@ -184,11 +162,22 @@ func (s *Streamer) sendText(text string) {
 		s.mu.Unlock()
 	}
 
-	// Reset buffer to last chunk only
 	s.mu.Lock()
 	s.buf.Reset()
 	s.buf.WriteString(chunks[len(chunks)-1])
 	s.mu.Unlock()
+}
+
+// toolStatusLine returns a compact tool progress indicator.
+func (s *Streamer) toolStatusLine() string {
+	if s.toolCount == 0 {
+		return ""
+	}
+	names := strings.Join(s.toolNames, " → ")
+	if s.toolCount > len(s.toolNames) {
+		names += fmt.Sprintf(" (+%d more)", s.toolCount-len(s.toolNames))
+	}
+	return fmt.Sprintf("🔧 <i>%s</i>", names)
 }
 
 func (s *Streamer) editCurrent(text string) {
@@ -232,7 +221,7 @@ func (s *Streamer) Finalize() {
 
 	if hasPendingTools {
 		// Re-render without tool status line for clean final message
-		s.sendText(finalText)
+		s.sendFormatted(finalText, "")
 	}
 
 	close(s.done)

@@ -15,6 +15,12 @@ that you talk to from anywhere.
 - Built for one user — bespoke, not a framework
 - Customization = code changes, not config sprawl
 
+<p align="center">
+  <img src="docs/assets/telegram-demo.png" width="360" alt="Telegram bot demo — real-time tool calls, crawling, and structured output" />
+  <br/>
+  <em>Telegram bot in action: crawling real estate data, calling tools, and streaming structured results</em>
+</p>
+
 ## Quick Start
 
 ```bash
