@@ -35,8 +35,16 @@ type ModelsConfig struct {
 }
 
 type TelegramConfig struct {
-	Token   string `yaml:"token"`
-	Timeout int    `yaml:"timeout"`
+	Token     string          `yaml:"token"`
+	Timeout   int             `yaml:"timeout"`
+	Indicator IndicatorConfig `yaml:"indicator"`
+}
+
+type IndicatorConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	BotName  string   `yaml:"bot_name"`
+	Frames   []string `yaml:"frames"`
+	Interval int      `yaml:"interval"`
 }
 
 type SecurityConfig struct {
@@ -114,6 +122,14 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Memory.MaxEntries == 0 {
 		cfg.Memory.MaxEntries = 5
+	}
+	if cfg.Telegram.Indicator.Enabled {
+		if len(cfg.Telegram.Indicator.Frames) == 0 {
+			cfg.Telegram.Indicator.Frames = []string{"⏳", "⌛"}
+		}
+		if cfg.Telegram.Indicator.Interval == 0 {
+			cfg.Telegram.Indicator.Interval = 3
+		}
 	}
 
 	// Resolve default model: models.default takes priority over claude.model
