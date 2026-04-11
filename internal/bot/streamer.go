@@ -331,7 +331,7 @@ func (s *Streamer) Finalize() {
 	}
 	finalText := strings.TrimSpace(s.buf.String())
 	reasonText := strings.TrimSpace(s.reasonBuf.String())
-	hasPendingTools := s.toolCount > 0 && finalText != ""
+	hadTools := s.toolCount > 0
 	s.mu.Unlock()
 
 	// Final flush of reasoning lane
@@ -339,9 +339,13 @@ func (s *Streamer) Finalize() {
 		s.flushReasonLane(reasonText)
 	}
 
-	// Re-render answer without tool status line for clean final message
-	if hasPendingTools || finalText != "" {
+	// Re-render answer without tool status line for clean final message.
+	// If Claude was interrupted mid-tool-calls with no assistant text,
+	// send a notice so the user isn't stuck on a stale tool progress line.
+	if finalText != "" {
 		s.sendFormatted(finalText, "")
+	} else if hadTools {
+		s.editCurrent("⚠️ <i>Task interrupted — no final response received.</i>")
 	}
 
 	close(s.done)

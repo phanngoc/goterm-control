@@ -97,6 +97,19 @@ func (h *Handler) Handle(update tgbotapi.Update) {
 		return
 	}
 
+	// Allow "status" / "cancel" as plain text (no "/" prefix) so they
+	// work even when the agent is busy and the queue would block them.
+	switch strings.ToLower(strings.TrimSpace(msg.Text)) {
+	case "status":
+		h.showStatus(msg.Chat.ID)
+		return
+	case "cancel":
+		sess := h.sessions.Get(msg.Chat.ID)
+		sess.Cancel()
+		h.sendText(msg.Chat.ID, "🛑 Request cancelled.")
+		return
+	}
+
 	// Regular message → Claude (via execution queue)
 	if msg.Text != "" {
 		h.handleMessage(msg)
@@ -126,30 +139,7 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 		h.sendText(chatID, "🔄 Conversation history cleared.")
 
 	case "status":
-		sess := h.sessions.Get(chatID)
-		sessionID := sess.GetSessionID()
-		if sessionID == "" {
-			sessionID = "none"
-		} else if len(sessionID) > 8 {
-			sessionID = sessionID[:8] + "..."
-		}
-		m := h.resolver.Resolve(chatID)
-		modelName := "unknown"
-		if m != nil {
-			modelName = m.ID
-		}
-		h.sendText(chatID, fmt.Sprintf(
-			"📊 *Session Status*\n\n"+
-				"Chat ID: `%d`\n"+
-				"Turns: %d\n"+
-				"Session: `%s`\n"+
-				"Model: `%s`\n"+
-				"Tokens: %d in / %d out\n"+
-				"Queue: %d pending",
-			chatID, sess.GetMessageCount(), sessionID, modelName,
-			sess.InputTokens, sess.OutputTokens,
-			h.engine.QueueDepth(chatID),
-		))
+		h.showStatus(chatID)
 
 	case "models":
 		h.handleModelsCommand(chatID)
@@ -165,6 +155,33 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 	default:
 		h.sendText(chatID, fmt.Sprintf("Unknown command: /%s\n\nTry /start for help.", msg.Command()))
 	}
+}
+
+func (h *Handler) showStatus(chatID int64) {
+	sess := h.sessions.Get(chatID)
+	sessionID := sess.GetSessionID()
+	if sessionID == "" {
+		sessionID = "none"
+	} else if len(sessionID) > 8 {
+		sessionID = sessionID[:8] + "..."
+	}
+	m := h.resolver.Resolve(chatID)
+	modelName := "unknown"
+	if m != nil {
+		modelName = m.ID
+	}
+	h.sendText(chatID, fmt.Sprintf(
+		"📊 *Session Status*\n\n"+
+			"Chat ID: `%d`\n"+
+			"Turns: %d\n"+
+			"Session: `%s`\n"+
+			"Model: `%s`\n"+
+			"Tokens: %d in / %d out\n"+
+			"Queue: %d pending",
+		chatID, sess.GetMessageCount(), sessionID, modelName,
+		sess.InputTokens, sess.OutputTokens,
+		h.engine.QueueDepth(chatID),
+	))
 }
 
 func (h *Handler) handleModelsCommand(chatID int64) {
@@ -240,7 +257,9 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	// Cancel any in-flight request for this session
 	sess.Cancel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// 10-minute timeout prevents a stuck Claude CLI from blocking the queue
+	// lane forever. The user can still /cancel manually for shorter waits.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	sess.SetCancel(cancel)
 
 	resolvedModel := h.resolver.Resolve(chatID)
@@ -337,6 +356,9 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 
 	if err := h.claude.SendMessage(ctx, sess, modelID, userText, memoryContext, cb); err != nil {
 		if ctx.Err() != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				streamer.Write("\n\n⏰ Task timed out (10 min limit).")
+			}
 			result.Status = execution.RunCanceled
 			streamer.Finalize()
 			return result, nil
@@ -423,25 +445,69 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	_, _ = h.bot.Send(edit)
 }
 
-// toolLabel creates a short label like Bash(cd stock_d) or Read(main.go)
+// toolLabel creates a short label like Bash(cd stock_d) or Read(bot/handler.go)
 func toolLabel(name, inputJSON string) string {
 	var m map[string]any
 	if json.Unmarshal([]byte(inputJSON), &m) != nil {
 		return name
 	}
+
+	// Path keys get tail-truncated (show meaningful end); others get head-truncated.
+	pathKeys := map[string]bool{"path": true, "file_path": true}
+
 	for _, key := range []string{"command", "path", "file_path", "url", "query", "pattern", "script", "expression", "name", "ref", "text", "glob", "regex"} {
 		if v, ok := m[key]; ok {
 			s := fmt.Sprintf("%v", v)
-			if s != "" {
-				r := []rune(s)
-				if len(r) > 15 {
-					s = string(r[:15])
-				}
-				return name + "(" + s + ")"
+			if s == "" {
+				continue
 			}
+			if pathKeys[key] {
+				s = shortenPath(s, 25)
+			} else {
+				r := []rune(s)
+				if len(r) > 20 {
+					s = string(r[:20])
+				}
+			}
+			return name + "(" + s + ")"
 		}
 	}
 	return name
+}
+
+// shortenPath keeps the last path components that fit within maxRunes,
+// so "/Users/ngocp/Documents/projects/meClaw/goterm-control/internal/bot/handler.go"
+// becomes "../bot/handler.go" instead of the useless "/Users/ngocp/Do".
+func shortenPath(s string, maxRunes int) string {
+	if len([]rune(s)) <= maxRunes {
+		return s
+	}
+	parts := strings.Split(s, "/")
+	// Build from the tail, accumulating components.
+	var tail string
+	for i := len(parts) - 1; i >= 0; i-- {
+		candidate := parts[i]
+		if tail != "" {
+			candidate = parts[i] + "/" + tail
+		}
+		if len([]rune(candidate))+3 > maxRunes { // +3 for "../"
+			break
+		}
+		tail = candidate
+	}
+	if tail == "" {
+		// Filename alone exceeds budget — truncate the filename.
+		r := []rune(parts[len(parts)-1])
+		if len(r) > maxRunes-3 {
+			tail = string(r[:maxRunes-3])
+		} else {
+			tail = string(r)
+		}
+	}
+	if tail == s {
+		return s
+	}
+	return "../" + tail
 }
 
 // sendText converts markdown to Telegram HTML and sends the message.
