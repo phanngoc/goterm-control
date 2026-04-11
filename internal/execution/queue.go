@@ -15,10 +15,12 @@ type Engine struct {
 	mu    sync.Mutex
 	lanes map[int64]*lane
 	hooks Hooks
+	sem   chan struct{} // global concurrency limiter; nil = unlimited
 }
 
 type lane struct {
-	ch chan request
+	ch  chan request
+	sem chan struct{} // shared reference to Engine.sem
 }
 
 type request struct {
@@ -28,10 +30,16 @@ type request struct {
 }
 
 // NewEngine creates a new execution engine with the given hooks.
-func NewEngine(hooks Hooks) *Engine {
+// maxConcurrent caps parallel executions across all lanes (0 = unlimited).
+func NewEngine(hooks Hooks, maxConcurrent int) *Engine {
+	var sem chan struct{}
+	if maxConcurrent > 0 {
+		sem = make(chan struct{}, maxConcurrent)
+	}
 	return &Engine{
 		lanes: make(map[int64]*lane),
 		hooks: hooks,
+		sem:   sem,
 	}
 }
 
@@ -90,7 +98,8 @@ func (e *Engine) getOrCreateLane(chatID int64) *lane {
 	}
 
 	l := &lane{
-		ch: make(chan request, 32),
+		ch:  make(chan request, 32),
+		sem: e.sem,
 	}
 	e.lanes[chatID] = l
 
@@ -110,6 +119,19 @@ func (l *lane) executeOne(req request, hooks Hooks) (result *RunResult) {
 		ID:        fmt.Sprintf("run_%d", time.Now().UnixNano()),
 		StartedAt: time.Now(),
 		Status:    RunSuccess,
+	}
+
+	// Acquire global concurrency slot (if configured).
+	if l.sem != nil {
+		select {
+		case l.sem <- struct{}{}:
+			defer func() { <-l.sem }()
+		case <-req.ctx.Done():
+			result.Status = RunCanceled
+			result.Error = req.ctx.Err()
+			result.EndedAt = time.Now()
+			return result
+		}
 	}
 
 	// Recover from panics so a single bad request doesn't kill the lane.

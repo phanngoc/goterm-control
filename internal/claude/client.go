@@ -85,16 +85,13 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	sessionID := sess.GetSessionID()
 	isNewSession := sessionID == ""
 
-	// For new sessions, inject memory into system prompt.
-	// For resumed sessions, prepend memory to user message (CLI limitation:
-	// --append-system-prompt only works on the first turn).
+	// Inject memory into system prompt for new sessions only.
+	// Resumed sessions already carry full conversation history in the CLI,
+	// so injecting memory again causes context pollution (e.g. old topics
+	// overriding the user's current intent).
 	systemPrompt := c.systemPrompt
-	if memoryContext != "" {
-		if isNewSession {
-			systemPrompt += memoryContext
-		} else {
-			userText = memoryContext + "\n\n---\n\n" + userText
-		}
+	if memoryContext != "" && isNewSession {
+		systemPrompt += memoryContext
 	}
 
 	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)

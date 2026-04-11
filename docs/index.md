@@ -15,6 +15,10 @@ layout: default
       <a href="{{ '/getting-started' | relative_url }}" class="btn btn-primary">Get Started</a>
       <a href="https://github.com/phanngoc/goterm-control" class="btn btn-outline" target="_blank">View on GitHub</a>
     </div>
+    <div style="margin-top: 2rem;">
+      <img src="{{ '/assets/telegram-demo.png' | relative_url }}" width="360" alt="Telegram bot demo" style="border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);" />
+      <p style="color: #888; font-size: 0.9rem; margin-top: 0.5rem;"><em>Real-time tool calls, web crawling, and structured output via Telegram</em></p>
+    </div>
     <div class="hero-code">
       <div class="hero-code-header">
         <span class="hero-code-dot"></span>

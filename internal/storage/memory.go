@@ -147,20 +147,25 @@ func scanMemoryRows(rows rowScanner) ([]memory.Entry, error) {
 }
 
 // tokenizeForFTS splits a query into FTS5-safe tokens.
+// Preserves Unicode (Vietnamese) and filters stopwords to prevent
+// low-relevance matches from polluting memory injection.
 func tokenizeForFTS(query string) []string {
 	words := strings.Fields(strings.ToLower(query))
 	var tokens []string
 	for _, w := range words {
-		// Strip non-alphanumeric for FTS safety
+		// Strip punctuation but keep Unicode letters and digits
 		clean := strings.Map(func(r rune) rune {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' ||
+				r >= 0x00C0 && r <= 0x024F || // Latin Extended (Vietnamese diacritics)
+				r >= 0x1E00 && r <= 0x1EFF { // Latin Extended Additional (ắ, ồ, ử, etc.)
 				return r
 			}
 			return -1
 		}, w)
-		if len(clean) >= 3 {
-			tokens = append(tokens, clean)
+		if len(clean) < 2 || memory.Stopwords[clean] {
+			continue
 		}
+		tokens = append(tokens, "\""+clean+"\"") // quote for FTS5 exact token match
 	}
 	return tokens
 }

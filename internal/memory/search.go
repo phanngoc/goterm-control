@@ -21,10 +21,14 @@ func searchEntries(entries []Entry, query string, limit int) []Entry {
 		score float64
 	}
 
+	// Minimum score threshold — prevents injecting weakly-matched memories
+	// that share only generic words with the query.
+	const minScore = 3.0
+
 	var results []scored
 	for _, e := range entries {
 		s := scoreMatch(queryTokens, e)
-		if s > 0 {
+		if s >= minScore {
 			results = append(results, scored{entry: e, score: s})
 		}
 	}
@@ -94,7 +98,15 @@ func tokenize(text string) []string {
 	return tokens
 }
 
-var stopwords = map[string]bool{
+// Stopwords merges English common words with the comprehensive Vietnamese
+// stopword list (from github.com/stopwords/vietnamese-stopwords, 670 unique words).
+// Exported for use by storage/memory.go FTS tokenizer.
+var Stopwords = mergeStopwords(englishStopwords, vietnameseStopwords)
+
+// keep internal alias for existing code
+var stopwords = Stopwords
+
+var englishStopwords = map[string]bool{
 	"the": true, "and": true, "for": true, "are": true, "but": true,
 	"not": true, "you": true, "all": true, "can": true, "had": true,
 	"her": true, "was": true, "one": true, "our": true, "out": true,
@@ -104,4 +116,14 @@ var stopwords = map[string]bool{
 	"each": true, "she": true, "which": true, "their": true, "there": true,
 	"about": true, "would": true, "these": true, "other": true, "into": true,
 	"more": true, "some": true, "than": true, "them": true, "very": true,
+}
+
+func mergeStopwords(maps ...map[string]bool) map[string]bool {
+	merged := make(map[string]bool)
+	for _, m := range maps {
+		for k := range m {
+			merged[k] = true
+		}
+	}
+	return merged
 }

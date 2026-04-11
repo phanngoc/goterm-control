@@ -9,7 +9,7 @@ import (
 )
 
 func TestQueueSequentialExecution(t *testing.T) {
-	engine := NewEngine(Hooks{})
+	engine := NewEngine(Hooks{}, 0)
 	defer engine.Close()
 
 	var order []int
@@ -47,7 +47,7 @@ func TestQueueSequentialExecution(t *testing.T) {
 }
 
 func TestQueueCancelation(t *testing.T) {
-	engine := NewEngine(Hooks{})
+	engine := NewEngine(Hooks{}, 0)
 	defer engine.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,7 +64,7 @@ func TestQueueCancelation(t *testing.T) {
 }
 
 func TestQueuePanicRecovery(t *testing.T) {
-	engine := NewEngine(Hooks{})
+	engine := NewEngine(Hooks{}, 0)
 	defer engine.Close()
 
 	// First request panics — Enqueue returns the error but the lane survives
@@ -93,7 +93,7 @@ func TestQueueHooks(t *testing.T) {
 	engine := NewEngine(Hooks{
 		BeforeRun: []Hook{func(ctx context.Context, r *RunResult) { beforeCalled = true }},
 		AfterRun:  []Hook{func(ctx context.Context, r *RunResult) { afterCalled = true }},
-	})
+	}, 0)
 	defer engine.Close()
 
 	_, err := engine.Enqueue(context.Background(), 1, func(ctx context.Context) (*RunResult, error) {

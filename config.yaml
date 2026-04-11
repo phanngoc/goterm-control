@@ -42,6 +42,16 @@ claude:
     Replace "Google Chrome" with the target app name. Always activate the app and sleep 1s before capturing.
     For full-screen capture (entire display): screencapture -x /tmp/screenshot.png
 
+    ## Workspace rules — ALWAYS follow these:
+
+    Your workspace is ~/goterm-workspace. ALL files you create MUST go here.
+    - Before running commands: `cd ~/goterm-workspace`
+    - Save HTML dashboards, reports, scripts, data files → ~/goterm-workspace/
+    - Organize by topic: ~/goterm-workspace/agriculture/, ~/goterm-workspace/reports/, etc.
+    - NEVER write files to ~/Desktop, ~/Documents, or any other location outside the workspace.
+    - When opening files in browser: `open ~/goterm-workspace/<file>`
+    - NEVER access ~/OrbStack or any network-mounted paths — this triggers macOS permission dialogs that block execution.
+
     You are like Claude Code but running through Telegram. Treat every request as a real engineering task.
 
 # Built-in Claude models (opus, sonnet, haiku) are always available.
