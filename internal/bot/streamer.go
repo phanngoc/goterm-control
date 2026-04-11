@@ -33,6 +33,10 @@ type Streamer struct {
 	// Coalescing: hold first send until meaningful content (openclaw minInitialChars)
 	initialSent bool
 
+	// Dedup and anti-regression guards (openclaw pattern)
+	lastSentHTML  string
+	lastAssistLen int
+
 	// Tool progress tracking — shown as compact status, not full output
 	toolNames []string
 	toolCount int
@@ -152,6 +156,23 @@ func (s *Streamer) sendFormatted(assistantText, toolLine string) {
 	if html == "" {
 		return
 	}
+
+	// Dedup: skip if identical to last sent (avoids pointless API calls)
+	// Anti-regression: skip if assistant text got shorter (openclaw pattern —
+	// prevents edits that make the message shrink during streaming)
+	assistLen := len([]rune(assistantText))
+	s.mu.Lock()
+	if html == s.lastSentHTML {
+		s.mu.Unlock()
+		return
+	}
+	if assistLen < s.lastAssistLen && s.lastAssistLen > 0 {
+		s.mu.Unlock()
+		return
+	}
+	s.lastSentHTML = html
+	s.lastAssistLen = assistLen
+	s.mu.Unlock()
 
 	if len(html) <= maxTelegramMsg {
 		s.editCurrent(html)
