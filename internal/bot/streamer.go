@@ -37,6 +37,10 @@ type Streamer struct {
 	lastSentHTML  string
 	lastAssistLen int
 
+	// In-flight tracking: prevent concurrent Telegram API calls (openclaw pattern)
+	inflight     bool
+	pendingFlush bool
+
 	// Tool progress tracking — shown as compact status, not full output
 	toolNames []string
 	toolCount int
@@ -117,6 +121,13 @@ func (s *Streamer) flush() {
 		s.mu.Unlock()
 		return
 	}
+	// In-flight guard: if a Telegram API call is active, defer this flush
+	if s.inflight {
+		s.pendingFlush = true
+		s.mu.Unlock()
+		return
+	}
+
 	assistantText := strings.TrimSpace(s.buf.String())
 	toolLine := s.toolStatusLine()
 
@@ -127,13 +138,22 @@ func (s *Streamer) flush() {
 	}
 
 	s.dirty = false
+	s.inflight = true
 	s.mu.Unlock()
 
 	s.sendFormatted(assistantText, toolLine)
 
 	s.mu.Lock()
+	s.inflight = false
 	s.initialSent = true
+	needsFlush := s.pendingFlush
+	s.pendingFlush = false
 	s.mu.Unlock()
+
+	// Drain: if another flush was requested while we were sending, do it now
+	if needsFlush {
+		s.flush()
+	}
 }
 
 // sendFormatted converts assistant markdown to Telegram HTML, appends the
