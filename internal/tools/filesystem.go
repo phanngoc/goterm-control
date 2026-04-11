@@ -197,9 +197,13 @@ func (t *FileSystemTool) listFlat(path string, showHidden bool) (string, error) 
 
 func (t *FileSystemTool) listRecursive(root string, showHidden bool) (string, error) {
 	var lines []string
+	wf := newWalkFilter(root)
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
+		}
+		if info.IsDir() && path != root && wf.shouldSkip(path, info) {
+			return filepath.SkipDir
 		}
 		rel, _ := filepath.Rel(root, path)
 		if rel == "." {
@@ -265,9 +269,13 @@ func (t *FileSystemTool) SearchFiles(ctx context.Context, raw json.RawMessage) (
 
 	// Search by filename
 	var matches []string
+	wf := newWalkFilter(searchPath)
 	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
+		}
+		if info.IsDir() && path != searchPath && wf.shouldSkip(path, info) {
+			return filepath.SkipDir
 		}
 		if strings.Contains(strings.ToLower(info.Name()), strings.ToLower(inp.Pattern)) {
 			rel, _ := filepath.Rel(searchPath, path)
