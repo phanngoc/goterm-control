@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	maxTelegramMsg = 4000 // Telegram limit is 4096, leave room for formatting
-	streamInterval = 800 * time.Millisecond
+	maxTelegramMsg   = 4000 // Telegram limit is 4096, leave room for formatting
+	streamInterval   = 800 * time.Millisecond
+	maxCoalesceChars = 1200 // force flush when buffer exceeds this (openclaw pattern)
+	minInitialChars  = 30   // hold first send until meaningful content
 )
 
 // Streamer manages real-time streaming of text to a Telegram message.
@@ -27,6 +29,9 @@ type Streamer struct {
 	mu    sync.Mutex
 	buf   strings.Builder
 	dirty bool
+
+	// Coalescing: hold first send until meaningful content (openclaw minInitialChars)
+	initialSent bool
 
 	// Tool progress tracking — shown as compact status, not full output
 	toolNames []string
@@ -73,9 +78,15 @@ func (s *Streamer) Write(chunk string) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.buf.WriteString(chunk)
 	s.dirty = true
+	bufLen := len([]rune(s.buf.String()))
+	s.mu.Unlock()
+
+	// Force flush at maxCoalesceChars to prevent excessive buffering
+	if bufLen >= maxCoalesceChars {
+		s.flush()
+	}
 }
 
 // NoteTool records a tool call as a compact progress indicator.
@@ -104,10 +115,21 @@ func (s *Streamer) flush() {
 	}
 	assistantText := strings.TrimSpace(s.buf.String())
 	toolLine := s.toolStatusLine()
+
+	// Hold first send until minInitialChars for meaningful push notification
+	if !s.initialSent && len([]rune(assistantText)) < minInitialChars && toolLine == "" {
+		s.mu.Unlock()
+		return
+	}
+
 	s.dirty = false
 	s.mu.Unlock()
 
 	s.sendFormatted(assistantText, toolLine)
+
+	s.mu.Lock()
+	s.initialSent = true
+	s.mu.Unlock()
 }
 
 // sendFormatted converts assistant markdown to Telegram HTML, appends the
