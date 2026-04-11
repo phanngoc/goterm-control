@@ -110,10 +110,10 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`NanoClaw — lean AI agent for remote host control
+	fmt.Println(`BomClaw — lean AI agent for remote host control
 
 Usage:
-  nanoclaw <command> [flags]
+  bomclaw <command> [flags]
 
 Commands:
   gateway            Start the gateway in foreground
@@ -225,13 +225,13 @@ func runGateway(args []string) {
 		log.Printf("warning: stale PID cleanup: %v", err)
 	}
 
-	log.Printf("nanoclaw gateway starting on %s", addr)
+	log.Printf("bomclaw gateway starting on %s", addr)
 	if err := srv.Start(ctx); err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
 
 	sessions.SaveNow()
-	log.Println("nanoclaw: shutdown complete")
+	log.Println("bomclaw: shutdown complete")
 }
 
 // --- send command ---
@@ -244,7 +244,7 @@ func runSend(args []string) {
 
 	message := strings.Join(fs.Args(), " ")
 	if message == "" {
-		fmt.Fprintln(os.Stderr, "Usage: nanoclaw send [--model <model>] <message>")
+		fmt.Fprintln(os.Stderr, "Usage: bomclaw send [--model <model>] <message>")
 		os.Exit(1)
 	}
 
@@ -369,7 +369,7 @@ func runChat(args []string) {
 
 	ctxEngine := agentctx.NewEngine(contextWindow)
 
-	fmt.Printf("NanoClaw Chat — model: %s\nType /quit to exit\n\n", modelID)
+	fmt.Printf("BomClaw Chat — model: %s\nType /quit to exit\n\n", modelID)
 
 	cli := channel.NewCLI()
 	cli.Start(context.Background(), func(ctx context.Context, msg channel.InboundMessage) *channel.OutboundMessage {
@@ -580,7 +580,7 @@ func runGatewayInstall(args []string) {
 		ConfigPath:  absConfig,
 		EnvFile:     absEnv,
 		Environment: buildInstallEnv(absConfig, absEnv),
-		Description: "NanoClaw Gateway",
+		Description: "BomClaw Gateway",
 		Force:       *force,
 	}
 
@@ -598,7 +598,7 @@ func runGatewayInstall(args []string) {
 	if err != nil {
 		fmt.Printf(" timeout\n")
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Check logs: journalctl --user -u %s\n", "nanoclaw-gateway")
+		fmt.Fprintf(os.Stderr, "Check logs: journalctl --user -u %s\n", "bomclaw-gateway")
 	} else {
 		fmt.Printf(" ok (%s, %d attempts)\n", result.Elapsed.Round(time.Millisecond), result.Attempts)
 	}
@@ -610,10 +610,10 @@ func runGatewayInstall(args []string) {
 
 	fmt.Println()
 	fmt.Println("Manage with:")
-	fmt.Println("  nanoclaw gateway status   — check health")
-	fmt.Println("  nanoclaw gateway restart   — restart service")
-	fmt.Println("  nanoclaw gateway stop      — stop service")
-	fmt.Println("  nanoclaw gateway uninstall — remove service")
+	fmt.Println("  bomclaw gateway status   — check health")
+	fmt.Println("  bomclaw gateway restart   — restart service")
+	fmt.Println("  bomclaw gateway stop      — stop service")
+	fmt.Println("  bomclaw gateway uninstall — remove service")
 }
 
 func runGatewayUninstall(_ []string) {
@@ -636,7 +636,7 @@ func runGatewayStart(_ []string) {
 
 	installed, _ := svc.IsInstalled()
 	if !installed {
-		fmt.Fprintln(os.Stderr, "Service not installed. Run: nanoclaw gateway install")
+		fmt.Fprintln(os.Stderr, "Service not installed. Run: bomclaw gateway install")
 		os.Exit(1)
 	}
 
@@ -671,7 +671,7 @@ func runGatewayRestart(args []string) {
 
 	installed, _ := svc.IsInstalled()
 	if !installed {
-		fmt.Fprintln(os.Stderr, "Service not installed. Run: nanoclaw gateway install")
+		fmt.Fprintln(os.Stderr, "Service not installed. Run: bomclaw gateway install")
 		os.Exit(1)
 	}
 

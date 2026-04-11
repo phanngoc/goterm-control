@@ -37,7 +37,7 @@ Migrated from file-based storage (JSON + JSONL) to SQLite hybrid model for impro
 - **`internal/bot/bot.go`** — wiring switched from JSON file stores to `storage.Open()` + SQLite adapters
 - **`internal/bot/handler.go`** — added `MessageStore` interface and message persistence in `runClaude()`
 - **`internal/gateway/methods.go`** — `Deps.Memory` changed from `*memory.Store` to `memory.MemoryBackend`
-- **`cmd/nanoclaw/main.go`** — gateway command uses SQLite-backed session and memory stores
+- **`cmd/bomclaw/main.go`** — gateway command uses SQLite-backed session and memory stores
 
 #### Storage Model Comparison
 

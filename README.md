@@ -1,8 +1,8 @@
-# NanoClaw
+# BomClaw
 
 Lean AI agent that gives Claude full control over your computer. One binary, one process, no microservices.
 
-NanoClaw turns any machine — Linux, macOS, or Windows (via WSL) — into an
+BomClaw turns any machine — Linux, macOS, or Windows (via WSL) — into an
 AI-controlled workstation you can command from Telegram or a local CLI.
 It runs an agentic loop: the model calls tools, sees results, and keeps going
 until the task is done. Think of it as a personal, self-hosted Claude Code
@@ -17,8 +17,10 @@ that you talk to from anywhere.
 
 <p align="center">
   <img src="docs/assets/telegram-demo.png" width="360" alt="Telegram bot demo — real-time tool calls, crawling, and structured output" />
+  &nbsp;&nbsp;
+  <img src="docs/assets/telegram-chat.png" width="360" alt="Telegram bot chat — interactive conversation with book recommendations" />
   <br/>
-  <em>Telegram bot in action: crawling real estate data, calling tools, and streaming structured results</em>
+  <em>Left: tool calls, web crawling, and structured output &nbsp;|&nbsp; Right: interactive chat with book recommendations</em>
 </p>
 
 ## Quick Start
@@ -36,13 +38,13 @@ cp .env.example .env
 # Edit .env: add TELEGRAM_TOKEN (optional, for Telegram access)
 
 # Build
-go build -o nanoclaw ./cmd/nanoclaw/
+go build -o bomclaw ./cmd/bomclaw/
 
 # Interactive chat (no Telegram needed)
-./nanoclaw chat
+./bomclaw chat
 
 # Or start the gateway (Telegram + Web Dashboard + WebSocket RPC)
-./nanoclaw gateway
+./bomclaw gateway
 ```
 
 ### Prerequisites
@@ -55,14 +57,14 @@ go build -o nanoclaw ./cmd/nanoclaw/
 
 ### Authentication
 
-NanoClaw supports two authentication modes, auto-detected at startup:
+BomClaw supports two authentication modes, auto-detected at startup:
 
 | Mode | Token prefix | How it works |
 |---|---|---|
 | **Claude CLI (recommended)** | `sk-ant-oat...` | Uses `claude` CLI subprocess with your Pro/Max subscription. No per-token billing. |
 | **Direct API** | `sk-ant-api03...` | Calls Anthropic Messages API directly. Pay-per-use. |
 
-Run `claude login` and NanoClaw picks up the OAuth token automatically.
+Run `claude login` and BomClaw picks up the OAuth token automatically.
 To use a direct API key instead, set `ANTHROPIC_API_KEY` in `.env`.
 
 ### Environment Variables
@@ -75,29 +77,29 @@ To use a direct API key instead, set `ANTHROPIC_API_KEY` in `.env`.
 ## Commands
 
 ```
-nanoclaw gateway     Start gateway (Telegram bot + WebSocket RPC server)
-nanoclaw chat        Interactive CLI chat (direct API, no gateway needed)
-nanoclaw send        Send a message via the gateway
-nanoclaw status      Show gateway status
-nanoclaw models      List available models
+bomclaw gateway     Start gateway (Telegram bot + WebSocket RPC server)
+bomclaw chat        Interactive CLI chat (direct API, no gateway needed)
+bomclaw send        Send a message via the gateway
+bomclaw status      Show gateway status
+bomclaw models      List available models
 ```
 
 ### Examples
 
 ```bash
 # Chat with Claude directly
-./nanoclaw chat
-./nanoclaw chat --model opus
+./bomclaw chat
+./bomclaw chat --model opus
 
 # Start the gateway on a custom port
-./nanoclaw gateway --port 9000 --bind 0.0.0.0
+./bomclaw gateway --port 9000 --bind 0.0.0.0
 
 # Send a message to the running gateway
-./nanoclaw send "list all running docker containers"
-./nanoclaw send --model haiku "what time is it"
+./bomclaw send "list all running docker containers"
+./bomclaw send --model haiku "what time is it"
 
 # Check gateway health
-./nanoclaw status
+./bomclaw status
 ```
 
 ### Telegram Commands
@@ -119,7 +121,7 @@ Once the gateway is running with a Telegram token:
 ```
 ┌───────────┐  ┌──────────────┐  ┌───────────────┐
 │  Telegram │  │ Web Dashboard│  │   CLI Chat    │
-│  Bot      │  │  (React SPA) │  │  (nanoclaw    │
+│  Bot      │  │  (React SPA) │  │  (bomclaw    │
 └─────┬─────┘  └──────┬───────┘  │   chat)       │
       │               │          └───────┬───────┘
       │          WebSocket               │
@@ -168,7 +170,7 @@ Once the gateway is running with a Telegram token:
 
 ### The Agent Loop (the core)
 
-The heart of NanoClaw is in `internal/agent/loop.go`. It runs:
+The heart of BomClaw is in `internal/agent/loop.go`. It runs:
 
 ```
 user message
@@ -321,7 +323,7 @@ go build ./...
 go test ./internal/... -v
 
 # Build the binary
-go build -o nanoclaw ./cmd/nanoclaw/
+go build -o bomclaw ./cmd/bomclaw/
 
 # Build the Telegram-only bot (legacy entry point)
 go build -o goterm ./cmd/goterm/
@@ -331,7 +333,7 @@ go build -o goterm ./cmd/goterm/
 
 ```
 cmd/
-  nanoclaw/main.go          CLI entry point (gateway, chat, send, status, models)
+  bomclaw/main.go          CLI entry point (gateway, chat, send, status, models)
   goterm/main.go            Legacy Telegram-only entry point
 
 dashboard/                  React web dashboard (Vite + TailwindCSS)
@@ -364,10 +366,10 @@ internal/
 
 ## Compared to openclaw
 
-NanoClaw is inspired by [openclaw](https://github.com/openclaw/openclaw) but
+BomClaw is inspired by [openclaw](https://github.com/openclaw/openclaw) but
 radically simplified:
 
-| | openclaw | NanoClaw |
+| | openclaw | BomClaw |
 |---|---|---|
 | Language | TypeScript | Go |
 | Binary | Node.js + many deps | Single static binary (13MB) |

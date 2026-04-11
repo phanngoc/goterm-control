@@ -31,17 +31,17 @@ func TestSystemdEscapeValue(t *testing.T) {
 }
 
 func TestBuildExecStart(t *testing.T) {
-	args := []string{"/usr/local/bin/nanoclaw", "gateway", "--port", "18789"}
+	args := []string{"/usr/local/bin/bomclaw", "gateway", "--port", "18789"}
 	got := buildExecStart(args)
-	want := "/usr/local/bin/nanoclaw gateway --port 18789"
+	want := "/usr/local/bin/bomclaw gateway --port 18789"
 	if got != want {
 		t.Errorf("buildExecStart = %q, want %q", got, want)
 	}
 
 	// With path containing spaces
-	args2 := []string{"/opt/my app/nanoclaw", "gateway"}
+	args2 := []string{"/opt/my app/bomclaw", "gateway"}
 	got2 := buildExecStart(args2)
-	if !strings.HasPrefix(got2, `"/opt/my app/nanoclaw"`) {
+	if !strings.HasPrefix(got2, `"/opt/my app/bomclaw"`) {
 		t.Errorf("buildExecStart with spaces = %q, expected quoted path", got2)
 	}
 }
@@ -70,12 +70,12 @@ func TestBuildEnvironmentLines(t *testing.T) {
 
 func TestBuildSystemdUnit(t *testing.T) {
 	args := InstallArgs{
-		BinaryPath:  "/usr/local/bin/nanoclaw",
+		BinaryPath:  "/usr/local/bin/bomclaw",
 		Port:        18789,
 		Bind:        "127.0.0.1",
 		ConfigPath:  "/home/user/config.yaml",
 		EnvFile:     "/home/user/.env",
-		Description: "NanoClaw Gateway",
+		Description: "BomClaw Gateway",
 		Environment: map[string]string{
 			"HOME": "/home/user",
 		},
@@ -85,10 +85,10 @@ func TestBuildSystemdUnit(t *testing.T) {
 
 	checks := []string{
 		"[Unit]",
-		"Description=NanoClaw Gateway",
+		"Description=BomClaw Gateway",
 		"After=network-online.target",
 		"[Service]",
-		"ExecStart=/usr/local/bin/nanoclaw gateway --config /home/user/config.yaml --env /home/user/.env --bind 127.0.0.1 --port 18789",
+		"ExecStart=/usr/local/bin/bomclaw gateway --config /home/user/config.yaml --env /home/user/.env --bind 127.0.0.1 --port 18789",
 		"Restart=always",
 		"RestartSec=5",
 		"SuccessExitStatus=0 143",

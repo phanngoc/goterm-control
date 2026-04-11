@@ -79,7 +79,7 @@ func buildEnvironmentLines(env map[string]string) string {
 func buildSystemdUnit(args InstallArgs) string {
 	description := args.Description
 	if description == "" {
-		description = "NanoClaw Gateway"
+		description = "BomClaw Gateway"
 	}
 
 	// Build ExecStart arguments

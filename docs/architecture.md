@@ -8,11 +8,11 @@ layout: default
 
 # Architecture
 
-<p class="lead">How NanoClaw is structured &mdash; channels, gateway, agent loop, and tools.</p>
+<p class="lead">How BomClaw is structured &mdash; channels, gateway, agent loop, and tools.</p>
 
 ## Overview
 
-NanoClaw follows a simple layered architecture:
+BomClaw follows a simple layered architecture:
 
 1. **Channels** receive user messages (Telegram, Web, CLI)
 2. **Gateway** routes messages, manages sessions, resolves models
@@ -49,7 +49,7 @@ NanoClaw follows a simple layered architecture:
 
 ## The Agent Loop
 
-The heart of NanoClaw lives in `internal/agent/loop.go`. This is what makes it an *agent*, not just a chatbot:
+The heart of BomClaw lives in `internal/agent/loop.go`. This is what makes it an *agent*, not just a chatbot:
 
 ```
 user message
@@ -94,7 +94,7 @@ The model can chain multiple tool calls in a single turn, read results, and keep
 
 ```
 cmd/
-  nanoclaw/main.go          CLI entry point (gateway, chat, send, status, models)
+  bomclaw/main.go          CLI entry point (gateway, chat, send, status, models)
 
 dashboard/                  React web dashboard (Vite + TailwindCSS)
 
@@ -141,7 +141,7 @@ internal/
 
 ### Context Budget
 
-NanoClaw uses ~80% of the model's context window for assembled messages. When the budget is exceeded:
+BomClaw uses ~80% of the model's context window for assembled messages. When the budget is exceeded:
 
 1. Old messages are trimmed from the beginning of the conversation
 2. If still over budget, messages are compacted (summarized)
@@ -166,7 +166,7 @@ All state lives under `~/.goterm/data/`:
 
 ## Compared to openclaw
 
-| | openclaw | NanoClaw |
+| | openclaw | BomClaw |
 |---|---|---|
 | Language | TypeScript | Go |
 | Binary | Node.js + many deps | Single static binary (13MB) |

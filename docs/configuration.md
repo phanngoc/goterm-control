@@ -8,7 +8,7 @@ layout: default
 
 # Configuration
 
-<p class="lead">NanoClaw is designed to work with minimal configuration. Most fields have sensible defaults.</p>
+<p class="lead">BomClaw is designed to work with minimal configuration. Most fields have sensible defaults.</p>
 
 ## Configuration File
 
@@ -140,13 +140,13 @@ Command-line flags for the `gateway` command:
 
 ```bash
 # Default: localhost only
-./nanoclaw gateway
+./bomclaw gateway
 
 # Expose to local network
-./nanoclaw gateway --bind 0.0.0.0 --port 9000
+./bomclaw gateway --bind 0.0.0.0 --port 9000
 ```
 
-> **Warning:** Binding to `0.0.0.0` exposes NanoClaw to your entire network. Only do this on trusted networks, and always configure `security.allowed_user_ids`.
+> **Warning:** Binding to `0.0.0.0` exposes BomClaw to your entire network. Only do this on trusted networks, and always configure `security.allowed_user_ids`.
 
 <div class="doc-nav">
   <a href="{{ '/dashboard' | relative_url }}">

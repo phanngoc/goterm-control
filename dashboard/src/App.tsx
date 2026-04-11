@@ -83,7 +83,7 @@ export default function App() {
       <header className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold tracking-tight cursor-pointer" onClick={() => { setTab('sessions'); setActiveSessionId(null) }}>
-            NanoClaw
+            BomClaw
           </h1>
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>

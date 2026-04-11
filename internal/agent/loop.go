@@ -13,7 +13,7 @@ const defaultMaxIterations = 50
 // RunAgent executes the core agent loop:
 // message → model call → tool execution → model call → ... until end_turn or limit.
 //
-// This is the heart of NanoClaw — equivalent to openclaw's runEmbeddedPiAgent.
+// This is the heart of BomClaw — equivalent to openclaw's runEmbeddedPiAgent.
 func RunAgent(ctx context.Context, params RunParams) (*RunResult, error) {
 	if params.MaxIterations <= 0 {
 		params.MaxIterations = defaultMaxIterations

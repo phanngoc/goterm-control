@@ -8,7 +8,7 @@ layout: default
 
 # Getting Started
 
-<p class="lead">Get NanoClaw running on your machine in under a minute.</p>
+<p class="lead">Get BomClaw running on your machine in under a minute.</p>
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ TELEGRAM_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 ### 4. Build
 
 ```bash
-go build -o nanoclaw ./cmd/nanoclaw/
+go build -o bomclaw ./cmd/bomclaw/
 ```
 
 ### 5. Run
@@ -61,13 +61,13 @@ go build -o nanoclaw ./cmd/nanoclaw/
 **Interactive CLI chat** (simplest way to start):
 
 ```bash
-./nanoclaw chat
+./bomclaw chat
 ```
 
 **Full gateway** (Telegram bot + Web Dashboard + WebSocket RPC):
 
 ```bash
-./nanoclaw gateway
+./bomclaw gateway
 ```
 
 That's it! You now have a personal AI agent with full computer control.
@@ -76,34 +76,34 @@ That's it! You now have a personal AI agent with full computer control.
 
 | Command | Description |
 |---|---|
-| `nanoclaw gateway` | Start gateway (Telegram bot + WebSocket RPC + Dashboard) |
-| `nanoclaw chat` | Interactive CLI chat (direct, no gateway needed) |
-| `nanoclaw send "<msg>"` | Send a message to the running gateway |
-| `nanoclaw status` | Show gateway health and session info |
-| `nanoclaw models` | List available models |
+| `bomclaw gateway` | Start gateway (Telegram bot + WebSocket RPC + Dashboard) |
+| `bomclaw chat` | Interactive CLI chat (direct, no gateway needed) |
+| `bomclaw send "<msg>"` | Send a message to the running gateway |
+| `bomclaw status` | Show gateway health and session info |
+| `bomclaw models` | List available models |
 
 ### Examples
 
 ```bash
 # Chat with a specific model
-./nanoclaw chat --model opus
+./bomclaw chat --model opus
 
 # Start gateway on a custom port
-./nanoclaw gateway --port 9000 --bind 0.0.0.0
+./bomclaw gateway --port 9000 --bind 0.0.0.0
 
 # Send a message to the running gateway
-./nanoclaw send "list all running docker containers"
+./bomclaw send "list all running docker containers"
 
 # Quick task with a fast model
-./nanoclaw send --model haiku "what time is it"
+./bomclaw send --model haiku "what time is it"
 
 # Check gateway health
-./nanoclaw status
+./bomclaw status
 ```
 
 ## Authentication Modes
 
-NanoClaw auto-detects your authentication method at startup:
+BomClaw auto-detects your authentication method at startup:
 
 | Mode | Token prefix | How it works |
 |---|---|---|
@@ -121,7 +121,7 @@ NanoClaw auto-detects your authentication method at startup:
 
 ## Supported Platforms
 
-NanoClaw runs anywhere Go compiles:
+BomClaw runs anywhere Go compiles:
 
 - **Linux** &mdash; Full support (x86_64, ARM64)
 - **macOS** &mdash; Full support (Intel, Apple Silicon) + AppleScript tools
@@ -129,7 +129,7 @@ NanoClaw runs anywhere Go compiles:
 
 ## Next Steps
 
-- [Architecture]({{ '/architecture' | relative_url }}) &mdash; Understand how NanoClaw works
+- [Architecture]({{ '/architecture' | relative_url }}) &mdash; Understand how BomClaw works
 - [Features & Tools]({{ '/features' | relative_url }}) &mdash; See all 25 tools
 - [Telegram Bot]({{ '/telegram-bot' | relative_url }}) &mdash; Set up your Telegram bot
 - [Web Dashboard]({{ '/dashboard' | relative_url }}) &mdash; Use the React web UI

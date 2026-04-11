@@ -8,17 +8,22 @@ layout: default
     <div class="hero-badge">Open Source &middot; MIT License</div>
     <h1>Your Computer,<br>Claude's Brain</h1>
     <p class="hero-sub">
-      NanoClaw is a lean, self-hosted AI agent that gives Claude full control over your computer.
+      BomClaw is a lean, self-hosted AI agent that gives Claude full control over your computer.
       One binary, one process, no microservices. Command it from Telegram, the web, or your terminal.
     </p>
     <div class="hero-actions">
       <a href="{{ '/getting-started' | relative_url }}" class="btn btn-primary">Get Started</a>
       <a href="https://github.com/phanngoc/goterm-control" class="btn btn-outline" target="_blank">View on GitHub</a>
     </div>
-    <div style="margin-top: 2rem;">
-      <img src="{{ '/assets/telegram-demo.png' | relative_url }}" width="360" alt="Telegram bot demo" style="border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);" />
-      <p style="color: #888; font-size: 0.9rem; margin-top: 0.5rem;"><em>Real-time tool calls, web crawling, and structured output via Telegram</em></p>
+    <div style="margin-top: 2rem; display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+      <div style="text-align: center;">
+        <img src="{{ '/assets/telegram-demo.png' | relative_url }}" width="320" alt="Telegram bot demo — tool calls and structured output" style="border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);" />
+      </div>
+      <div style="text-align: center;">
+        <img src="{{ '/assets/telegram-chat.png' | relative_url }}" width="320" alt="Telegram bot chat — interactive conversation" style="border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);" />
+      </div>
     </div>
+    <p style="color: #888; font-size: 0.9rem; margin-top: 0.5rem; text-align: center;"><em>Left: tool calls, web crawling &amp; structured output &nbsp;|&nbsp; Right: interactive chat with book recommendations</em></p>
     <div class="hero-code">
       <div class="hero-code-header">
         <span class="hero-code-dot"></span>
@@ -26,13 +31,13 @@ layout: default
         <span class="hero-code-dot"></span>
       </div>
 <pre><span class="comment"># Build</span>
-<span class="cmd">go build</span> <span class="flag">-o nanoclaw</span> ./cmd/nanoclaw/
+<span class="cmd">go build</span> <span class="flag">-o bomclaw</span> ./cmd/bomclaw/
 
 <span class="comment"># Start chatting</span>
-<span class="cmd">./nanoclaw</span> chat
+<span class="cmd">./bomclaw</span> chat
 
 <span class="comment"># Or launch the full gateway</span>
-<span class="cmd">./nanoclaw</span> gateway <span class="flag">--port 18789</span></pre>
+<span class="cmd">./bomclaw</span> gateway <span class="flag">--port 18789</span></pre>
     </div>
   </div>
 </section>
@@ -63,7 +68,7 @@ layout: default
 <section class="section">
   <div class="container">
     <div class="section-header">
-      <h2>Why NanoClaw?</h2>
+      <h2>Why BomClaw?</h2>
       <p>Everything you need to turn your machine into an AI-powered workstation.</p>
     </div>
     <div class="features-grid">

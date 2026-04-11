@@ -8,7 +8,7 @@ import (
 
 // InstallArgs holds everything needed to write and activate a service.
 type InstallArgs struct {
-	BinaryPath  string            // absolute path to the nanoclaw binary
+	BinaryPath  string            // absolute path to the bomclaw binary
 	Port        int               // gateway port
 	Bind        string            // bind address
 	ConfigPath  string            // absolute path to config.yaml

@@ -1,5 +1,5 @@
 #!/bin/bash
-# NanoClaw — start all services
+# BomClaw — start all services
 # Usage: ./start.sh [telegram|gateway|chat|all]
 
 set -e
@@ -15,19 +15,19 @@ GATEWAY_PORT="${GATEWAY_PORT:-19000}"
 
 build() {
   echo "⚙️  Building..."
-  go build -o nanoclaw ./cmd/nanoclaw/
-  echo "✅ Built: nanoclaw"
+  go build -o bomclaw ./cmd/bomclaw/
+  echo "✅ Built: bomclaw"
 }
 
 start_gateway() {
   echo "🌐 Starting gateway (+ Telegram bot) on :${GATEWAY_PORT}..."
-  ./nanoclaw gateway --config config.yaml --env .env --port "$GATEWAY_PORT" &
+  ./bomclaw gateway --config config.yaml --env .env --port "$GATEWAY_PORT" &
   echo "   PID: $!"
 }
 
 stop_all() {
   echo "🛑 Stopping..."
-  pkill -f "./nanoclaw gateway" 2>/dev/null || true
+  pkill -f "./bomclaw gateway" 2>/dev/null || true
   sleep 1
 }
 
@@ -43,15 +43,15 @@ case "$MODE" in
     echo "   📊 Health:   http://127.0.0.1:${GATEWAY_PORT}/health"
     echo ""
     echo "Commands:"
-    echo "   ./nanoclaw send \"hello\"              # send via gateway"
-    echo "   ./nanoclaw status                     # check status"
-    echo "   ./nanoclaw models                     # list models"
+    echo "   ./bomclaw send \"hello\"              # send via gateway"
+    echo "   ./bomclaw status                     # check status"
+    echo "   ./bomclaw models                     # list models"
     echo "   ./start.sh stop                       # stop all"
     ;;
   chat)
     build
     echo "💬 Starting interactive chat..."
-    ./nanoclaw chat --config config.yaml --env .env
+    ./bomclaw chat --config config.yaml --env .env
     ;;
   stop)
     stop_all

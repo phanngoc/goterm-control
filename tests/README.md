@@ -32,11 +32,11 @@ EOF
 
 ```bash
 # All integration tests
-NANOCLAW_LIVE_TEST=1 go test ./tests/ -v -timeout 120s
+BOMCLAW_LIVE_TEST=1 go test ./tests/ -v -timeout 120s
 
 # Specific test
-NANOCLAW_LIVE_TEST=1 go test ./tests/ -v -run TestLive_AnthropicStreaming
-NANOCLAW_LIVE_TEST=1 go test ./tests/ -v -run TestLive_FullRoundtrip
+BOMCLAW_LIVE_TEST=1 go test ./tests/ -v -run TestLive_AnthropicStreaming
+BOMCLAW_LIVE_TEST=1 go test ./tests/ -v -run TestLive_FullRoundtrip
 
 # Skip live tests (default — just runs unit tests)
 go test ./internal/...
