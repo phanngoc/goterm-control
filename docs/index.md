@@ -46,7 +46,7 @@ layout: default
   <div class="container">
     <div class="stats">
       <div class="stat">
-        <div class="stat-value">~45</div>
+        <div class="stat-value">~65</div>
         <div class="stat-label">Source Files</div>
       </div>
       <div class="stat">
@@ -54,7 +54,7 @@ layout: default
         <div class="stat-label">Built-in Tools</div>
       </div>
       <div class="stat">
-        <div class="stat-value">14</div>
+        <div class="stat-value">18</div>
         <div class="stat-label">Packages</div>
       </div>
       <div class="stat">
