@@ -28,8 +28,8 @@ func TestXmlEscape(t *testing.T) {
 
 func TestBuildPlist(t *testing.T) {
 	p := plistArgs{
-		Label:       "com.nanoclaw.gateway",
-		ProgramArgs: []string{"/usr/local/bin/nanoclaw", "gateway", "--port", "18789"},
+		Label:       "com.bomclaw.gateway",
+		ProgramArgs: []string{"/usr/local/bin/bomclaw", "gateway", "--port", "18789"},
 		Environment: map[string]string{
 			"HOME":              "/Users/test",
 			"ANTHROPIC_API_KEY": "sk-test",
@@ -43,12 +43,12 @@ func TestBuildPlist(t *testing.T) {
 	checks := []string{
 		`<?xml version="1.0"`,
 		`<key>Label</key>`,
-		`<string>com.nanoclaw.gateway</string>`,
+		`<string>com.bomclaw.gateway</string>`,
 		`<key>RunAtLoad</key>`,
 		`<true/>`,
 		`<key>KeepAlive</key>`,
 		`<key>ProgramArguments</key>`,
-		`<string>/usr/local/bin/nanoclaw</string>`,
+		`<string>/usr/local/bin/bomclaw</string>`,
 		`<string>gateway</string>`,
 		`<key>EnvironmentVariables</key>`,
 		`<key>HOME</key>`,

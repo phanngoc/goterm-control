@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const systemdServiceName = "nanoclaw-gateway"
+const systemdServiceName = "bomclaw-gateway"
 
 type systemdService struct {
 	unitName string

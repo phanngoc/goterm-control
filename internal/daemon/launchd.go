@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const launchdLabel = "com.nanoclaw.gateway"
+const launchdLabel = "com.bomclaw.gateway"
 
 type launchdService struct {
 	label     string

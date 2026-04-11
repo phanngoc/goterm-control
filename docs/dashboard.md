@@ -12,7 +12,7 @@ layout: default
 
 ## Overview
 
-The NanoClaw dashboard is a React SPA built with Vite and TailwindCSS. It connects to the gateway via WebSocket and provides:
+The BomClaw dashboard is a React SPA built with Vite and TailwindCSS. It connects to the gateway via WebSocket and provides:
 
 - **Session management** &mdash; Create, view, reset, and delete sessions
 - **Real-time chat** &mdash; Stream responses as Claude generates them
@@ -24,7 +24,7 @@ The NanoClaw dashboard is a React SPA built with Vite and TailwindCSS. It connec
 The dashboard is automatically served by the gateway. After starting:
 
 ```bash
-./nanoclaw gateway --port 18789
+./bomclaw gateway --port 18789
 ```
 
 Open your browser to:

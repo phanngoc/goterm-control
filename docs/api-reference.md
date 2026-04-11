@@ -8,7 +8,7 @@ layout: default
 
 # API Reference
 
-<p class="lead">WebSocket JSON-RPC API for programmatic control of the NanoClaw gateway.</p>
+<p class="lead">WebSocket JSON-RPC API for programmatic control of the BomClaw gateway.</p>
 
 ## Connection
 

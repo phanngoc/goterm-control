@@ -18,7 +18,7 @@ layout: default
 2. Send `/newbot` and follow the prompts
 3. Copy the bot token (looks like `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`)
 
-### 2. Configure NanoClaw
+### 2. Configure BomClaw
 
 Add your token to `.env`:
 
@@ -29,7 +29,7 @@ TELEGRAM_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 ### 3. Start the gateway
 
 ```bash
-./nanoclaw gateway
+./bomclaw gateway
 ```
 
 The bot starts polling Telegram automatically when a token is configured.
@@ -81,7 +81,7 @@ The `/status` command shows:
 
 ### Streaming Updates
 
-NanoClaw streams Claude's responses to Telegram by editing the message as new tokens arrive. This means you see the response being generated in real-time, just like in the Claude web interface.
+BomClaw streams Claude's responses to Telegram by editing the message as new tokens arrive. This means you see the response being generated in real-time, just like in the Claude web interface.
 
 ### Message Queue
 
@@ -103,7 +103,7 @@ security:
 
 To find your Telegram user ID, send a message to [@userinfobot](https://t.me/userinfobot).
 
-> **Important:** NanoClaw gives Claude full access to your machine (shell, files, browser). Always restrict bot access to trusted users.
+> **Important:** BomClaw gives Claude full access to your machine (shell, files, browser). Always restrict bot access to trusted users.
 
 ### What the Bot Can Do
 

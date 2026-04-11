@@ -14,7 +14,7 @@ layout: default
 
 ### Agentic Loop
 
-NanoClaw runs an agentic loop that allows Claude to:
+BomClaw runs an agentic loop that allows Claude to:
 
 - Call tools, read results, and decide what to do next
 - Chain up to **50 iterations** per request
@@ -32,7 +32,7 @@ Interact with your agent through three channels, all backed by the same gateway:
 
 ### Cross-Session Memory
 
-NanoClaw maintains a keyword-based memory system:
+BomClaw maintains a keyword-based memory system:
 
 - Memories persist across sessions in JSONL format
 - Up to 5 relevant memories injected per prompt
@@ -68,7 +68,7 @@ All channels support real-time streaming:
 
 ## Browser Automation Tools
 
-NanoClaw includes a native Chrome DevTools Protocol (CDP) client &mdash; no Puppeteer or Playwright dependency needed.
+BomClaw includes a native Chrome DevTools Protocol (CDP) client &mdash; no Puppeteer or Playwright dependency needed.
 
 | Tool | Description |
 |---|---|
@@ -86,7 +86,7 @@ NanoClaw includes a native Chrome DevTools Protocol (CDP) client &mdash; no Pupp
 
 ### How Browser Automation Works
 
-1. When a browser tool is called, NanoClaw auto-launches Chrome with remote debugging enabled
+1. When a browser tool is called, BomClaw auto-launches Chrome with remote debugging enabled
 2. It connects via the Chrome DevTools Protocol (raw WebSocket, no libraries)
 3. The `browser_snapshot` tool returns a structured DOM with numbered element references
 4. Other tools use these references to interact with specific elements
@@ -106,7 +106,7 @@ Claude's tool calls:
 
 ## Token Budget Management
 
-NanoClaw intelligently manages the model's context window:
+BomClaw intelligently manages the model's context window:
 
 - Uses ~80% of available context for assembled messages
 - Automatically trims old messages when budget is exceeded

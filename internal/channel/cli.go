@@ -17,7 +17,7 @@ func (c *CLIChannel) ID() string { return "cli" }
 
 func (c *CLIChannel) Start(ctx context.Context, handler InboundHandler) error {
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("NanoClaw CLI — type a message or /quit to exit")
+	fmt.Println("BomClaw CLI — type a message or /quit to exit")
 	fmt.Print("> ")
 
 	for scanner.Scan() {

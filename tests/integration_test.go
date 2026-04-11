@@ -1,8 +1,8 @@
-// Integration tests for NanoClaw — end-to-end flows with real APIs.
+// Integration tests for BomClaw — end-to-end flows with real APIs.
 //
 // These tests require live credentials. Run with:
 //
-//	NANOCLAW_LIVE_TEST=1 go test ./tests/ -v -timeout 120s
+//	BOMCLAW_LIVE_TEST=1 go test ./tests/ -v -timeout 120s
 //
 // Required env vars:
 //   - ANTHROPIC_API_KEY: Anthropic API key
@@ -37,8 +37,8 @@ import (
 
 func skipUnlessLive(t *testing.T) {
 	t.Helper()
-	if os.Getenv("NANOCLAW_LIVE_TEST") == "" {
-		t.Skip("skipping live test (set NANOCLAW_LIVE_TEST=1 to run)")
+	if os.Getenv("BOMCLAW_LIVE_TEST") == "" {
+		t.Skip("skipping live test (set BOMCLAW_LIVE_TEST=1 to run)")
 	}
 }
 
@@ -491,7 +491,7 @@ func TestLive_TelegramSendMessage(t *testing.T) {
 	t.Logf("telegram: logged in as @%s", bot.Self.UserName)
 
 	// Send a test message (plain text — avoids Markdown parse issues with special chars)
-	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("NanoClaw integration test\n\nTimestamp: %s\nBot: %s", time.Now().Format(time.RFC3339), bot.Self.UserName))
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("BomClaw integration test\n\nTimestamp: %s\nBot: %s", time.Now().Format(time.RFC3339), bot.Self.UserName))
 	sent, err := bot.Send(msg)
 	if err != nil {
 		t.Fatalf("send message failed: %v", err)
@@ -500,7 +500,7 @@ func TestLive_TelegramSendMessage(t *testing.T) {
 
 	// Edit the message (simulates streaming behavior)
 	edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID,
-		fmt.Sprintf("NanoClaw integration test\n\nTimestamp: %s\nBot: %s\n\nEdit verified!", time.Now().Format(time.RFC3339), bot.Self.UserName))
+		fmt.Sprintf("BomClaw integration test\n\nTimestamp: %s\nBot: %s\n\nEdit verified!", time.Now().Format(time.RFC3339), bot.Self.UserName))
 	_, err = bot.Send(edit)
 	if err != nil {
 		t.Fatalf("edit message failed: %v", err)
@@ -546,7 +546,7 @@ func TestLive_FullRoundtrip(t *testing.T) {
 	t.Log("step 3: tool executor ready")
 
 	// --- Step 4: Send "thinking" placeholder ---
-	placeholder := tgbotapi.NewMessage(chatID, "⏳ <i>NanoClaw integration test — thinking...</i>")
+	placeholder := tgbotapi.NewMessage(chatID, "⏳ <i>BomClaw integration test — thinking...</i>")
 	placeholder.ParseMode = "HTML"
 	placeholderMsg, err := bot.Send(placeholder)
 	if err != nil {
@@ -563,7 +563,7 @@ func TestLive_FullRoundtrip(t *testing.T) {
 		Provider:     provider,
 		ToolExecutor: &toolAdapter{executor: executor},
 		ModelID:      "claude-haiku-4-5",
-		SystemPrompt: "You are NanoClaw, a test bot. Be extremely brief (1-2 sentences). You can use tools if needed.",
+		SystemPrompt: "You are BomClaw, a test bot. Be extremely brief (1-2 sentences). You can use tools if needed.",
 		UserMessage:  "What OS am I running? Use get_system_info tool to check, then tell me.",
 		Tools:        buildToolDefs(),
 		MaxTokens:    512,
@@ -608,7 +608,7 @@ func TestLive_FullRoundtrip(t *testing.T) {
 	}
 
 	edit := tgbotapi.NewEditMessageText(chatID, placeholderMsg.MessageID,
-		fmt.Sprintf("🧪 <b>NanoClaw Full Roundtrip Test</b>\n\n%s\n\n<i>iterations: %d | tokens: %d in / %d out</i>",
+		fmt.Sprintf("🧪 <b>BomClaw Full Roundtrip Test</b>\n\n%s\n\n<i>iterations: %d | tokens: %d in / %d out</i>",
 			finalText, result.Iterations, result.Usage.InputTokens, result.Usage.OutputTokens))
 	edit.ParseMode = "HTML"
 	_, err = bot.Send(edit)
@@ -1002,7 +1002,7 @@ func TestLive_MemoryTelegramRoundtrip(t *testing.T) {
 	// Pre-seed memory with non-sensitive project info
 	store.Append(memory.Entry{
 		SessionID: "old_session",
-		Keywords:  []string{"project", "mascot", "nanoclaw", "dragon"},
+		Keywords:  []string{"project", "mascot", "bomclaw", "dragon"},
 		Facts:     []string{"Project mascot name: Drakey the Dragon"},
 		Summary:   "Discussed the project mascot named Drakey the Dragon.",
 	})
@@ -1065,7 +1065,7 @@ func TestLive_ToolRunShell(t *testing.T) {
 		ToolExecutor: &toolAdapter{executor: executor},
 		ModelID:      "claude-haiku-4-5",
 		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
-		UserMessage:  "Use run_shell to run `echo HELLO_NANOCLAW` and tell me the output.",
+		UserMessage:  "Use run_shell to run `echo HELLO_BOMCLAW` and tell me the output.",
 		Tools:        allToolDefs(),
 		MaxTokens:    512,
 		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
@@ -1080,8 +1080,8 @@ func TestLive_ToolRunShell(t *testing.T) {
 	if len(usedTools) == 0 || usedTools[0] != "run_shell" {
 		t.Errorf("expected run_shell to be called, got: %v", usedTools)
 	}
-	if !strings.Contains(result.Text, "HELLO_NANOCLAW") {
-		t.Errorf("expected response to contain HELLO_NANOCLAW, got: %q", result.Text)
+	if !strings.Contains(result.Text, "HELLO_BOMCLAW") {
+		t.Errorf("expected response to contain HELLO_BOMCLAW, got: %q", result.Text)
 	}
 }
 
@@ -1098,7 +1098,7 @@ func TestLive_ToolWriteReadFile(t *testing.T) {
 	executor := tools.New(tools.ExecutorConfig{ShellTimeout: 10, MaxOutputBytes: 4096})
 
 	tmpDir := t.TempDir()
-	filePath := tmpDir + "/nanoclaw_test.txt"
+	filePath := tmpDir + "/bomclaw_test.txt"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1111,7 +1111,7 @@ func TestLive_ToolWriteReadFile(t *testing.T) {
 		ToolExecutor: &toolAdapter{executor: executor},
 		ModelID:      "claude-haiku-4-5",
 		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
-		UserMessage:  fmt.Sprintf("Write the text 'NanoClaw was here 2026' to the file %s using write_file, then read it back using read_file and tell me what it says.", filePath),
+		UserMessage:  fmt.Sprintf("Write the text 'BomClaw was here 2026' to the file %s using write_file, then read it back using read_file and tell me what it says.", filePath),
 		Tools:        allToolDefs(),
 		MaxTokens:    512,
 		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
@@ -1145,7 +1145,7 @@ func TestLive_ToolWriteReadFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("file not created: %v", err)
 	}
-	if !strings.Contains(string(data), "NanoClaw was here 2026") {
+	if !strings.Contains(string(data), "BomClaw was here 2026") {
 		t.Errorf("file content doesn't match: %q", string(data))
 	}
 	t.Logf("file on disk: %q", string(data))
@@ -1210,7 +1210,7 @@ func TestLive_ToolClipboard(t *testing.T) {
 		ToolExecutor: &toolAdapter{executor: executor},
 		ModelID:      "claude-haiku-4-5",
 		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
-		UserMessage:  "Use set_clipboard to put 'NANOCLAW_CLIP_TEST' on the clipboard, then use get_clipboard to read it back and confirm.",
+		UserMessage:  "Use set_clipboard to put 'BOMCLAW_CLIP_TEST' on the clipboard, then use get_clipboard to read it back and confirm.",
 		Tools:        allToolDefs(),
 		MaxTokens:    512,
 		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
@@ -1237,7 +1237,7 @@ func TestLive_ToolClipboard(t *testing.T) {
 	if !hasGet {
 		t.Error("expected get_clipboard to be called")
 	}
-	if !strings.Contains(result.Text, "NANOCLAW_CLIP_TEST") {
+	if !strings.Contains(result.Text, "BOMCLAW_CLIP_TEST") {
 		t.Errorf("expected response to confirm clipboard content, got: %q", result.Text)
 	}
 }
@@ -1364,7 +1364,7 @@ func TestLive_ToolAppleScript(t *testing.T) {
 		ToolExecutor: &toolAdapter{executor: executor},
 		ModelID:      "claude-haiku-4-5",
 		SystemPrompt: "You are helpful. Use tools when asked. Be brief.",
-		UserMessage:  `Use run_applescript with the script: return "NanoClaw AppleScript Works"`,
+		UserMessage:  `Use run_applescript with the script: return "BomClaw AppleScript Works"`,
 		Tools:        allToolDefs(),
 		MaxTokens:    512,
 		OnToolCall:   func(name, _ string) { usedTools = append(usedTools, name) },
@@ -1379,7 +1379,7 @@ func TestLive_ToolAppleScript(t *testing.T) {
 	if len(usedTools) == 0 || usedTools[0] != "run_applescript" {
 		t.Errorf("expected run_applescript, got: %v", usedTools)
 	}
-	if !strings.Contains(result.Text, "NanoClaw AppleScript Works") {
+	if !strings.Contains(result.Text, "BomClaw AppleScript Works") {
 		t.Logf("warning: expected AppleScript output in response")
 	}
 }
