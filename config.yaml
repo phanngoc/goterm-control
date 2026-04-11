@@ -1,6 +1,11 @@
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
   timeout: 60      # polling timeout in seconds
+  indicator:
+    enabled: false          # set to true to show loading emoji in bot name
+    bot_name: ""            # leave empty to auto-detect via getMyName API
+    frames: ["⏳", "⌛"]   # emoji frames for animation
+    interval: 3             # seconds between frame rotations
 
 claude:
   api_key: ""      # set via ANTHROPIC_API_KEY env var

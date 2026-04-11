@@ -21,12 +21,13 @@ import (
 
 // Bot is the top-level Telegram bot.
 type Bot struct {
-	api      *tgbotapi.BotAPI
-	handler  *Handler
-	cfg      *config.Config
-	sessions *session.Manager
-	engine   *execution.Engine
-	queue    *msgqueue.Queue
+	api       *tgbotapi.BotAPI
+	handler   *Handler
+	cfg       *config.Config
+	sessions  *session.Manager
+	engine    *execution.Engine
+	queue     *msgqueue.Queue
+	indicator *NameIndicator
 }
 
 // New creates and initialises the bot.
@@ -50,6 +51,9 @@ func New(cfg *config.Config) (*Bot, error) {
 	if _, err := api.Request(commands); err != nil {
 		log.Printf("bot: warning: failed to set commands menu: %v", err)
 	}
+
+	// Name indicator (loading animation via setMyName)
+	indicator := NewNameIndicator(api, cfg.Telegram.Indicator)
 
 	executor := tools.New(tools.ExecutorConfig{
 		ShellTimeout:   cfg.Tools.ShellTimeout,
@@ -104,6 +108,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		messages:         messageStore,
 		resolver:         resolver,
 		approvalRequests: make(map[string]chan bool),
+		indicator:        indicator,
 	}
 
 	// Message queue: debounce 800ms + collect while busy
@@ -111,12 +116,13 @@ func New(cfg *config.Config) (*Bot, error) {
 	handler.queue = queue
 
 	return &Bot{
-		api:      api,
-		handler:  handler,
-		cfg:      cfg,
-		sessions: sessions,
-		engine:   engine,
-		queue:    queue,
+		api:       api,
+		handler:   handler,
+		cfg:       cfg,
+		sessions:  sessions,
+		engine:    engine,
+		queue:     queue,
+		indicator: indicator,
 	}, nil
 }
 
@@ -136,6 +142,7 @@ func (b *Bot) Run() {
 
 // Shutdown performs graceful cleanup.
 func (b *Bot) Shutdown() {
+	b.indicator.Close()
 	b.queue.Close()
 	b.engine.Close()
 	b.sessions.SaveNow()

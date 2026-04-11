@@ -40,6 +40,7 @@ type Handler struct {
 	messages   MessageStore // optional SQLite message store
 	resolver   *models.Resolver
 	queue      *msgqueue.Queue // debounce + collect layer
+	indicator  *NameIndicator
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -252,6 +253,9 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 // executeMessage is the Queue callback that runs the full Claude pipeline.
 // Called by the queue after debouncing and collection.
 func (h *Handler) executeMessage(chatID int64, text string) {
+	h.indicator.Start()
+	defer h.indicator.Done()
+
 	sess := h.sessions.Get(chatID)
 
 	// Cancel any in-flight request for this session
