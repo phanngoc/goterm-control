@@ -11,7 +11,7 @@ that you talk to from anywhere.
 **Philosophy:**
 - Full computer control — shell, files, processes, clipboard, browser, screenshots
 - Cross-platform — runs wherever Go compiles (Linux, macOS, Windows/WSL)
-- Small enough to understand (~45 source files, 14 packages)
+- Small enough to understand (~65 source files, 18 packages)
 - Built for one user — bespoke, not a framework
 - Customization = code changes, not config sprawl
 
