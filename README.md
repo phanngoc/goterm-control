@@ -23,7 +23,149 @@ that you talk to from anywhere.
   <em>Left: tool calls, web crawling, and structured output &nbsp;|&nbsp; Right: interactive chat with book recommendations</em>
 </p>
 
-## Quick Start
+## Install on Mac (no coding required)
+
+Download the pre-built binary and start chatting in 5 minutes.
+
+### Step 1 — Download
+
+Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Enter), then paste:
+
+```bash
+# Apple Silicon (M1/M2/M3/M4)
+curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-darwin-arm64.tar.gz | tar xz
+```
+
+<details>
+<summary>Intel Mac? Use this instead</summary>
+
+```bash
+curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-darwin-amd64.tar.gz | tar xz
+```
+</details>
+
+### Step 2 — Allow it to run
+
+macOS blocks apps from unknown developers. Remove the block:
+
+```bash
+xattr -d com.apple.quarantine bomclaw-darwin-arm64
+chmod +x bomclaw-darwin-arm64
+```
+
+### Step 3 — Install Claude CLI
+
+BomClaw needs Claude CLI to talk to Claude. Install it:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+> Don't have `npm`? Install Node.js first: https://nodejs.org (download the LTS version, double-click the installer)
+
+### Step 4 — Set up credentials
+
+Create a file called `.env` in the same folder:
+
+```bash
+echo 'TELEGRAM_TOKEN=your-telegram-bot-token-here' > .env
+```
+
+> Get a Telegram bot token: open Telegram, search **@BotFather**, send `/newbot`, follow the instructions.
+> This step is optional — you can skip Telegram and just use the CLI chat.
+
+### Step 5 — Run
+
+```bash
+# Chat directly in Terminal
+./bomclaw-darwin-arm64 chat --env .env
+
+# Or start the full gateway (Telegram bot + web dashboard)
+./bomclaw-darwin-arm64 gateway --env .env
+```
+
+That's it! Send a message to your Telegram bot or type in Terminal.
+
+### Optional — Move to a permanent location
+
+```bash
+sudo mv bomclaw-darwin-arm64 /usr/local/bin/bomclaw
+# Now you can run from anywhere:
+bomclaw chat
+bomclaw gateway --env ~/.bomclaw/.env
+```
+
+---
+
+## Install on Ubuntu/Linux (no coding required)
+
+Download the pre-built binary and start chatting in 5 minutes.
+
+### Step 1 — Download
+
+Open a terminal (`Ctrl + Alt + T`), then paste:
+
+```bash
+curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-linux-amd64.tar.gz | tar xz
+chmod +x bomclaw-linux-amd64
+```
+
+### Step 2 — Install Claude CLI
+
+```bash
+# Install Node.js (if you don't have it)
+sudo apt update && sudo apt install -y nodejs npm
+
+# Install Claude CLI
+sudo npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+### Step 3 — Set up credentials
+
+```bash
+echo 'TELEGRAM_TOKEN=your-telegram-bot-token-here' > .env
+```
+
+> Get a Telegram bot token: open Telegram, search **@BotFather**, send `/newbot`, follow the instructions.
+> This step is optional — you can skip Telegram and just use the CLI chat.
+
+### Step 4 — Run
+
+```bash
+# Chat directly in terminal
+./bomclaw-linux-amd64 chat --env .env
+
+# Or start the full gateway (Telegram bot + web dashboard)
+./bomclaw-linux-amd64 gateway --env .env
+```
+
+### Optional — Move to a permanent location
+
+```bash
+sudo mv bomclaw-linux-amd64 /usr/local/bin/bomclaw
+# Now you can run from anywhere:
+bomclaw chat
+bomclaw gateway --env ~/.bomclaw/.env
+```
+
+### Optional — Run as a background service
+
+```bash
+# Install as a systemd service (auto-starts on boot)
+bomclaw gateway install --config /path/to/config.yaml --env /path/to/.env
+
+# Manage the service
+bomclaw gateway status
+bomclaw gateway restart
+bomclaw gateway stop
+bomclaw gateway uninstall
+```
+
+---
+
+## Quick Start (Developers)
 
 ```bash
 # Clone
