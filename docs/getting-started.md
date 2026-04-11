@@ -34,13 +34,6 @@ claude login
 
 This uses your Claude Pro/Max subscription via OAuth2 &mdash; no API key needed.
 
-Alternatively, for direct API access, set your key in `.env`:
-
-```bash
-cp .env.example .env
-# Edit .env and add: ANTHROPIC_API_KEY=sk-ant-api03-...
-```
-
 ### 3. Set up Telegram (optional)
 
 If you want Telegram access, add your bot token to `.env`:
