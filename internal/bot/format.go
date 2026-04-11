@@ -404,8 +404,27 @@ func chunkHTML(text string, maxLen int) []string {
 			cutAt = maxLen
 		}
 
-		chunks = append(chunks, strings.TrimRight(remaining[:cutAt], " \n"))
+		chunk := strings.TrimRight(remaining[:cutAt], " \n")
 		remaining = strings.TrimLeft(remaining[cutAt:], " \n")
+
+		// Markdown-safe chunking: if we cut inside a <pre><code> block,
+		// close it at the end of this chunk and reopen in the next chunk
+		// so each chunk is valid HTML. (openclaw pattern)
+		preOpens := strings.Count(chunk, "<pre>") + strings.Count(chunk, "<pre><code>")
+		preCloses := strings.Count(chunk, "</pre>") + strings.Count(chunk, "</code></pre>")
+		if preOpens > preCloses {
+			codeOpens := strings.Count(chunk, "<code>")
+			codeCloses := strings.Count(chunk, "</code>")
+			if codeOpens > codeCloses {
+				chunk += "</code></pre>"
+				remaining = "<pre><code>" + remaining
+			} else {
+				chunk += "</pre>"
+				remaining = "<pre>" + remaining
+			}
+		}
+
+		chunks = append(chunks, chunk)
 	}
 
 	return chunks
