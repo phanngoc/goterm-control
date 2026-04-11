@@ -35,15 +35,23 @@ type StreamCallbacks struct {
 // Client wraps the claude CLI subprocess.
 type Client struct {
 	systemPrompt string
+	workspace    string // working directory for the CLI subprocess
 }
 
 // New creates a Claude client backed by the claude CLI subprocess.
 // The CLI manages its own auth and tools; we only need the system prompt.
+// workspace sets the CLI's working directory so created files land in the
+// right place instead of the bot's own source directory.
 func New(systemPrompt string, executor *tools.Executor) *Client {
 	log.Printf("claude: subprocess client initialized")
 	return &Client{
 		systemPrompt: systemPrompt,
 	}
+}
+
+// SetWorkspace sets the working directory for spawned CLI processes.
+func (c *Client) SetWorkspace(dir string) {
+	c.workspace = dir
 }
 
 // --- stream-json event types from claude CLI ---
@@ -97,6 +105,13 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)
 
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
+
+	// Set working directory so Claude creates files in the workspace,
+	// not in the bot's own source directory.
+	if c.workspace != "" {
+		_ = os.MkdirAll(c.workspace, 0755)
+		cmd.Dir = c.workspace
+	}
 
 	// Pass user message via stdin (safe for arbitrary text).
 	cmd.Stdin = strings.NewReader(userText)

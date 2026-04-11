@@ -84,6 +84,7 @@ func New(cfg *config.Config) (*Bot, error) {
 	}
 
 	claudeClient := claude.New(cfg.Claude.SystemPrompt, executor)
+	claudeClient.SetWorkspace(cfg.Claude.Workspace)
 
 	// Message store (SQLite — conversation history)
 	messageStore := storage.NewMessageStore(db)
