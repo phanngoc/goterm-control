@@ -71,8 +71,9 @@ type SessionConfig struct {
 }
 
 type MemoryConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	MaxEntries int  `yaml:"max_entries"`
+	Enabled        bool   `yaml:"enabled"`
+	MaxEntries     int    `yaml:"max_entries"`
+	ExtractionMode string `yaml:"extraction_mode"` // "llm", "rule", or "hybrid" (default: "rule")
 }
 
 func Load(path string) (*Config, error) {
@@ -129,6 +130,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Memory.MaxEntries == 0 {
 		cfg.Memory.MaxEntries = 5
+	}
+	if cfg.Memory.ExtractionMode == "" {
+		cfg.Memory.ExtractionMode = "rule"
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {

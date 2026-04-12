@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"time"
@@ -10,6 +11,63 @@ var (
 	pathRe = regexp.MustCompile(`(?:^|[\s"'` + "`" + `])([/~][\w./-]+)`)
 	urlRe  = regexp.MustCompile(`https?://\S+`)
 )
+
+// Extract dispatches to the appropriate extraction method based on mode.
+// Modes: "llm" (LLM with rule-based fallback), "rule" (rule-based only), "hybrid" (merge both).
+// If client is nil, falls back to rule-based regardless of mode.
+func Extract(ctx context.Context, client Completer, mode string, sessionID string, chatID int64, userMsg, assistantResp string) Entry {
+	switch mode {
+	case "llm":
+		if client == nil {
+			return ExtractFacts(sessionID, chatID, userMsg, assistantResp)
+		}
+		entry, err := ExtractFactsLLM(ctx, client, sessionID, chatID, userMsg, assistantResp)
+		if err != nil {
+			logLLMFallback(err)
+			return ExtractFacts(sessionID, chatID, userMsg, assistantResp)
+		}
+		return entry
+
+	case "hybrid":
+		ruleBased := ExtractFacts(sessionID, chatID, userMsg, assistantResp)
+		if client == nil {
+			return ruleBased
+		}
+		llmBased, err := ExtractFactsLLM(ctx, client, sessionID, chatID, userMsg, assistantResp)
+		if err != nil {
+			logLLMFallback(err)
+			return ruleBased
+		}
+		return mergeEntries(llmBased, ruleBased)
+
+	default: // "rule"
+		return ExtractFacts(sessionID, chatID, userMsg, assistantResp)
+	}
+}
+
+// mergeEntries combines LLM and rule-based entries, preferring LLM for keywords/summary/intent
+// and merging facts from both sources.
+func mergeEntries(llm, rule Entry) Entry {
+	merged := llm // Start with LLM result (better keywords, summary, intent)
+
+	// Merge facts: add rule-based facts not already captured by LLM
+	seen := make(map[string]bool, len(llm.Facts))
+	for _, f := range llm.Facts {
+		seen[f] = true
+	}
+	for _, f := range rule.Facts {
+		if !seen[f] {
+			merged.Facts = append(merged.Facts, f)
+		}
+	}
+
+	// Cap merged facts
+	if len(merged.Facts) > 20 {
+		merged.Facts = merged.Facts[:20]
+	}
+
+	return merged
+}
 
 // ExtractFacts performs rule-based extraction of key facts from a conversation turn.
 // No LLM call — fast and deterministic.
