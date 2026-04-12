@@ -41,6 +41,7 @@ type Handler struct {
 	resolver   *models.Resolver
 	queue      *msgqueue.Queue // debounce + collect layer
 	indicator  *NameIndicator
+	typing     *TypingIndicator
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -254,7 +255,9 @@ func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 // Called by the queue after debouncing and collection.
 func (h *Handler) executeMessage(chatID int64, text string) {
 	h.indicator.Start()
+	h.typing.Start(chatID)
 	defer h.indicator.Done()
+	defer h.typing.Stop(chatID)
 
 	sess := h.sessions.Get(chatID)
 
