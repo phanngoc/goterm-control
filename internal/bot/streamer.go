@@ -54,6 +54,8 @@ type Streamer struct {
 	toolCheckpoints []string
 	toolCount       int
 
+	startTime time.Time // for heartbeat elapsed display
+
 	ticker *time.Ticker
 	done   chan struct{}
 	wg     sync.WaitGroup
@@ -66,6 +68,7 @@ func NewStreamer(bot *tgbotapi.BotAPI, chatID int64, messageID int) *Streamer {
 		bot:       bot,
 		chatID:    chatID,
 		messageID: messageID,
+		startTime: time.Now(),
 		ticker:    time.NewTicker(streamInterval),
 		done:      make(chan struct{}),
 	}
@@ -153,7 +156,10 @@ func (s *Streamer) Flush() {
 
 func (s *Streamer) flush() {
 	s.mu.Lock()
-	if !s.dirty && !s.reasonDirty {
+	// Allow heartbeat ticks even when no new content has arrived,
+	// so the user sees "Thinking... (Xs)" updating during Claude's thinking phase.
+	needsHeartbeat := !s.initialSent && time.Since(s.startTime) >= 2*time.Second
+	if !s.dirty && !s.reasonDirty && !needsHeartbeat {
 		s.mu.Unlock()
 		return
 	}
@@ -168,9 +174,32 @@ func (s *Streamer) flush() {
 	reasonText := strings.TrimSpace(s.reasonBuf.String())
 	toolLine := s.toolStatusLine()
 
-	// Hold first send until minInitialChars for meaningful push notification
+	// Hold first send until minInitialChars for meaningful push notification.
+	// While waiting, send a heartbeat with elapsed time so the user sees
+	// the bot is alive (instead of a frozen "⏳ Thinking..." placeholder).
 	totalChars := len([]rune(assistantText)) + len([]rune(reasonText))
 	if !s.initialSent && totalChars < minInitialChars && toolLine == "" {
+		elapsed := time.Since(s.startTime).Truncate(time.Second)
+		if elapsed >= 2*time.Second {
+			heartbeatHTML := fmt.Sprintf("⏳ <i>Thinking... (%s)</i>", elapsed)
+			if heartbeatHTML == s.lastSentHTML {
+				s.mu.Unlock()
+				return
+			}
+			s.lastSentHTML = heartbeatHTML
+			s.inflight = true
+			s.mu.Unlock()
+			s.editCurrent(heartbeatHTML)
+			s.mu.Lock()
+			s.inflight = false
+			needsFlush := s.pendingFlush
+			s.pendingFlush = false
+			s.mu.Unlock()
+			if needsFlush {
+				s.flush()
+			}
+			return
+		}
 		s.mu.Unlock()
 		return
 	}

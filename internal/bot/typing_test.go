@@ -138,8 +138,58 @@ func TestTypingIndicator_ConcurrentStartStop(t *testing.T) {
 
 func TestNewTypingIndicator_Disabled(t *testing.T) {
 	cfg := config.IndicatorConfig{UseChatAction: false}
-	ti := NewTypingIndicator(nil, cfg)
+	ti := NewTypingIndicator(nil, cfg, 20*time.Minute)
 	if ti != nil {
 		t.Fatal("expected nil when UseChatAction is false")
+	}
+}
+
+func TestNewTypingIndicator_TTLMatchesExecTimeout(t *testing.T) {
+	cfg := config.IndicatorConfig{
+		UseChatAction:      true,
+		ChatActionInterval: 4,
+		ChatActionTTL:      120, // 2 minutes — shorter than exec timeout
+	}
+	execTTL := 20 * time.Minute
+	ti := NewTypingIndicator(nil, cfg, execTTL)
+	if ti == nil {
+		t.Fatal("expected non-nil")
+	}
+	// TTL should be at least execution timeout, not the shorter config value
+	if ti.ttl < execTTL {
+		t.Errorf("ttl=%s, want >= %s", ti.ttl, execTTL)
+	}
+}
+
+func TestNewTypingIndicator_ConfigTTLOverridesWhenLarger(t *testing.T) {
+	cfg := config.IndicatorConfig{
+		UseChatAction:      true,
+		ChatActionInterval: 4,
+		ChatActionTTL:      3600, // 1 hour — longer than exec timeout
+	}
+	execTTL := 20 * time.Minute
+	ti := NewTypingIndicator(nil, cfg, execTTL)
+	if ti == nil {
+		t.Fatal("expected non-nil")
+	}
+	// Config TTL (1h) is larger than exec timeout (20m), so it wins
+	if ti.ttl != time.Hour {
+		t.Errorf("ttl=%s, want %s", ti.ttl, time.Hour)
+	}
+}
+
+func TestNewTypingIndicator_ZeroConfigTTL(t *testing.T) {
+	cfg := config.IndicatorConfig{
+		UseChatAction:      true,
+		ChatActionInterval: 4,
+		ChatActionTTL:      0, // not set — should use exec timeout
+	}
+	execTTL := 20 * time.Minute
+	ti := NewTypingIndicator(nil, cfg, execTTL)
+	if ti == nil {
+		t.Fatal("expected non-nil")
+	}
+	if ti.ttl != execTTL {
+		t.Errorf("ttl=%s, want %s", ti.ttl, execTTL)
 	}
 }
