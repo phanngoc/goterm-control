@@ -43,6 +43,7 @@ type Handler struct {
 	queue      *msgqueue.Queue // debounce + collect layer
 	indicator  *NameIndicator
 	typing     *TypingIndicator
+	completer  memory.Completer // for LLM-based memory extraction
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -414,7 +415,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 
 	// Extract and store memory
 	if h.memory != nil && respText != "" {
-		entry := memory.ExtractFacts(sess.ID, chatID, userText, respText)
+		entry := memory.Extract(ctx, h.completer, h.cfg.Memory.ExtractionMode, sess.ID, chatID, userText, respText)
 		if len(entry.Keywords) > 0 || len(entry.Facts) > 0 {
 			if err := h.memory.Append(entry); err != nil {
 				log.Printf("handler: memory append error: %v", err)

@@ -18,15 +18,17 @@ import (
 
 // Deps holds the dependencies needed by RPC method handlers.
 type Deps struct {
-	Sessions      *session.Manager
-	Resolver      *models.Resolver
-	Provider      agent.ModelProvider
-	ToolExecutor  agent.ToolExecutor
-	Tools         []agent.ToolDef
-	System        string // system prompt
-	DataDir       string // data directory for transcripts
-	Memory        memory.MemoryBackend
-	Uptime        func() time.Duration
+	Sessions       *session.Manager
+	Resolver       *models.Resolver
+	Provider       agent.ModelProvider
+	ToolExecutor   agent.ToolExecutor
+	Tools          []agent.ToolDef
+	System         string // system prompt
+	DataDir        string // data directory for transcripts
+	Memory         memory.MemoryBackend
+	Completer      memory.Completer // for LLM-based memory extraction
+	ExtractionMode string           // "llm", "rule", or "hybrid"
+	Uptime         func() time.Duration
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -313,7 +315,7 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 
 		// Extract and save memory for future sessions
 		if deps.Memory != nil && responseText != "" {
-			entry := memory.ExtractFacts(sessionID, 0, p.Message, responseText)
+			entry := memory.Extract(ctx, deps.Completer, deps.ExtractionMode, sessionID, 0, p.Message, responseText)
 			if len(entry.Keywords) > 0 || len(entry.Facts) > 0 {
 				deps.Memory.Append(entry)
 			}

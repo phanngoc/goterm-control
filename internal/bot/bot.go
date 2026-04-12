@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	anthropicAPI "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -101,6 +102,13 @@ func New(cfg *config.Config) (*Bot, error) {
 	// Execution engine
 	engine := execution.NewEngine(execution.Hooks{}, 3)
 
+	// Create Anthropic API client for LLM-based memory extraction (uses Haiku).
+	// This is separate from the main claude CLI client used for conversation.
+	var completer memory.Completer
+	if cfg.Memory.Enabled && cfg.Memory.ExtractionMode != "rule" && cfg.Claude.APIKey != "" {
+		completer = anthropicAPI.New(cfg.Claude.APIKey)
+	}
+
 	// Build handler first (queue needs handler.executeMessage as callback)
 	handler := &Handler{
 		bot:              api,
@@ -115,6 +123,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
 		typing:           typing,
+		completer:        completer,
 	}
 
 	// Message queue: debounce 800ms + collect while busy

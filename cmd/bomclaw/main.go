@@ -28,6 +28,7 @@ import (
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/daemon"
 	"github.com/ngocp/goterm-control/internal/gateway"
+	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
@@ -193,14 +194,23 @@ func runGateway(args []string) {
 	// Memory store (SQLite with FTS5)
 	memoryStore := storage.NewMemoryStore(db)
 
+	// Create Completer for LLM-based memory extraction (uses Haiku model).
+	// Only created when extraction mode requires LLM and API key is available.
+	var memCompleter memory.Completer
+	if cfg.Memory.Enabled && cfg.Memory.ExtractionMode != "rule" && cfg.Claude.APIKey != "" {
+		memCompleter = anthropicClient.New(cfg.Claude.APIKey)
+	}
+
 	deps := gateway.Deps{
-		Sessions: sessions,
-		Resolver: resolver,
-		Provider: provider,
-		System:   cfg.Claude.SystemPrompt,
-		DataDir:  cfg.Session.DataDir,
-		Memory:   memoryStore,
-		Uptime:   func() time.Duration { return time.Since(startTime) },
+		Sessions:       sessions,
+		Resolver:       resolver,
+		Provider:       provider,
+		System:         cfg.Claude.SystemPrompt,
+		DataDir:        cfg.Session.DataDir,
+		Memory:         memoryStore,
+		Completer:      memCompleter,
+		ExtractionMode: cfg.Memory.ExtractionMode,
+		Uptime:         func() time.Duration { return time.Since(startTime) },
 	}
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), "dashboard/dist")
