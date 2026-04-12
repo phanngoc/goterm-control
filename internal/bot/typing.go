@@ -22,12 +22,20 @@ type TypingIndicator struct {
 }
 
 // NewTypingIndicator creates a typing indicator. Returns nil if disabled.
-func NewTypingIndicator(bot *tgbotapi.BotAPI, cfg config.IndicatorConfig) *TypingIndicator {
+// execTTL is the execution timeout — typing TTL will be at least this long
+// so the indicator stays visible for the full duration of a request.
+func NewTypingIndicator(bot *tgbotapi.BotAPI, cfg config.IndicatorConfig, execTTL time.Duration) *TypingIndicator {
 	if !cfg.UseChatAction {
 		return nil
 	}
 	interval := time.Duration(cfg.ChatActionInterval) * time.Second
-	ttl := time.Duration(cfg.ChatActionTTL) * time.Second
+	ttl := execTTL
+	if cfg.ChatActionTTL > 0 {
+		cfgTTL := time.Duration(cfg.ChatActionTTL) * time.Second
+		if cfgTTL > ttl {
+			ttl = cfgTTL
+		}
+	}
 	log.Printf("typing: enabled, interval=%s, ttl=%s", interval, ttl)
 	return &TypingIndicator{
 		bot:      bot,

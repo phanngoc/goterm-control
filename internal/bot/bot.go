@@ -57,7 +57,8 @@ func New(cfg *config.Config) (*Bot, error) {
 	indicator := NewNameIndicator(api, cfg.Telegram.Indicator)
 
 	// Typing indicator (sendChatAction keepalive loop per chat)
-	typing := NewTypingIndicator(api, cfg.Telegram.Indicator)
+	execTTL := time.Duration(cfg.Claude.ExecutionTimeout) * time.Minute
+	typing := NewTypingIndicator(api, cfg.Telegram.Indicator, execTTL)
 
 	executor := tools.New(tools.ExecutorConfig{
 		ShellTimeout:   cfg.Tools.ShellTimeout,
