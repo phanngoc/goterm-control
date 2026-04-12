@@ -21,11 +21,12 @@ type Config struct {
 
 // ClaudeConfig is kept for backward compatibility — the claude CLI subprocess config.
 type ClaudeConfig struct {
-	APIKey       string `yaml:"api_key"`
-	Model        string `yaml:"model"`         // default model ID
-	MaxTokens    int    `yaml:"max_tokens"`
-	SystemPrompt string `yaml:"system_prompt"`
-	Workspace    string `yaml:"workspace"`     // working directory for claude CLI subprocess
+	APIKey           string `yaml:"api_key"`
+	Model            string `yaml:"model"`             // default model ID
+	MaxTokens        int    `yaml:"max_tokens"`
+	SystemPrompt     string `yaml:"system_prompt"`
+	Workspace        string `yaml:"workspace"`         // working directory for claude CLI subprocess
+	ExecutionTimeout int    `yaml:"execution_timeout"` // minutes; max time for a single request (default: 20)
 }
 
 // ModelsConfig defines available models and custom providers.
@@ -109,6 +110,9 @@ func Load(path string) (*Config, error) {
 	} else if strings.HasPrefix(cfg.Claude.Workspace, "~/") {
 		home, _ := os.UserHomeDir()
 		cfg.Claude.Workspace = home + cfg.Claude.Workspace[1:]
+	}
+	if cfg.Claude.ExecutionTimeout == 0 {
+		cfg.Claude.ExecutionTimeout = 20
 	}
 	if cfg.Tools.ShellTimeout == 0 {
 		cfg.Tools.ShellTimeout = 60

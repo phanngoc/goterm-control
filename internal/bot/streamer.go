@@ -47,9 +47,12 @@ type Streamer struct {
 	inflight     bool
 	pendingFlush bool
 
-	// Tool progress tracking — shown as compact status, not full output
-	toolNames []string
-	toolCount int
+	// Tool progress tracking — rolling window display.
+	// toolHead: first 8 tools (always shown).
+	// toolCheckpoints: 2 representative tools sampled every 10 after the head.
+	toolHead        []string
+	toolCheckpoints []string
+	toolCount       int
 
 	ticker *time.Ticker
 	done   chan struct{}
@@ -118,15 +121,27 @@ func (s *Streamer) Write(chunk string) {
 	}
 }
 
-// NoteTool records a tool call as a compact progress indicator.
-// Instead of showing full tool input/output, we show: 🔧 Tool1 → Tool2 → ...
+// NoteTool records a tool call as a compact rolling-window progress indicator.
+// The first 8 tools are always shown (head). After that, every batch of 10
+// tools contributes 2 "checkpoint" tools so the user sees recent activity:
+//   🔧 T1 → … → T8 → (+10 more) → Ta → Tb → (+10 more) → Tc → Td → (+5 more)
 func (s *Streamer) NoteTool(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.toolCount++
-	// Keep unique names, max 8 shown
-	if len(s.toolNames) < 8 {
-		s.toolNames = append(s.toolNames, name)
+
+	const headSize = 8
+	const batchSize = 10
+
+	if s.toolCount <= headSize {
+		s.toolHead = append(s.toolHead, name)
+	} else {
+		// Position within the current batch of 10 (1-indexed)
+		posInBatch := (s.toolCount - headSize - 1) % batchSize
+		// Sample the 2nd-to-last and last tool of each batch (positions 8 and 9)
+		if posInBatch == batchSize-2 || posInBatch == batchSize-1 {
+			s.toolCheckpoints = append(s.toolCheckpoints, name)
+		}
 	}
 	s.dirty = true
 }
@@ -263,16 +278,64 @@ func (s *Streamer) sendFormatted(assistantText, toolLine string) {
 	s.mu.Unlock()
 }
 
-// toolStatusLine returns a compact tool progress indicator.
+// toolStatusLine returns a compact rolling-window tool progress indicator.
+// Format: Head(8) → (+10 more) → Checkpoint1 → Checkpoint2 → (+10 more) → ...
 func (s *Streamer) toolStatusLine() string {
 	if s.toolCount == 0 {
 		return ""
 	}
-	names := strings.Join(s.toolNames, " → ")
-	if s.toolCount > len(s.toolNames) {
-		names += fmt.Sprintf(" (+%d more)", s.toolCount-len(s.toolNames))
+	return fmt.Sprintf("🔧 <i>%s</i>", buildToolStatusLine(s.toolHead, s.toolCheckpoints, s.toolCount))
+}
+
+// buildToolStatusLine is the pure logic for tool status formatting, separated
+// for testability. head has up to 8 items; checkpoints has 2 items per
+// completed batch of 10 tools after the head.
+func buildToolStatusLine(head, checkpoints []string, total int) string {
+	const headSize = 8
+	const batchSize = 10
+
+	var b strings.Builder
+	b.WriteString(strings.Join(head, " → "))
+
+	if total <= headSize {
+		return b.String()
 	}
-	return fmt.Sprintf("🔧 <i>%s</i>", names)
+
+	tail := total - headSize // tools after the head
+	cpIdx := 0              // index into checkpoints
+
+	for batch := 0; ; batch++ {
+		batchStart := batch * batchSize
+		if batchStart >= tail {
+			break
+		}
+		batchEnd := batchStart + batchSize
+		if batchEnd > tail {
+			batchEnd = tail
+		}
+		batchLen := batchEnd - batchStart
+
+		// How many non-checkpoint tools to skip in this batch?
+		cpInBatch := 0
+		if batchLen >= batchSize-1 {
+			cpInBatch = 1
+		}
+		if batchLen >= batchSize {
+			cpInBatch = 2
+		}
+		skipped := batchLen - cpInBatch
+
+		if skipped > 0 {
+			b.WriteString(fmt.Sprintf(" → (+%d more)", skipped))
+		}
+		for i := 0; i < cpInBatch && cpIdx < len(checkpoints); i++ {
+			b.WriteString(" → ")
+			b.WriteString(checkpoints[cpIdx])
+			cpIdx++
+		}
+	}
+
+	return b.String()
 }
 
 func (s *Streamer) editCurrent(text string) {

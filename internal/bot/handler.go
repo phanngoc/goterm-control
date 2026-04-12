@@ -265,9 +265,10 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	// Cancel any in-flight request for this session
 	sess.Cancel()
 
-	// 10-minute timeout prevents a stuck Claude CLI from blocking the queue
+	// Configurable timeout prevents a stuck Claude CLI from blocking the queue
 	// lane forever. The user can still /cancel manually for shorter waits.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	execTimeout := time.Duration(h.cfg.Claude.ExecutionTimeout) * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	sess.SetCancel(cancel)
 
 	resolvedModel := h.resolver.Resolve(chatID)
