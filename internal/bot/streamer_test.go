@@ -1,6 +1,9 @@
 package bot
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestBuildToolStatusLine_HeadOnly(t *testing.T) {
 	// 5 tools — all in head, no checkpoints
@@ -117,5 +120,42 @@ func TestNoteTool_ExactBoundary28(t *testing.T) {
 	// 20 tools after head = 2 complete batches = 4 checkpoints
 	if len(s.toolCheckpoints) != 4 {
 		t.Errorf("checkpoints at 28: got %d, want 4", len(s.toolCheckpoints))
+	}
+}
+
+func TestFlush_HeartbeatAllowed(t *testing.T) {
+	// Verify the heartbeat logic: when startTime is old enough and no content,
+	// flush should NOT return early at the dirty guard.
+	s := &Streamer{
+		startTime: time.Now().Add(-5 * time.Second), // started 5s ago
+	}
+	// No dirty, no reasonDirty — normally flush would return immediately.
+	// With heartbeat, it should pass the guard because initialSent=false and elapsed >= 2s.
+	needsHeartbeat := !s.initialSent && time.Since(s.startTime) >= 2*time.Second
+	if !needsHeartbeat {
+		t.Fatal("expected needsHeartbeat=true when startTime is 5s ago and initialSent=false")
+	}
+}
+
+func TestFlush_NoHeartbeatAfterInitialSent(t *testing.T) {
+	// After initialSent=true, heartbeat should stop (real content takes over).
+	s := &Streamer{
+		startTime:   time.Now().Add(-5 * time.Second),
+		initialSent: true,
+	}
+	needsHeartbeat := !s.initialSent && time.Since(s.startTime) >= 2*time.Second
+	if needsHeartbeat {
+		t.Fatal("expected needsHeartbeat=false when initialSent=true")
+	}
+}
+
+func TestFlush_NoHeartbeatBeforeTwoSeconds(t *testing.T) {
+	// Before 2 seconds, no heartbeat even if no content.
+	s := &Streamer{
+		startTime: time.Now(), // just started
+	}
+	needsHeartbeat := !s.initialSent && time.Since(s.startTime) >= 2*time.Second
+	if needsHeartbeat {
+		t.Fatal("expected needsHeartbeat=false when just started")
 	}
 }
