@@ -26,6 +26,7 @@ import (
 // MessageStore is an optional interface for persisting conversation messages to SQLite.
 type MessageStore interface {
 	Append(sessionID string, msg agent.Message) error
+	LoadHistory(sessionID string, limit int) ([]agent.Message, error)
 }
 
 // Handler processes Telegram updates.
@@ -285,6 +286,13 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	memoryContext := ""
 	if h.memory != nil {
 		memoryContext = memory.BuildMemoryContext(h.memory, text, h.cfg.Memory.MaxEntries)
+	}
+
+	// Inject recent conversation history when starting a fresh session
+	// (e.g. after idle timeout reset) so Claude has context for follow-ups
+	// like "Run lại thử" after a previous "push crypto-radar" message.
+	if sess.GetSessionID() == "" {
+		memoryContext += h.buildHistoryContext(sess.ID, 8)
 	}
 
 	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
@@ -597,4 +605,37 @@ func (h *Handler) sendText(chatID int64, text string) int {
 		}
 	}
 	return sent.MessageID
+}
+
+// buildHistoryContext loads recent messages from the store and formats them
+// as a conversation summary for context injection into new sessions.
+// This ensures follow-up messages like "Run lại thử" retain context from
+// previous turns even after an idle-timeout session reset.
+func (h *Handler) buildHistoryContext(sessionID string, limit int) string {
+	if h.messages == nil {
+		return ""
+	}
+	msgs, err := h.messages.LoadHistory(sessionID, limit)
+	if err != nil || len(msgs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n\n## Recent Conversation History\n")
+	sb.WriteString("(Context from previous messages in this chat — use to understand follow-up references)\n\n")
+
+	for _, m := range msgs {
+		role := "User"
+		if m.Role == "assistant" {
+			role = "Assistant"
+		}
+		content := m.Content
+		r := []rune(content)
+		if len(r) > 200 {
+			content = string(r[:200]) + "..."
+		}
+		sb.WriteString(fmt.Sprintf("**%s**: %s\n", role, content))
+	}
+
+	return sb.String()
 }
