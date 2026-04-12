@@ -6,6 +6,9 @@ telegram:
     bot_name: ""            # leave empty to auto-detect via getMyName API
     frames: ["⏳", "⌛"]   # emoji frames for animation
     interval: 3             # seconds between frame rotations
+    use_chat_action: true   # show "typing..." under bot name via sendChatAction
+    chat_action_interval: 4 # seconds between keepalive calls (Telegram expires after ~5s)
+    chat_action_ttl: 120    # max seconds before auto-stop (prevents infinite typing)
 
 claude:
   api_key: ""      # set via ANTHROPIC_API_KEY env var
