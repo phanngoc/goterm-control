@@ -181,9 +181,15 @@ func (s *Streamer) flush() {
 	if !s.initialSent && totalChars < minInitialChars && toolLine == "" {
 		elapsed := time.Since(s.startTime).Truncate(time.Second)
 		if elapsed >= 2*time.Second {
+			heartbeatHTML := fmt.Sprintf("⏳ <i>Thinking... (%s)</i>", elapsed)
+			if heartbeatHTML == s.lastSentHTML {
+				s.mu.Unlock()
+				return
+			}
+			s.lastSentHTML = heartbeatHTML
 			s.inflight = true
 			s.mu.Unlock()
-			s.editCurrent(fmt.Sprintf("⏳ <i>Thinking... (%s)</i>", elapsed))
+			s.editCurrent(heartbeatHTML)
 			s.mu.Lock()
 			s.inflight = false
 			needsFlush := s.pendingFlush
