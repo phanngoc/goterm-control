@@ -129,6 +129,9 @@ func (t *TypingIndicator) loop(chatID int64, stopCh chan struct{}) {
 
 // sendTyping sends a single "typing" chat action to Telegram.
 func (t *TypingIndicator) sendTyping(chatID int64) error {
+	if t.bot == nil {
+		return nil
+	}
 	action := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
 	_, err := t.bot.Request(action)
 	if err != nil {
