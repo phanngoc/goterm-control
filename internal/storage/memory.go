@@ -37,11 +37,11 @@ func (m *SQLiteMemoryStore) Append(entry memory.Entry) error {
 		return fmt.Errorf("marshal keywords: %w", err)
 	}
 
-	_, err = m.db.conn.Exec(`INSERT INTO memory (id, created_at, session_id, chat_id, facts, keywords, summary)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	_, err = m.db.conn.Exec(`INSERT INTO memory (id, created_at, session_id, chat_id, facts, keywords, summary, intent)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.ID, entry.CreatedAt.Format(time.RFC3339),
 		entry.SessionID, entry.ChatID,
-		string(factsJSON), string(keywordsJSON), entry.Summary,
+		string(factsJSON), string(keywordsJSON), entry.Summary, entry.Intent,
 	)
 	return err
 }
@@ -67,7 +67,7 @@ func (m *SQLiteMemoryStore) Search(query string, limit int) ([]memory.Entry, err
 	ftsQuery := strings.Join(tokens, " OR ")
 
 	rows, err := m.db.conn.Query(`
-		SELECT m.id, m.created_at, m.session_id, m.chat_id, m.facts, m.keywords, m.summary
+		SELECT m.id, m.created_at, m.session_id, m.chat_id, m.facts, m.keywords, m.summary, m.intent
 		FROM memory m
 		JOIN memory_fts f ON f.rowid = m.rowid
 		WHERE memory_fts MATCH ?
@@ -86,11 +86,11 @@ func (m *SQLiteMemoryStore) Search(query string, limit int) ([]memory.Entry, err
 func (m *SQLiteMemoryStore) searchFallback(query string, limit int) ([]memory.Entry, error) {
 	pattern := "%" + query + "%"
 	rows, err := m.db.conn.Query(`
-		SELECT id, created_at, session_id, chat_id, facts, keywords, summary
+		SELECT id, created_at, session_id, chat_id, facts, keywords, summary, intent
 		FROM memory
-		WHERE keywords LIKE ? OR facts LIKE ? OR summary LIKE ?
+		WHERE keywords LIKE ? OR facts LIKE ? OR summary LIKE ? OR intent LIKE ?
 		ORDER BY created_at DESC
-		LIMIT ?`, pattern, pattern, pattern, limit)
+		LIMIT ?`, pattern, pattern, pattern, pattern, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search fallback: %w", err)
 	}
@@ -100,7 +100,7 @@ func (m *SQLiteMemoryStore) searchFallback(query string, limit int) ([]memory.En
 
 // ReadAll returns all memory entries ordered by creation time.
 func (m *SQLiteMemoryStore) ReadAll() ([]memory.Entry, error) {
-	rows, err := m.db.conn.Query(`SELECT id, created_at, session_id, chat_id, facts, keywords, summary
+	rows, err := m.db.conn.Query(`SELECT id, created_at, session_id, chat_id, facts, keywords, summary, intent
 		FROM memory ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("read all memory: %w", err)
@@ -119,10 +119,10 @@ func scanMemoryRows(rows rowScanner) ([]memory.Entry, error) {
 	var entries []memory.Entry
 	for rows.Next() {
 		var (
-			id, createdStr, sessionID, factsStr, keywordsStr, summary string
-			chatID                                                    int64
+			id, createdStr, sessionID, factsStr, keywordsStr, summary, intent string
+			chatID                                                            int64
 		)
-		if err := rows.Scan(&id, &createdStr, &sessionID, &chatID, &factsStr, &keywordsStr, &summary); err != nil {
+		if err := rows.Scan(&id, &createdStr, &sessionID, &chatID, &factsStr, &keywordsStr, &summary, &intent); err != nil {
 			continue
 		}
 
@@ -141,6 +141,7 @@ func scanMemoryRows(rows rowScanner) ([]memory.Entry, error) {
 			Facts:     facts,
 			Keywords:  keywords,
 			Summary:   summary,
+			Intent:    intent,
 		})
 	}
 	return entries, rows.Err()

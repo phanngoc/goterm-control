@@ -13,6 +13,7 @@ import (
 )
 
 // Client implements agent.ModelProvider using the Anthropic Messages API directly.
+// It also provides Complete() for non-streaming single-turn calls (used by memory extraction).
 type Client struct {
 	sdk sdk.Client
 }
@@ -22,6 +23,40 @@ func New(apiKey string) *Client {
 	return &Client{
 		sdk: sdk.NewClient(option.WithAPIKey(apiKey)),
 	}
+}
+
+// Complete makes a non-streaming single-turn API call and returns the text response.
+// Used for lightweight tasks like memory extraction where streaming is unnecessary.
+func (c *Client) Complete(ctx context.Context, model, system, userMessage string, maxTokens int) (string, error) {
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+
+	var systemBlocks []sdk.TextBlockParam
+	if system != "" {
+		systemBlocks = []sdk.TextBlockParam{{Text: system}}
+	}
+
+	resp, err := c.sdk.Messages.New(ctx, sdk.MessageNewParams{
+		Model:     sdk.Model(model),
+		MaxTokens: int64(maxTokens),
+		System:    systemBlocks,
+		Messages: []sdk.MessageParam{
+			sdk.NewUserMessage(sdk.NewTextBlock(userMessage)),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("anthropic complete: %w", err)
+	}
+
+	// Extract text from response content blocks
+	var text string
+	for _, block := range resp.Content {
+		if tb, ok := block.AsAny().(sdk.TextBlock); ok {
+			text += tb.Text
+		}
+	}
+	return text, nil
 }
 
 // Stream implements agent.ModelProvider.

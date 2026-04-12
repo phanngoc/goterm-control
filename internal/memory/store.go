@@ -26,6 +26,7 @@ type Entry struct {
 	Facts     []string  `json:"facts"`
 	Keywords  []string  `json:"keywords"`
 	Summary   string    `json:"summary"`
+	Intent    string    `json:"intent,omitempty"`
 }
 
 // Store manages memory entries in a JSONL file.

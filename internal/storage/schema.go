@@ -2,7 +2,7 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // DDL statements executed in order.
 var ddl = []string{
@@ -42,23 +42,24 @@ var ddl = []string{
 		chat_id    INTEGER DEFAULT 0,
 		facts      TEXT NOT NULL,
 		keywords   TEXT NOT NULL,
-		summary    TEXT DEFAULT ''
+		summary    TEXT DEFAULT '',
+		intent     TEXT DEFAULT ''
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_memory_chat ON memory(chat_id, created_at DESC)`,
 
 	`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-		keywords, facts, summary, content=memory, content_rowid=rowid
+		keywords, facts, summary, intent, content=memory, content_rowid=rowid
 	)`,
 
 	// FTS sync triggers
 	`CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
-		INSERT INTO memory_fts(rowid, keywords, facts, summary)
-		VALUES (new.rowid, new.keywords, new.facts, new.summary);
+		INSERT INTO memory_fts(rowid, keywords, facts, summary, intent)
+		VALUES (new.rowid, new.keywords, new.facts, new.summary, new.intent);
 	END`,
 
 	`CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
-		INSERT INTO memory_fts(memory_fts, rowid, keywords, facts, summary)
-		VALUES ('delete', old.rowid, old.keywords, old.facts, old.summary);
+		INSERT INTO memory_fts(memory_fts, rowid, keywords, facts, summary, intent)
+		VALUES ('delete', old.rowid, old.keywords, old.facts, old.summary, old.intent);
 	END`,
 }
 
@@ -77,11 +78,50 @@ func (db *DB) migrate() error {
 		return db.migrateFromLegacy()
 	}
 
+	if ver < 2 {
+		if err := db.migrateV2AddIntent(); err != nil {
+			return fmt.Errorf("migrate v2: %w", err)
+		}
+	}
+
 	if ver < schemaVersion {
 		if err := db.createTables(); err != nil {
 			return err
 		}
 		return db.setVersion(schemaVersion)
+	}
+	return nil
+}
+
+// migrateV2AddIntent adds the intent column to memory table and rebuilds FTS.
+func (db *DB) migrateV2AddIntent() error {
+	// Add column (SQLite ignores if column already exists via error)
+	_, _ = db.conn.Exec(`ALTER TABLE memory ADD COLUMN intent TEXT DEFAULT ''`)
+
+	// Rebuild FTS table and triggers to include intent
+	stmts := []string{
+		`DROP TRIGGER IF EXISTS memory_ai`,
+		`DROP TRIGGER IF EXISTS memory_ad`,
+		`DROP TABLE IF EXISTS memory_fts`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+			keywords, facts, summary, intent, content=memory, content_rowid=rowid
+		)`,
+		`CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
+			INSERT INTO memory_fts(rowid, keywords, facts, summary, intent)
+			VALUES (new.rowid, new.keywords, new.facts, new.summary, new.intent);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
+			INSERT INTO memory_fts(memory_fts, rowid, keywords, facts, summary, intent)
+			VALUES ('delete', old.rowid, old.keywords, old.facts, old.summary, old.intent);
+		END`,
+		// Rebuild FTS content from existing data
+		`INSERT INTO memory_fts(rowid, keywords, facts, summary, intent)
+			SELECT rowid, keywords, facts, summary, intent FROM memory`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.conn.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate v2 DDL: %w\nstatement: %s", err, stmt)
+		}
 	}
 	return nil
 }
