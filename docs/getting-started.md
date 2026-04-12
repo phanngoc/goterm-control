@@ -14,13 +14,15 @@ layout: default
 
 Choose your platform:
 
-<div class="platform-tabs" style="margin: 1.5rem 0;">
+</div>
+
+<div class="doc-content">
+
 <details open>
-<summary><strong>🍎 macOS &mdash; Apple Silicon (M1/M2/M3/M4)</strong></summary>
+<summary><strong>🍎 macOS — Apple Silicon (M1/M2/M3/M4)</strong></summary>
+<div markdown="1">
 
-<br/>
-
-**Step 1 &mdash; Download**
+**Step 1 — Download**
 
 Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Enter):
 
@@ -28,7 +30,7 @@ Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Enter):
 curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-darwin-arm64.tar.gz | tar xz
 ```
 
-**Step 2 &mdash; Allow it to run**
+**Step 2 — Allow it to run**
 
 macOS blocks apps from unknown developers. Remove the block:
 
@@ -37,7 +39,7 @@ xattr -d com.apple.quarantine bomclaw-darwin-arm64
 chmod +x bomclaw-darwin-arm64
 ```
 
-**Step 3 &mdash; Install Claude CLI**
+**Step 3 — Install Claude CLI**
 
 ```bash
 npm install -g @anthropic-ai/claude-code
@@ -46,7 +48,7 @@ claude login
 
 > Don't have `npm`? Install Node.js first: [https://nodejs.org](https://nodejs.org) (download the LTS version, double-click the installer).
 
-**Step 4 &mdash; Set up Telegram (optional)**
+**Step 4 — Set up Telegram (optional)**
 
 ```bash
 echo 'TELEGRAM_TOKEN=your-token-here' > .env
@@ -54,28 +56,28 @@ echo 'TELEGRAM_TOKEN=your-token-here' > .env
 
 > Get a token: open Telegram, search **@BotFather**, send `/newbot`, follow the instructions.
 
-**Step 5 &mdash; Run**
+**Step 5 — Run**
 
 ```bash
 ./bomclaw-darwin-arm64 chat --env .env
 # Or: ./bomclaw-darwin-arm64 gateway --env .env
 ```
 
-**Optional &mdash; Install permanently**
+**Optional — Install permanently**
 
 ```bash
 sudo mv bomclaw-darwin-arm64 /usr/local/bin/bomclaw
 bomclaw chat
 ```
 
+</div>
 </details>
 
 <details>
-<summary><strong>🍎 macOS &mdash; Intel</strong></summary>
+<summary><strong>🍎 macOS — Intel</strong></summary>
+<div markdown="1">
 
-<br/>
-
-**Step 1 &mdash; Download**
+**Step 1 — Download**
 
 Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Enter):
 
@@ -83,14 +85,14 @@ Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Enter):
 curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-darwin-amd64.tar.gz | tar xz
 ```
 
-**Step 2 &mdash; Allow it to run**
+**Step 2 — Allow it to run**
 
 ```bash
 xattr -d com.apple.quarantine bomclaw-darwin-amd64
 chmod +x bomclaw-darwin-amd64
 ```
 
-**Step 3 &mdash; Install Claude CLI**
+**Step 3 — Install Claude CLI**
 
 ```bash
 npm install -g @anthropic-ai/claude-code
@@ -99,34 +101,34 @@ claude login
 
 > Don't have `npm`? Install Node.js first: [https://nodejs.org](https://nodejs.org) (download the LTS version, double-click the installer).
 
-**Step 4 &mdash; Set up Telegram (optional)**
+**Step 4 — Set up Telegram (optional)**
 
 ```bash
 echo 'TELEGRAM_TOKEN=your-token-here' > .env
 ```
 
-**Step 5 &mdash; Run**
+**Step 5 — Run**
 
 ```bash
 ./bomclaw-darwin-amd64 chat --env .env
 # Or: ./bomclaw-darwin-amd64 gateway --env .env
 ```
 
-**Optional &mdash; Install permanently**
+**Optional — Install permanently**
 
 ```bash
 sudo mv bomclaw-darwin-amd64 /usr/local/bin/bomclaw
 bomclaw chat
 ```
 
+</div>
 </details>
 
 <details>
 <summary><strong>🐧 Ubuntu / Linux</strong></summary>
+<div markdown="1">
 
-<br/>
-
-**Step 1 &mdash; Download**
+**Step 1 — Download**
 
 Open a terminal (`Ctrl + Alt + T`):
 
@@ -135,7 +137,7 @@ curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomc
 chmod +x bomclaw-linux-amd64
 ```
 
-**Step 2 &mdash; Install Claude CLI**
+**Step 2 — Install Claude CLI**
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
@@ -143,7 +145,7 @@ sudo npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-**Step 3 &mdash; Set up Telegram (optional)**
+**Step 3 — Set up Telegram (optional)**
 
 ```bash
 echo 'TELEGRAM_TOKEN=your-token-here' > .env
@@ -151,21 +153,21 @@ echo 'TELEGRAM_TOKEN=your-token-here' > .env
 
 > Get a token: open Telegram, search **@BotFather**, send `/newbot`, follow the instructions.
 
-**Step 4 &mdash; Run**
+**Step 4 — Run**
 
 ```bash
 ./bomclaw-linux-amd64 chat --env .env
 # Or: ./bomclaw-linux-amd64 gateway --env .env
 ```
 
-**Optional &mdash; Install permanently**
+**Optional — Install permanently**
 
 ```bash
 sudo mv bomclaw-linux-amd64 /usr/local/bin/bomclaw
 bomclaw chat
 ```
 
-**Optional &mdash; Run as a background service**
+**Optional — Run as a background service**
 
 ```bash
 bomclaw gateway install --config /path/to/config.yaml --env /path/to/.env
@@ -174,14 +176,14 @@ bomclaw gateway restart
 bomclaw gateway stop
 ```
 
+</div>
 </details>
 
 <details>
 <summary><strong>🪟 Windows (via WSL)</strong></summary>
+<div markdown="1">
 
-<br/>
-
-**Step 1 &mdash; Install WSL**
+**Step 1 — Install WSL**
 
 Open **PowerShell as Administrator** and run:
 
@@ -191,14 +193,14 @@ wsl --install
 
 Restart your computer, then open **Ubuntu** from the Start menu.
 
-**Step 2 &mdash; Download (inside WSL)**
+**Step 2 — Download (inside WSL)**
 
 ```bash
 curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-linux-amd64.tar.gz | tar xz
 chmod +x bomclaw-linux-amd64
 ```
 
-**Step 3 &mdash; Install Claude CLI**
+**Step 3 — Install Claude CLI**
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
@@ -206,21 +208,25 @@ sudo npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-**Step 4 &mdash; Set up Telegram (optional)**
+**Step 4 — Set up Telegram (optional)**
 
 ```bash
 echo 'TELEGRAM_TOKEN=your-token-here' > .env
 ```
 
-**Step 5 &mdash; Run**
+**Step 5 — Run**
 
 ```bash
 ./bomclaw-linux-amd64 chat --env .env
 # Or: ./bomclaw-linux-amd64 gateway --env .env
 ```
 
-</details>
 </div>
+</details>
+
+</div>
+
+<div class="doc-content" markdown="1">
 
 ---
 
