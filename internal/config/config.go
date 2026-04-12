@@ -41,10 +41,13 @@ type TelegramConfig struct {
 }
 
 type IndicatorConfig struct {
-	Enabled  bool     `yaml:"enabled"`
-	BotName  string   `yaml:"bot_name"`
-	Frames   []string `yaml:"frames"`
-	Interval int      `yaml:"interval"`
+	Enabled            bool     `yaml:"enabled"`
+	BotName            string   `yaml:"bot_name"`
+	Frames             []string `yaml:"frames"`
+	Interval           int      `yaml:"interval"`
+	UseChatAction      bool     `yaml:"use_chat_action"`
+	ChatActionInterval int      `yaml:"chat_action_interval"` // seconds between sendChatAction calls
+	ChatActionTTL      int      `yaml:"chat_action_ttl"`      // max seconds before auto-stop
 }
 
 type SecurityConfig struct {
@@ -129,6 +132,14 @@ func Load(path string) (*Config, error) {
 		}
 		if cfg.Telegram.Indicator.Interval == 0 {
 			cfg.Telegram.Indicator.Interval = 3
+		}
+	}
+	if cfg.Telegram.Indicator.UseChatAction {
+		if cfg.Telegram.Indicator.ChatActionInterval == 0 {
+			cfg.Telegram.Indicator.ChatActionInterval = 4
+		}
+		if cfg.Telegram.Indicator.ChatActionTTL == 0 {
+			cfg.Telegram.Indicator.ChatActionTTL = 120
 		}
 	}
 

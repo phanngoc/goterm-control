@@ -28,6 +28,7 @@ type Bot struct {
 	engine    *execution.Engine
 	queue     *msgqueue.Queue
 	indicator *NameIndicator
+	typing    *TypingIndicator
 }
 
 // New creates and initialises the bot.
@@ -54,6 +55,9 @@ func New(cfg *config.Config) (*Bot, error) {
 
 	// Name indicator (loading animation via setMyName)
 	indicator := NewNameIndicator(api, cfg.Telegram.Indicator)
+
+	// Typing indicator (sendChatAction keepalive loop per chat)
+	typing := NewTypingIndicator(api, cfg.Telegram.Indicator)
 
 	executor := tools.New(tools.ExecutorConfig{
 		ShellTimeout:   cfg.Tools.ShellTimeout,
@@ -109,6 +113,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		resolver:         resolver,
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
+		typing:           typing,
 	}
 
 	// Message queue: debounce 800ms + collect while busy
@@ -123,6 +128,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		engine:    engine,
 		queue:     queue,
 		indicator: indicator,
+		typing:    typing,
 	}, nil
 }
 
@@ -142,6 +148,7 @@ func (b *Bot) Run() {
 
 // Shutdown performs graceful cleanup.
 func (b *Bot) Shutdown() {
+	b.typing.Close()
 	b.indicator.Close()
 	b.queue.Close()
 	b.engine.Close()
