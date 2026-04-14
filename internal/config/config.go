@@ -65,8 +65,7 @@ type ToolsConfig struct {
 }
 
 type SessionConfig struct {
-	DataDir     string `yaml:"data_dir"`
-	IdleTimeout int    `yaml:"idle_timeout"` // minutes
+	DataDir string `yaml:"data_dir"`
 }
 
 func Load(path string) (*Config, error) {
@@ -117,9 +116,6 @@ func Load(path string) (*Config, error) {
 	if cfg.Session.DataDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Session.DataDir = home + "/.goterm/data"
-	}
-	if cfg.Session.IdleTimeout == 0 {
-		cfg.Session.IdleTimeout = 30
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {

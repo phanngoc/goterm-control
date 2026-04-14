@@ -124,7 +124,9 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 			"👋 *GoTerm Control*\n\n"+
 				"I'm your Mac AI assistant powered by Claude.\n\n"+
 				"Commands:\n"+
-				"• /reset — clear conversation history\n"+
+				"• /sessions — list & switch sessions\n"+
+				"• /new — start a new session\n"+
+				"• /reset — clear current session\n"+
 				"• /status — show session info\n"+
 				"• /models — list available models\n"+
 				"• /model `<name>` — switch model\n"+
@@ -136,6 +138,12 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 		h.sessions.Reset(chatID)
 		h.resolver.ClearOverride(chatID)
 		h.sendText(chatID, "🔄 Conversation history cleared.")
+
+	case "sessions", "session":
+		h.showSessionList(chatID)
+
+	case "new":
+		h.handleNewSession(chatID)
 
 	case "status":
 		h.showStatus(chatID)
@@ -169,15 +177,23 @@ func (h *Handler) showStatus(chatID int64) {
 	if m != nil {
 		modelName = m.ID
 	}
+	label := sess.GetLabel()
+	if label == "" {
+		label = sess.ID
+	}
+	sessionCount := len(h.sessions.ListForChat(chatID))
 	h.sendText(chatID, fmt.Sprintf(
 		"📊 *Session Status*\n\n"+
 			"Chat ID: `%d`\n"+
+			"Active: %s\n"+
+			"Sessions: %d total\n"+
 			"Turns: %d\n"+
-			"Session: `%s`\n"+
+			"Claude: `%s`\n"+
 			"Model: `%s`\n"+
 			"Tokens: %d in / %d out\n"+
 			"Queue: %d pending",
-		chatID, sess.GetMessageCount(), sessionID, modelName,
+		chatID, label, sessionCount,
+		sess.GetMessageCount(), sessionID, modelName,
 		sess.InputTokens, sess.OutputTokens,
 		h.engine.QueueDepth(chatID),
 	))
@@ -280,9 +296,8 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 		return
 	}
 
-	// Inject recent conversation history when starting a fresh session
-	// (e.g. after idle timeout reset) so Claude has context for follow-ups
-	// like "Run lại thử" after a previous "push crypto-radar" message.
+	// Inject recent conversation history when starting a brand-new session
+	// (first message or after explicit /reset) so Claude has some context.
 	historyContext := ""
 	if sess.GetSessionID() == "" {
 		historyContext = h.buildHistoryContext(sess.ID, 8)
@@ -404,6 +419,11 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		}
 	}
 
+	// Auto-label session from first user message
+	if sess.GetLabel() == "" && userText != "" {
+		sess.SetLabel(truncateLabel(userText, 40))
+	}
+
 	// Mark session dirty for persistence
 	h.sessions.MarkDirty()
 
@@ -418,6 +438,14 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	answer := tgbotapi.NewCallback(cb.ID, "")
 	_, _ = h.bot.Request(answer)
 
+	// Session selection callback
+	if strings.HasPrefix(data, "sess:") {
+		sessionID := strings.TrimPrefix(data, "sess:")
+		h.handleSessionSwitch(chatID, sessionID, cb.Message.MessageID)
+		return
+	}
+
+	// Approval callback
 	h.approvalMu.Lock()
 	ch, ok := h.approvalRequests[data]
 	if ok {
@@ -441,6 +469,80 @@ func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {
 	}
 	edit := tgbotapi.NewEditMessageText(chatID, cb.Message.MessageID, label)
 	_, _ = h.bot.Send(edit)
+}
+
+// --- Session management ---
+
+func (h *Handler) showSessionList(chatID int64) {
+	sessions := h.sessions.ListForChat(chatID)
+	if len(sessions) == 0 {
+		h.sendText(chatID, "No sessions yet. Send a message to start.")
+		return
+	}
+
+	activeID := h.sessions.ActiveSessionID(chatID)
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, s := range sessions {
+		label := s.GetLabel()
+		if label == "" {
+			label = fmt.Sprintf("Session %d", s.Seq)
+		}
+
+		btnText := fmt.Sprintf("%s (%d msgs)", label, s.GetMessageCount())
+		if s.ID == activeID {
+			btnText = "✅ " + btnText
+		}
+
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(btnText, "sess:"+s.ID),
+		))
+	}
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	msg := tgbotapi.NewMessage(chatID, "📋 *Sessions* — tap to switch:")
+	msg.ParseMode = "Markdown"
+	msg.ReplyMarkup = keyboard
+	h.bot.Send(msg)
+}
+
+func (h *Handler) handleNewSession(chatID int64) {
+	sess, err := h.sessions.NewSession(chatID)
+	if err != nil {
+		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
+		return
+	}
+	h.sendText(chatID, fmt.Sprintf("✨ New session created (Session %d). Send a message to start.", sess.Seq))
+}
+
+func (h *Handler) handleSessionSwitch(chatID int64, sessionID string, msgID int) {
+	if err := h.sessions.SwitchActive(chatID, sessionID); err != nil {
+		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
+		return
+	}
+	sess := h.sessions.Get(chatID)
+	label := sess.GetLabel()
+	if label == "" {
+		label = fmt.Sprintf("Session %d", sess.Seq)
+	}
+
+	text := fmt.Sprintf("Switched to: *%s* (%d messages)", label, sess.GetMessageCount())
+	edit := tgbotapi.NewEditMessageText(chatID, msgID, text)
+	edit.ParseMode = "Markdown"
+	h.bot.Send(edit)
+}
+
+// truncateLabel returns first line of text, truncated to maxRunes.
+func truncateLabel(text string, maxRunes int) string {
+	if idx := strings.IndexByte(text, '\n'); idx >= 0 {
+		text = text[:idx]
+	}
+	text = strings.TrimSpace(text)
+	r := []rune(text)
+	if len(r) > maxRunes {
+		return string(r[:maxRunes]) + "..."
+	}
+	return text
 }
 
 // toolLabel creates a short label like Bash(cd stock_d) or Read(bot/handler.go)
@@ -591,9 +693,8 @@ func (h *Handler) sendText(chatID int64, text string) int {
 }
 
 // buildHistoryContext loads recent messages from the store and formats them
-// as a conversation summary for context injection into new sessions.
-// This ensures follow-up messages like "Run lại thử" retain context from
-// previous turns even after an idle-timeout session reset.
+// as a conversation summary for context injection into brand-new sessions
+// (first message or after explicit /reset).
 func (h *Handler) buildHistoryContext(sessionID string, limit int) string {
 	if h.messages == nil {
 		return ""

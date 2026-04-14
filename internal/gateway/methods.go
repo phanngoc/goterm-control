@@ -80,6 +80,8 @@ type SessionInfo struct {
 	OutputTokens    int    `json:"output_tokens"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
+	Label           string `json:"label,omitempty"`
+	Seq             int    `json:"seq"`
 }
 
 func sessionToInfo(s *session.Session) SessionInfo {
@@ -92,6 +94,8 @@ func sessionToInfo(s *session.Session) SessionInfo {
 		OutputTokens:    s.OutputTokens,
 		CreatedAt:       s.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       s.UpdatedAt.Format(time.RFC3339),
+		Label:           s.GetLabel(),
+		Seq:             s.Seq,
 	}
 }
 

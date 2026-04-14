@@ -42,7 +42,9 @@ func New(cfg *config.Config) (*Bot, error) {
 	// Register commands with Telegram menu
 	commands := tgbotapi.NewSetMyCommands(
 		tgbotapi.BotCommand{Command: "start", Description: "Show welcome message and help"},
-		tgbotapi.BotCommand{Command: "reset", Description: "Clear conversation history"},
+		tgbotapi.BotCommand{Command: "sessions", Description: "List and switch sessions"},
+		tgbotapi.BotCommand{Command: "new", Description: "Start a new conversation"},
+		tgbotapi.BotCommand{Command: "reset", Description: "Clear current session"},
 		tgbotapi.BotCommand{Command: "status", Description: "Show session info"},
 		tgbotapi.BotCommand{Command: "models", Description: "List available models"},
 		tgbotapi.BotCommand{Command: "model", Description: "Switch model (e.g. /model sonnet)"},
@@ -71,9 +73,8 @@ func New(cfg *config.Config) (*Bot, error) {
 		return nil, fmt.Errorf("storage: %w", err)
 	}
 
-	// Session persistence (SQLite-backed)
-	idleTimeout := time.Duration(cfg.Session.IdleTimeout) * time.Minute
-	sessions := session.NewManager(storage.NewSessionStore(db), idleTimeout)
+	// Session persistence (SQLite-backed) — sessions persist until /reset.
+	sessions := session.NewManager(storage.NewSessionStore(db))
 
 	// Transcript writer (JSONL audit trail — kept alongside SQLite)
 	transcriptWriter := transcript.NewWriter(filepath.Join(cfg.Session.DataDir, "transcripts"))

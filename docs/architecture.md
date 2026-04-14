@@ -131,10 +131,13 @@ internal/
 
 ### Session Lifecycle
 
-- Sessions are created per Telegram chat ID or per WebSocket client
-- Each session has its own conversation history and token count
-- Sessions persist to disk as JSON metadata + JSONL transcripts
-- Idle sessions auto-reset after the configured timeout (default: 30 min)
+- Each Telegram chat can have multiple sessions (up to 20)
+- One session is "active" at a time; messages are routed to the active session
+- Each session has its own Claude CLI conversation, message history, and token count
+- Sessions persist to disk (SQLite + JSONL transcripts) until explicitly reset via `/reset`
+- `/sessions` lists all sessions with inline keyboard buttons to switch
+- `/new` creates a new session and makes it active
+- Sessions are auto-labeled from the first user message
 
 ### Context Budget
 
