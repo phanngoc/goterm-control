@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -22,41 +21,17 @@ type legacySession struct {
 	OutputTokens    int       `json:"output_tokens"`
 }
 
-// legacyMemoryEntry mirrors the JSONL structure in memory.jsonl.
-type legacyMemoryEntry struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	SessionID string    `json:"session_id"`
-	ChatID    int64     `json:"chat_id,omitempty"`
-	Facts     []string  `json:"facts"`
-	Keywords  []string  `json:"keywords"`
-	Summary   string    `json:"summary"`
-}
-
-// migrateFromLegacy imports sessions.json and memory/memory.jsonl if they exist.
+// migrateFromLegacy imports sessions.json if it exists.
 func (db *DB) migrateFromLegacy() error {
 	sessionsPath := filepath.Join(db.dataDir, "sessions.json")
-	memoryPath := filepath.Join(db.dataDir, "memory", "memory.jsonl")
-
-	imported := false
 
 	if n, err := db.importSessions(sessionsPath); err != nil {
 		log.Printf("storage: migrate sessions: %v", err)
 	} else if n > 0 {
 		log.Printf("storage: imported %d sessions from %s", n, sessionsPath)
-		imported = true
-	}
-
-	if n, err := db.importMemory(memoryPath); err != nil {
-		log.Printf("storage: migrate memory: %v", err)
-	} else if n > 0 {
-		log.Printf("storage: imported %d memory entries from %s", n, memoryPath)
-		imported = true
-	}
-
-	if imported {
 		log.Println("storage: legacy data import complete (original files kept for rollback)")
 	}
+
 	return nil
 }
 
@@ -106,59 +81,5 @@ func (db *DB) importSessions(path string) (int, error) {
 		count++
 	}
 
-	return count, tx.Commit()
-}
-
-func (db *DB) importMemory(path string) (int, error) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO memory
-		(id, created_at, session_id, chat_id, facts, keywords, summary)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
-
-	count := 0
-	for scanner.Scan() {
-		var e legacyMemoryEntry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			continue
-		}
-
-		factsJSON, _ := json.Marshal(e.Facts)
-		keywordsJSON, _ := json.Marshal(e.Keywords)
-
-		_, err := stmt.Exec(
-			e.ID, e.CreatedAt.Format(time.RFC3339),
-			e.SessionID, e.ChatID,
-			string(factsJSON), string(keywordsJSON), e.Summary,
-		)
-		if err != nil {
-			continue
-		}
-		count++
-	}
-
-	if err := scanner.Err(); err != nil {
-		return count, fmt.Errorf("scan %s: %w", path, err)
-	}
 	return count, tx.Commit()
 }

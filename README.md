@@ -305,8 +305,8 @@ Once the gateway is running with a Telegram token:
         ┌──────────────┼──────────────┐
         ▼              ▼              ▼
    ┌─────────┐  ┌───────────┐  ┌──────────┐
-   │ Context │  │  Memory   │  │Transcript│
-   │ Engine  │  │  (JSONL)  │  │  (JSONL) │
+   │ Context │  │ Messages  │  │Transcript│
+   │ Engine  │  │ (SQLite)  │  │  (JSONL) │
    └─────────┘  └───────────┘  └──────────┘
 ```
 
@@ -348,7 +348,6 @@ tool calls, read results, and keep working until the task is done.
 | `context/` | Token counting, budget assembly, compaction |
 | `execution/` | Per-session FIFO queue (prevents concurrent calls) |
 | `gateway/` | WebSocket JSON-RPC server + static file serving (dashboard) |
-| `memory/` | Cross-session keyword memory |
 | `models/` | Model catalog with aliases and per-session override |
 | `session/` | Persistent session management |
 | `tools/` | System control tools (shell, files, screenshot, browser, ...) |
@@ -399,11 +398,9 @@ All state lives under `~/.goterm/data/`:
 
 ```
 ~/.goterm/data/
-  sessions.json           # session metadata (persisted on change, atomic writes)
+  goterm.db               # SQLite database (sessions, messages)
   transcripts/
     chat_<id>.jsonl       # per-session conversation log (append-only)
-  memory/
-    memory.jsonl          # cross-session keyword memory
 ```
 
 ### Models
@@ -439,10 +436,6 @@ models:
 session:
   data_dir: ""                   # default: ~/.goterm/data
   idle_timeout: 30               # minutes before auto-reset
-
-memory:
-  enabled: true
-  max_entries: 5                 # memories injected per prompt
 
 security:
   allowed_user_ids: []           # Telegram user whitelist (empty = allow all)
@@ -491,7 +484,6 @@ internal/
   context/                  Context engine (tokens, assembly, compaction)
   execution/                Per-session FIFO execution queue
   gateway/                  WebSocket JSON-RPC server + dashboard hosting
-  memory/                   Cross-session keyword memory
   models/                   Model catalog + resolver
   session/                  Persistent session management
   tools/                    System + browser control tools
@@ -519,7 +511,7 @@ radically simplified:
 | Auth | API keys only | Claude CLI OAuth2 or API key |
 | Providers | 40+ (plugin system) | Claude (CLI OAuth + direct API) |
 | Channels | 20+ (plugin system) | Telegram + Web Dashboard + CLI |
-| Memory | LanceDB + embeddings | JSONL + keyword search |
+| Memory | LanceDB + embeddings | Claude CLI native (--resume) |
 | Config | ~200 config fields | ~15 config fields |
 | Context engine | Pluggable with DAG branching | Simple budget-based trimming |
 | Target user | Teams, multi-tenant | Individual, single machine |

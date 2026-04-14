@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
-	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -25,7 +24,6 @@ type Deps struct {
 	Tools         []agent.ToolDef
 	System        string // system prompt
 	DataDir       string // data directory for transcripts
-	Memory        memory.MemoryBackend
 	Uptime        func() time.Duration
 }
 
@@ -267,14 +265,6 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			os.Getenv("USER"),
 			sessionID)
 
-		// --- 3. Memory injection ---
-		if deps.Memory != nil {
-			memCtx := memory.BuildMemoryContext(deps.Memory, p.Message, 5)
-			if memCtx != "" {
-				systemPrompt += memCtx
-			}
-		}
-
 		// Track streamed text for persistence
 		var streamedText strings.Builder
 
@@ -309,14 +299,6 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 				Type: transcript.EventAssistantText, Timestamp: time.Now(),
 				SessionID: sessionID, Content: responseText,
 			})
-		}
-
-		// Extract and save memory for future sessions
-		if deps.Memory != nil && responseText != "" {
-			entry := memory.ExtractFacts(sessionID, 0, p.Message, responseText)
-			if len(entry.Keywords) > 0 || len(entry.Facts) > 0 {
-				deps.Memory.Append(entry)
-			}
 		}
 
 		if err != nil {

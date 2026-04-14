@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
-	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/session"
 )
 
@@ -34,7 +33,7 @@ func TestSchemaCreation(t *testing.T) {
 	db := testDB(t)
 
 	// Verify tables exist
-	tables := []string{"meta", "sessions", "messages", "memory"}
+	tables := []string{"meta", "sessions", "messages"}
 	for _, table := range tables {
 		var name string
 		err := db.conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
@@ -116,102 +115,6 @@ func TestSessionStoreUpsert(t *testing.T) {
 	if s.GetMessageCount() != 2 {
 		t.Errorf("updated MessageCount = %d, want 2", s.GetMessageCount())
 	}
-}
-
-// --- Memory Store Tests ---
-
-func TestMemoryStoreAppend(t *testing.T) {
-	db := testDB(t)
-	store := NewMemoryStore(db)
-
-	entry := memory.Entry{
-		SessionID: "chat_100",
-		ChatID:    100,
-		Facts:     []string{"path: /tmp/test.go", "url: https://example.com"},
-		Keywords:  []string{"golang", "testing", "sqlite"},
-		Summary:   "Testing SQLite memory store integration.",
-	}
-
-	if err := store.Append(entry); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	all, err := store.ReadAll()
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if len(all) != 1 {
-		t.Fatalf("ReadAll returned %d entries, want 1", len(all))
-	}
-
-	got := all[0]
-	if got.SessionID != "chat_100" {
-		t.Errorf("SessionID = %q, want chat_100", got.SessionID)
-	}
-	if len(got.Facts) != 2 {
-		t.Errorf("Facts len = %d, want 2", len(got.Facts))
-	}
-	if len(got.Keywords) != 3 {
-		t.Errorf("Keywords len = %d, want 3", len(got.Keywords))
-	}
-}
-
-func TestMemoryStoreSearch(t *testing.T) {
-	db := testDB(t)
-	store := NewMemoryStore(db)
-
-	// Insert entries with different keywords
-	entries := []memory.Entry{
-		{SessionID: "s1", Facts: []string{}, Keywords: []string{"golang", "http", "server"}, Summary: "Building an HTTP server in Go."},
-		{SessionID: "s2", Facts: []string{}, Keywords: []string{"python", "django", "web"}, Summary: "Django web framework tutorial."},
-		{SessionID: "s3", Facts: []string{}, Keywords: []string{"golang", "sqlite", "database"}, Summary: "Using SQLite with Go."},
-	}
-	for _, e := range entries {
-		store.Append(e)
-	}
-
-	// Search for golang
-	results, err := store.Search("golang database", 5)
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-
-	if len(results) == 0 {
-		t.Fatal("Search returned 0 results, want at least 1")
-	}
-
-	// Should find golang-related entries
-	found := false
-	for _, r := range results {
-		for _, k := range r.Keywords {
-			if k == "golang" {
-				found = true
-			}
-		}
-	}
-	if !found {
-		t.Error("Search did not return golang-related entries")
-	}
-}
-
-func TestMemoryStoreSearchFallback(t *testing.T) {
-	db := testDB(t)
-	store := NewMemoryStore(db)
-
-	store.Append(memory.Entry{
-		SessionID: "s1",
-		Keywords:  []string{"test"},
-		Facts:     []string{"path: /home/user/project"},
-		Summary:   "Working on a project",
-	})
-
-	// Short query that might not have FTS tokens
-	results, err := store.Search("ab", 5)
-	if err != nil {
-		t.Fatalf("Search short query: %v", err)
-	}
-	// Should return empty (no 3+ char tokens) — not an error
-	_ = results
 }
 
 // --- Message Store Tests ---
@@ -318,18 +221,6 @@ func TestMigrateFromJSON(t *testing.T) {
 	data, _ := json.MarshalIndent(sessData, "", "  ")
 	os.WriteFile(filepath.Join(dir, "sessions.json"), data, 0644)
 
-	// Create legacy memory.jsonl
-	memDir := filepath.Join(dir, "memory")
-	os.MkdirAll(memDir, 0755)
-	memEntry := legacyMemoryEntry{
-		ID: "mem_1", CreatedAt: time.Now(),
-		SessionID: "chat_100", ChatID: 100,
-		Facts: []string{"path: /tmp"}, Keywords: []string{"test"},
-		Summary: "test summary",
-	}
-	memData, _ := json.Marshal(memEntry)
-	os.WriteFile(filepath.Join(memDir, "memory.jsonl"), append(memData, '\n'), 0644)
-
 	// Open DB — should auto-import
 	db, err := Open(filepath.Join(dir, "goterm.db"))
 	if err != nil {
@@ -348,19 +239,6 @@ func TestMigrateFromJSON(t *testing.T) {
 	}
 	if sessions[100].GetSessionID() != "sess_abc" {
 		t.Errorf("ClaudeSessionID = %q, want sess_abc", sessions[100].GetSessionID())
-	}
-
-	// Verify memory imported
-	memStore := NewMemoryStore(db)
-	entries, err := memStore.ReadAll()
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("imported %d memory entries, want 1", len(entries))
-	}
-	if entries[0].Summary != "test summary" {
-		t.Errorf("Summary = %q, want 'test summary'", entries[0].Summary)
 	}
 }
 

@@ -18,7 +18,7 @@ BomClaw follows a simple layered architecture:
 2. **Gateway** routes messages, manages sessions, resolves models
 3. **Agent Loop** streams model responses and executes tool calls
 4. **Tools** interact with the operating system and browser
-5. **Storage** persists sessions, transcripts, and cross-session memory
+5. **Storage** persists sessions, transcripts, and messages
 
 ```
 ┌───────────┐  ┌──────────────┐  ┌───────────────┐
@@ -84,7 +84,6 @@ The model can chain multiple tool calls in a single turn, read results, and keep
 | `context/` | Token counting, budget assembly, compaction |
 | `execution/` | Per-session FIFO queue (prevents concurrent calls) |
 | `gateway/` | WebSocket JSON-RPC server + static file serving (dashboard) |
-| `memory/` | Cross-session keyword memory |
 | `models/` | Model catalog with aliases and per-session override |
 | `session/` | Persistent session management |
 | `tools/` | System control tools (shell, files, screenshot, browser, ...) |
@@ -109,7 +108,6 @@ internal/
   context/                  Context engine (tokens, assembly, compaction)
   execution/                Per-session FIFO execution queue
   gateway/                  WebSocket JSON-RPC server + dashboard hosting
-  memory/                   Cross-session keyword memory
   models/                   Model catalog + resolver
   session/                  Persistent session management
   tools/                    System + browser control tools
@@ -124,7 +122,6 @@ internal/
 2. Gateway creates or retrieves the session
 3. Context engine assembles the prompt:
    - System prompt
-   - Cross-session memory (keyword-matched, up to 5 entries)
    - Session history (trimmed to fit token budget)
    - New user message
 4. Agent loop streams the response from Claude
@@ -153,16 +150,13 @@ All state lives under `~/.goterm/data/`:
 
 ```
 ~/.goterm/data/
-  sessions.json           # Session metadata (atomic writes)
+  goterm.db               # SQLite database (sessions, messages)
   transcripts/
     chat_<id>.jsonl       # Per-session conversation log (append-only)
-  memory/
-    memory.jsonl          # Cross-session keyword memory
 ```
 
-- **sessions.json** &mdash; Atomic writes via temp-file-then-rename to prevent corruption
+- **goterm.db** &mdash; SQLite with sessions, messages tables
 - **transcripts/** &mdash; Append-only JSONL, one event per line, never rewritten
-- **memory/** &mdash; Keyword-indexed entries for cross-session context injection
 
 ## Compared to openclaw
 
@@ -174,7 +168,7 @@ All state lives under `~/.goterm/data/`:
 | Auth | API keys only | Claude CLI OAuth2 or API key |
 | Providers | 40+ (plugin system) | Claude (CLI OAuth + direct API) |
 | Channels | 20+ (plugin system) | Telegram + Web Dashboard + CLI |
-| Memory | LanceDB + embeddings | JSONL + keyword search |
+| Memory | LanceDB + embeddings | Claude CLI native (--resume) |
 | Config | ~200 fields | ~15 fields |
 | Target user | Teams, multi-tenant | Individual, single machine |
 

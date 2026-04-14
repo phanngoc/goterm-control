@@ -125,8 +125,8 @@ layout: default
       </div>
       <div class="feature-card">
         <div class="feature-icon yellow">&#x1F9E0;</div>
-        <h3>Persistent Memory</h3>
-        <p>Cross-session keyword memory automatically injects relevant context into every conversation. Your agent remembers across chats.</p>
+        <h3>Session Continuity</h3>
+        <p>Claude CLI session resumption and conversation history provide seamless context across interactions.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon blue">&#x26A1;</div>
@@ -178,7 +178,7 @@ layout: default
                        ┌────────────┼────────────┐
                        ▼            ▼            ▼
                   ┌─────────┐ ┌─────────┐ ┌──────────┐
-                  │ Context │ │ Memory  │ │Transcript│
+                  │ Context │ │Messages │ │Transcript│
                   └─────────┘ └─────────┘ └──────────┘
 </pre>
     </div>
