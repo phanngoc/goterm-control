@@ -34,10 +34,6 @@ session:
   data_dir: ""                   # Default: ~/.goterm/data
   idle_timeout: 30               # Minutes before auto-reset
 
-memory:
-  enabled: true
-  max_entries: 5                 # Memories injected per prompt
-
 security:
   allowed_user_ids: []           # Telegram user whitelist (empty = all)
 
@@ -82,15 +78,8 @@ models:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `data_dir` | string | `~/.goterm/data` | Directory for sessions, transcripts, and memory. |
+| `data_dir` | string | `~/.goterm/data` | Directory for sessions and transcripts. |
 | `idle_timeout` | int | `30` | Minutes before a session auto-resets. |
-
-### `memory`
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `true` | Enable cross-session keyword memory. |
-| `max_entries` | int | `5` | Maximum memories injected per prompt. |
 
 ### `security`
 
@@ -120,14 +109,12 @@ All persistent data is stored under the configured `session.data_dir` (default: 
 
 ```
 ~/.goterm/data/
-  sessions.json           # Session metadata (atomic writes)
+  goterm.db               # SQLite database (sessions, messages)
   transcripts/
     chat_<id>.jsonl       # Per-session conversation log
-  memory/
-    memory.jsonl          # Cross-session keyword memory
 ```
 
-> **Tip:** Back up `~/.goterm/data/` to preserve your conversation history and memories across reinstalls.
+> **Tip:** Back up `~/.goterm/data/` to preserve your conversation history across reinstalls.
 
 ## Gateway Options
 

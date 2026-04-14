@@ -30,15 +30,6 @@ Interact with your agent through three channels, all backed by the same gateway:
 - **Web Dashboard** &mdash; Real-time React SPA with session management
 - **CLI Chat** &mdash; Direct terminal interaction, no gateway needed
 
-### Cross-Session Memory
-
-BomClaw maintains a keyword-based memory system:
-
-- Memories persist across sessions in JSONL format
-- Up to 5 relevant memories injected per prompt
-- Keyword matching for contextual relevance
-- Stored at `~/.goterm/data/memory/memory.jsonl`
-
 ### Streaming Responses
 
 All channels support real-time streaming:
@@ -111,7 +102,7 @@ BomClaw intelligently manages the model's context window:
 - Uses ~80% of available context for assembled messages
 - Automatically trims old messages when budget is exceeded
 - Compacts (summarizes) conversation history as a last resort
-- System prompt + memory always included
+- System prompt always included
 - Token counting per model (different tokenizers)
 
 ## Per-Session Model Switching
