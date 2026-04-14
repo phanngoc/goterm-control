@@ -16,7 +16,6 @@ type Config struct {
 	Security SecurityConfig `yaml:"security"`
 	Tools    ToolsConfig    `yaml:"tools"`
 	Session  SessionConfig  `yaml:"session"`
-	Memory   MemoryConfig   `yaml:"memory"`
 }
 
 // ClaudeConfig is kept for backward compatibility — the claude CLI subprocess config.
@@ -70,11 +69,6 @@ type SessionConfig struct {
 	IdleTimeout int    `yaml:"idle_timeout"` // minutes
 }
 
-type MemoryConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	MaxEntries int  `yaml:"max_entries"`
-}
-
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -126,9 +120,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Session.IdleTimeout == 0 {
 		cfg.Session.IdleTimeout = 30
-	}
-	if cfg.Memory.MaxEntries == 0 {
-		cfg.Memory.MaxEntries = 5
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {

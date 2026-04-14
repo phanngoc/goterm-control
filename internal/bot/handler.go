@@ -15,7 +15,6 @@ import (
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
-	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -37,7 +36,6 @@ type Handler struct {
 	cfg        *config.Config
 	engine     *execution.Engine
 	transcript *transcript.Writer
-	memory     memory.MemoryBackend
 	messages   MessageStore // optional SQLite message store
 	resolver   *models.Resolver
 	queue      *msgqueue.Queue // debounce + collect layer
@@ -56,7 +54,6 @@ func NewHandler(
 	cfg *config.Config,
 	engine *execution.Engine,
 	transcriptWriter *transcript.Writer,
-	memoryStore memory.MemoryBackend,
 	messages MessageStore,
 	resolver *models.Resolver,
 	queue *msgqueue.Queue,
@@ -68,7 +65,6 @@ func NewHandler(
 		cfg:              cfg,
 		engine:           engine,
 		transcript:       transcriptWriter,
-		memory:           memoryStore,
 		messages:         messages,
 		resolver:         resolver,
 		queue:            queue,
@@ -284,20 +280,16 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 		return
 	}
 
-	memoryContext := ""
-	if h.memory != nil {
-		memoryContext = memory.BuildMemoryContext(h.memory, text, h.cfg.Memory.MaxEntries)
-	}
-
 	// Inject recent conversation history when starting a fresh session
 	// (e.g. after idle timeout reset) so Claude has context for follow-ups
 	// like "Run lại thử" after a previous "push crypto-radar" message.
+	historyContext := ""
 	if sess.GetSessionID() == "" {
-		memoryContext += h.buildHistoryContext(sess.ID, 8)
+		historyContext = h.buildHistoryContext(sess.ID, 8)
 	}
 
 	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
-		return h.runClaude(ctx, sess, chatID, modelID, text, memoryContext, placeholder)
+		return h.runClaude(ctx, sess, chatID, modelID, text, historyContext, placeholder)
 	})
 
 	if err != nil {
@@ -408,16 +400,6 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		if respText != "" {
 			if err := h.messages.Append(sess.ID, agent.Message{Role: "assistant", Content: respText}); err != nil {
 				log.Printf("handler: message store assistant error: %v", err)
-			}
-		}
-	}
-
-	// Extract and store memory
-	if h.memory != nil && respText != "" {
-		entry := memory.ExtractFacts(sess.ID, chatID, userText, respText)
-		if len(entry.Keywords) > 0 || len(entry.Facts) > 0 {
-			if err := h.memory.Append(entry); err != nil {
-				log.Printf("handler: memory append error: %v", err)
 			}
 		}
 	}

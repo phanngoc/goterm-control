@@ -190,8 +190,6 @@ func runGateway(args []string) {
 	// Gateway RPC server
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	startTime := time.Now()
-	// Memory store (SQLite with FTS5)
-	memoryStore := storage.NewMemoryStore(db)
 
 	deps := gateway.Deps{
 		Sessions: sessions,
@@ -199,7 +197,6 @@ func runGateway(args []string) {
 		Provider: provider,
 		System:   cfg.Claude.SystemPrompt,
 		DataDir:  cfg.Session.DataDir,
-		Memory:   memoryStore,
 		Uptime:   func() time.Duration { return time.Since(startTime) },
 	}
 

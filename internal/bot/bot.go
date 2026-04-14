@@ -10,7 +10,6 @@ import (
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
-	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -79,12 +78,6 @@ func New(cfg *config.Config) (*Bot, error) {
 	// Transcript writer (JSONL audit trail — kept alongside SQLite)
 	transcriptWriter := transcript.NewWriter(filepath.Join(cfg.Session.DataDir, "transcripts"))
 
-	// Memory store (SQLite with FTS5)
-	var memoryStore memory.MemoryBackend
-	if cfg.Memory.Enabled {
-		memoryStore = storage.NewMemoryStore(db)
-	}
-
 	// Model resolver — builtin Claude models + custom models from config
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
 	defaultModel := resolver.Resolve(0)
@@ -109,7 +102,6 @@ func New(cfg *config.Config) (*Bot, error) {
 		cfg:              cfg,
 		engine:           engine,
 		transcript:       transcriptWriter,
-		memory:           memoryStore,
 		messages:         messageStore,
 		resolver:         resolver,
 		approvalRequests: make(map[string]chan bool),
