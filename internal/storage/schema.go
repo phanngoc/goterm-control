@@ -35,31 +35,6 @@ var ddl = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id)`,
 
-	`CREATE TABLE IF NOT EXISTS memory (
-		id         TEXT PRIMARY KEY,
-		created_at TEXT NOT NULL,
-		session_id TEXT NOT NULL,
-		chat_id    INTEGER DEFAULT 0,
-		facts      TEXT NOT NULL,
-		keywords   TEXT NOT NULL,
-		summary    TEXT DEFAULT ''
-	)`,
-	`CREATE INDEX IF NOT EXISTS idx_memory_chat ON memory(chat_id, created_at DESC)`,
-
-	`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-		keywords, facts, summary, content=memory, content_rowid=rowid
-	)`,
-
-	// FTS sync triggers
-	`CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
-		INSERT INTO memory_fts(rowid, keywords, facts, summary)
-		VALUES (new.rowid, new.keywords, new.facts, new.summary);
-	END`,
-
-	`CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
-		INSERT INTO memory_fts(memory_fts, rowid, keywords, facts, summary)
-		VALUES ('delete', old.rowid, old.keywords, old.facts, old.summary);
-	END`,
 }
 
 // migrate creates tables and imports legacy data if needed.
