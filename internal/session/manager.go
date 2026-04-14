@@ -1,24 +1,34 @@
 package session
 
 import (
+	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
 
-// SessionPersister is the interface for session persistence backends.
-// Both the JSON file Store and SQLite store implement this.
-type SessionPersister interface {
-	Load() (map[int64]*Session, error)
-	Save(sessions map[int64]*Session) error
+// MaxSessionsPerChat is the maximum number of sessions allowed per chat.
+const MaxSessionsPerChat = 20
+
+// ChatState tracks all sessions and the active session for a single chat.
+type ChatState struct {
+	ActiveSessionID string
+	NextSeq         int
+	Sessions        map[string]*Session // keyed by session ID
 }
 
-// Manager stores sessions keyed by chat ID with disk persistence and idle reset.
+// SessionPersister is the interface for session persistence backends.
+type SessionPersister interface {
+	Load() (map[int64]*ChatState, error)
+	Save(chats map[int64]*ChatState) error
+}
+
+// Manager stores sessions keyed by chat ID with disk persistence.
 type Manager struct {
-	mu          sync.RWMutex
-	sessions    map[int64]*Session
-	store       SessionPersister
-	idleTimeout time.Duration
+	mu    sync.RWMutex
+	chats map[int64]*ChatState
+	store SessionPersister
 
 	// Debounced save: after any mutation, schedule a save after saveCooldown.
 	saveMu    sync.Mutex
@@ -26,13 +36,12 @@ type Manager struct {
 	dirty     bool
 }
 
-// NewManager creates a manager with persistence and idle timeout.
+// NewManager creates a manager with persistence.
 // If store is nil, sessions are in-memory only.
-func NewManager(store SessionPersister, idleTimeout time.Duration) *Manager {
+func NewManager(store SessionPersister) *Manager {
 	m := &Manager{
-		sessions:    make(map[int64]*Session),
-		store:       store,
-		idleTimeout: idleTimeout,
+		chats: make(map[int64]*ChatState),
+		store: store,
 	}
 
 	if store != nil {
@@ -40,43 +49,142 @@ func NewManager(store SessionPersister, idleTimeout time.Duration) *Manager {
 		if err != nil {
 			log.Printf("session: failed to load from disk: %v", err)
 		} else {
-			m.sessions = loaded
-			log.Printf("session: loaded %d sessions from disk", len(loaded))
+			m.chats = loaded
+			total := 0
+			for _, cs := range loaded {
+				total += len(cs.Sessions)
+			}
+			log.Printf("session: loaded %d chats (%d sessions) from disk", len(loaded), total)
 		}
 	}
 
 	return m
 }
 
-// Get returns existing session or creates a new one.
-// Automatically resets sessions that have been idle longer than idleTimeout.
+// Get returns the active session for a chat, creating a new ChatState if needed.
+// This is the hot path — all existing callers continue to work unchanged.
 func (m *Manager) Get(chatID int64) *Session {
 	m.mu.RLock()
-	s, ok := m.sessions[chatID]
+	cs, ok := m.chats[chatID]
 	m.mu.RUnlock()
 
 	if ok {
-		if m.idleTimeout > 0 && time.Since(s.UpdatedAt) > m.idleTimeout {
-			log.Printf("session: idle reset chat_%d (idle %s)", chatID, time.Since(s.UpdatedAt).Round(time.Second))
-			s.Reset()
-			m.scheduleSave()
+		if s, exists := cs.Sessions[cs.ActiveSessionID]; exists {
+			return s
 		}
-		return s
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Double-check after acquiring write lock
-	if s, ok = m.sessions[chatID]; ok {
-		return s
+	if cs, ok = m.chats[chatID]; ok {
+		if s, exists := cs.Sessions[cs.ActiveSessionID]; exists {
+			return s
+		}
 	}
-	s = New(chatID)
-	m.sessions[chatID] = s
+
+	s := New(chatID)
+	m.chats[chatID] = &ChatState{
+		ActiveSessionID: s.ID,
+		NextSeq:         1,
+		Sessions:        map[string]*Session{s.ID: s},
+	}
 	m.scheduleSave()
 	return s
 }
 
-// ReloadFromDisk re-reads sessions.json, merging any new sessions from other processes.
+// GetByID returns a specific session by its ID, or nil if not found.
+func (m *Manager) GetByID(sessionID string) *Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, cs := range m.chats {
+		if s, ok := cs.Sessions[sessionID]; ok {
+			return s
+		}
+	}
+	return nil
+}
+
+// ListForChat returns all sessions for a chat, sorted by UpdatedAt descending.
+func (m *Manager) ListForChat(chatID int64) []*Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	cs, ok := m.chats[chatID]
+	if !ok {
+		return nil
+	}
+
+	out := make([]*Session, 0, len(cs.Sessions))
+	for _, s := range cs.Sessions {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out
+}
+
+// NewSession creates a new session for a chat and makes it active.
+// Returns error if the session limit is exceeded.
+func (m *Manager) NewSession(chatID int64) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cs, ok := m.chats[chatID]
+	if !ok {
+		// No chat state yet — create one with the first session.
+		s := New(chatID)
+		m.chats[chatID] = &ChatState{
+			ActiveSessionID: s.ID,
+			NextSeq:         1,
+			Sessions:        map[string]*Session{s.ID: s},
+		}
+		m.scheduleSave()
+		return s, nil
+	}
+
+	if len(cs.Sessions) >= MaxSessionsPerChat {
+		return nil, fmt.Errorf("session limit reached (%d)", MaxSessionsPerChat)
+	}
+
+	seq := cs.NextSeq
+	s := NewWithSeq(chatID, seq)
+	cs.Sessions[s.ID] = s
+	cs.ActiveSessionID = s.ID
+	cs.NextSeq = seq + 1
+	m.scheduleSave()
+	return s, nil
+}
+
+// SwitchActive changes the active session for a chat.
+func (m *Manager) SwitchActive(chatID int64, sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cs, ok := m.chats[chatID]
+	if !ok {
+		return fmt.Errorf("no sessions for chat %d", chatID)
+	}
+	if _, exists := cs.Sessions[sessionID]; !exists {
+		return fmt.Errorf("session %s not found in chat %d", sessionID, chatID)
+	}
+	cs.ActiveSessionID = sessionID
+	m.scheduleSave()
+	return nil
+}
+
+// ActiveSessionID returns the active session ID for a chat, or "".
+func (m *Manager) ActiveSessionID(chatID int64) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if cs, ok := m.chats[chatID]; ok {
+		return cs.ActiveSessionID
+	}
+	return ""
+}
+
+// ReloadFromDisk re-reads stored data, merging any new sessions from other processes.
 func (m *Manager) ReloadFromDisk() {
 	if m.store == nil {
 		return
@@ -87,38 +195,35 @@ func (m *Manager) ReloadFromDisk() {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for chatID, s := range loaded {
-		if _, ok := m.sessions[chatID]; !ok {
-			m.sessions[chatID] = s
-		} else if s.UpdatedAt.After(m.sessions[chatID].UpdatedAt) {
-			// Update if disk version is newer (another process wrote it)
-			existing := m.sessions[chatID]
-			existing.ClaudeSessionID = s.ClaudeSessionID
-			existing.MessageCount = s.MessageCount
-			existing.InputTokens = s.InputTokens
-			existing.OutputTokens = s.OutputTokens
-			existing.UpdatedAt = s.UpdatedAt
+	for chatID, lcs := range loaded {
+		if _, ok := m.chats[chatID]; !ok {
+			m.chats[chatID] = lcs
 		}
 	}
 }
 
-// List returns all active sessions.
+// List returns all sessions across all chats.
 func (m *Manager) List() []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]*Session, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		out = append(out, s)
+	var out []*Session
+	for _, cs := range m.chats {
+		for _, s := range cs.Sessions {
+			out = append(out, s)
+		}
 	}
 	return out
 }
 
-// Reset clears history for a chat.
+// Reset clears history for the active session in a chat.
 func (m *Manager) Reset(chatID int64) {
 	m.mu.RLock()
-	s, ok := m.sessions[chatID]
+	cs, ok := m.chats[chatID]
 	m.mu.RUnlock()
-	if ok {
+	if !ok {
+		return
+	}
+	if s, exists := cs.Sessions[cs.ActiveSessionID]; exists {
 		s.Reset()
 		m.scheduleSave()
 	}
@@ -143,13 +248,17 @@ func (m *Manager) SaveNow() {
 	m.saveMu.Unlock()
 
 	m.mu.RLock()
-	sessions := m.sessions
+	chats := m.chats
 	m.mu.RUnlock()
 
-	if err := m.store.Save(sessions); err != nil {
+	if err := m.store.Save(chats); err != nil {
 		log.Printf("session: save error: %v", err)
 	} else {
-		log.Printf("session: saved %d sessions to disk", len(sessions))
+		total := 0
+		for _, cs := range chats {
+			total += len(cs.Sessions)
+		}
+		log.Printf("session: saved %d chats (%d sessions) to disk", len(chats), total)
 	}
 }
 

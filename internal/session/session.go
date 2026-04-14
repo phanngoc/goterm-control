@@ -17,6 +17,8 @@ type Session struct {
 	InputTokens     int       `json:"input_tokens"`
 	OutputTokens    int       `json:"output_tokens"`
 	CompactSummary  string    `json:"compact_summary,omitempty"`
+	Label           string    `json:"label,omitempty"`
+	Seq             int       `json:"seq"`
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
@@ -33,6 +35,8 @@ type SessionSnapshot struct {
 	InputTokens     int
 	OutputTokens    int
 	CompactSummary  string
+	Label           string
+	Seq             int
 }
 
 func New(chatID int64) *Session {
@@ -40,6 +44,19 @@ func New(chatID int64) *Session {
 	return &Session{
 		ID:        fmt.Sprintf("chat_%d", chatID),
 		ChatID:    chatID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+}
+
+// NewWithSeq creates a session with a sequence number.
+// ID format: chat_<chatID>_<seq> (e.g. chat_123_1).
+func NewWithSeq(chatID int64, seq int) *Session {
+	now := time.Now()
+	return &Session{
+		ID:        fmt.Sprintf("chat_%d_%d", chatID, seq),
+		ChatID:    chatID,
+		Seq:       seq,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -81,6 +98,21 @@ func (s *Session) AddTokens(input, output int) {
 	defer s.mu.Unlock()
 	s.InputTokens += input
 	s.OutputTokens += output
+	s.UpdatedAt = time.Now()
+}
+
+// GetLabel returns the human-readable session label.
+func (s *Session) GetLabel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Label
+}
+
+// SetLabel sets the human-readable session label.
+func (s *Session) SetLabel(label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Label = label
 	s.UpdatedAt = time.Now()
 }
 
@@ -126,11 +158,13 @@ func (s *Session) Snapshot() SessionSnapshot {
 		InputTokens:     s.InputTokens,
 		OutputTokens:    s.OutputTokens,
 		CompactSummary:  s.CompactSummary,
+		Label:           s.Label,
+		Seq:             s.Seq,
 	}
 }
 
 // NewFromDB creates a Session from database fields (used by SQLite store).
-func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessionID string, msgCount, inTok, outTok int, compactSummary string) *Session {
+func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessionID string, msgCount, inTok, outTok int, compactSummary, label string, seq int) *Session {
 	return &Session{
 		ID:              id,
 		ChatID:          chatID,
@@ -141,6 +175,8 @@ func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessio
 		InputTokens:     inTok,
 		OutputTokens:    outTok,
 		CompactSummary:  compactSummary,
+		Label:           label,
+		Seq:             seq,
 	}
 }
 

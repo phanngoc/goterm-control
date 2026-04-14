@@ -33,7 +33,7 @@ func TestSchemaCreation(t *testing.T) {
 	db := testDB(t)
 
 	// Verify tables exist
-	tables := []string{"meta", "sessions", "messages"}
+	tables := []string{"meta", "sessions", "messages", "chat_state"}
 	for _, table := range tables {
 		var name string
 		err := db.conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
@@ -54,33 +54,48 @@ func TestSchemaCreation(t *testing.T) {
 
 // --- Session Store Tests ---
 
+// helper to wrap a single session into ChatState map for Save().
+func chatStates(sessions ...*session.Session) map[int64]*session.ChatState {
+	chats := make(map[int64]*session.ChatState)
+	for _, s := range sessions {
+		cs, ok := chats[s.ChatID]
+		if !ok {
+			cs = &session.ChatState{
+				ActiveSessionID: s.ID,
+				NextSeq:         1,
+				Sessions:        make(map[string]*session.Session),
+			}
+			chats[s.ChatID] = cs
+		}
+		cs.Sessions[s.ID] = s
+	}
+	return chats
+}
+
 func TestSessionStoreRoundtrip(t *testing.T) {
 	db := testDB(t)
 	store := NewSessionStore(db)
 
-	// Save sessions
-	sessions := map[int64]*session.Session{
-		100: session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_abc", 5, 1000, 500, "summary text"),
-		200: session.NewFromDB("chat_200", 200, time.Now(), time.Now(), "", 0, 0, 0, ""),
-	}
+	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_abc", 5, 1000, 500, "summary text", "First chat", 0)
+	s2 := session.NewFromDB("chat_200", 200, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
 
-	if err := store.Save(sessions); err != nil {
+	if err := store.Save(chatStates(s1, s2)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Load sessions
 	loaded, err := store.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
 	if len(loaded) != 2 {
-		t.Fatalf("loaded %d sessions, want 2", len(loaded))
+		t.Fatalf("loaded %d chats, want 2", len(loaded))
 	}
 
-	s := loaded[100]
-	if s.ID != "chat_100" {
-		t.Errorf("ID = %q, want chat_100", s.ID)
+	cs := loaded[100]
+	s := cs.Sessions["chat_100"]
+	if s == nil {
+		t.Fatal("session chat_100 not found")
 	}
 	if s.GetSessionID() != "claude_abc" {
 		t.Errorf("ClaudeSessionID = %q, want claude_abc", s.GetSessionID())
@@ -91,29 +106,70 @@ func TestSessionStoreRoundtrip(t *testing.T) {
 	if s.GetCompactSummary() != "summary text" {
 		t.Errorf("CompactSummary = %q, want 'summary text'", s.GetCompactSummary())
 	}
+	if s.GetLabel() != "First chat" {
+		t.Errorf("Label = %q, want 'First chat'", s.GetLabel())
+	}
 }
 
 func TestSessionStoreUpsert(t *testing.T) {
 	db := testDB(t)
 	store := NewSessionStore(db)
 
-	sessions := map[int64]*session.Session{
-		100: session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "v1", 1, 100, 50, ""),
-	}
-	store.Save(sessions)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "v1", 1, 100, 50, "", "", 0)
+	store.Save(chatStates(s))
 
 	// Update
-	sessions[100].SetSessionID("v2")
-	sessions[100].IncrementMessages()
-	store.Save(sessions)
+	s.SetSessionID("v2")
+	s.IncrementMessages()
+	store.Save(chatStates(s))
 
 	loaded, _ := store.Load()
-	s := loaded[100]
-	if s.GetSessionID() != "v2" {
-		t.Errorf("updated ClaudeSessionID = %q, want v2", s.GetSessionID())
+	cs := loaded[100]
+	ls := cs.Sessions["chat_100"]
+	if ls.GetSessionID() != "v2" {
+		t.Errorf("updated ClaudeSessionID = %q, want v2", ls.GetSessionID())
 	}
-	if s.GetMessageCount() != 2 {
-		t.Errorf("updated MessageCount = %d, want 2", s.GetMessageCount())
+	if ls.GetMessageCount() != 2 {
+		t.Errorf("updated MessageCount = %d, want 2", ls.GetMessageCount())
+	}
+}
+
+func TestSessionStoreMultipleSessionsPerChat(t *testing.T) {
+	db := testDB(t)
+	store := NewSessionStore(db)
+
+	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_1", 5, 100, 50, "", "Session 1", 0)
+	s2 := session.NewFromDB("chat_100_1", 100, time.Now(), time.Now(), "claude_2", 3, 200, 80, "", "Session 2", 1)
+
+	chats := map[int64]*session.ChatState{
+		100: {
+			ActiveSessionID: "chat_100_1",
+			NextSeq:         2,
+			Sessions:        map[string]*session.Session{"chat_100": s1, "chat_100_1": s2},
+		},
+	}
+
+	if err := store.Save(chats); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cs := loaded[100]
+	if cs == nil {
+		t.Fatal("chat 100 not found")
+	}
+	if len(cs.Sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2", len(cs.Sessions))
+	}
+	if cs.ActiveSessionID != "chat_100_1" {
+		t.Errorf("ActiveSessionID = %q, want chat_100_1", cs.ActiveSessionID)
+	}
+	if cs.NextSeq != 2 {
+		t.Errorf("NextSeq = %d, want 2", cs.NextSeq)
 	}
 }
 
@@ -124,13 +180,9 @@ func TestMessageStoreRoundtrip(t *testing.T) {
 	sessStore := NewSessionStore(db)
 	msgStore := NewMessageStore(db)
 
-	// Need a session first (foreign key)
-	sessions := map[int64]*session.Session{
-		100: session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, ""),
-	}
-	sessStore.Save(sessions)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	sessStore.Save(chatStates(s))
 
-	// Append messages
 	msgs := []agent.Message{
 		{Role: "user", Content: "Hello, how are you?"},
 		{Role: "assistant", Content: "I'm doing well, thanks!"},
@@ -143,7 +195,6 @@ func TestMessageStoreRoundtrip(t *testing.T) {
 		t.Fatalf("AppendBatch: %v", err)
 	}
 
-	// Load all
 	loaded, err := msgStore.LoadHistory("chat_100", 0)
 	if err != nil {
 		t.Fatalf("LoadHistory: %v", err)
@@ -165,17 +216,13 @@ func TestMessageStoreLimit(t *testing.T) {
 	sessStore := NewSessionStore(db)
 	msgStore := NewMessageStore(db)
 
-	sessions := map[int64]*session.Session{
-		100: session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, ""),
-	}
-	sessStore.Save(sessions)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	sessStore.Save(chatStates(s))
 
-	// Insert 10 messages
 	for i := 0; i < 10; i++ {
 		msgStore.Append("chat_100", agent.Message{Role: "user", Content: "msg"})
 	}
 
-	// Load last 3
 	loaded, err := msgStore.LoadHistory("chat_100", 3)
 	if err != nil {
 		t.Fatalf("LoadHistory limit: %v", err)
@@ -190,10 +237,8 @@ func TestMessageStoreDeleteBySession(t *testing.T) {
 	sessStore := NewSessionStore(db)
 	msgStore := NewMessageStore(db)
 
-	sessions := map[int64]*session.Session{
-		100: session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, ""),
-	}
-	sessStore.Save(sessions)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	sessStore.Save(chatStates(s))
 
 	msgStore.Append("chat_100", agent.Message{Role: "user", Content: "hello"})
 	msgStore.DeleteBySession("chat_100")
@@ -230,15 +275,17 @@ func TestMigrateFromJSON(t *testing.T) {
 
 	// Verify sessions imported
 	sessStore := NewSessionStore(db)
-	sessions, err := sessStore.Load()
+	chats, err := sessStore.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(sessions) != 1 {
-		t.Fatalf("imported %d sessions, want 1", len(sessions))
+	if len(chats) != 1 {
+		t.Fatalf("imported %d chats, want 1", len(chats))
 	}
-	if sessions[100].GetSessionID() != "sess_abc" {
-		t.Errorf("ClaudeSessionID = %q, want sess_abc", sessions[100].GetSessionID())
+	cs := chats[100]
+	s := cs.Sessions[cs.ActiveSessionID]
+	if s.GetSessionID() != "sess_abc" {
+		t.Errorf("ClaudeSessionID = %q, want sess_abc", s.GetSessionID())
 	}
 }
 
@@ -246,7 +293,6 @@ func TestOpenIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	// Open twice — second open should not fail or re-create
 	db1, err := Open(path)
 	if err != nil {
 		t.Fatalf("first Open: %v", err)

@@ -185,7 +185,7 @@ func runGateway(args []string) {
 	defer db.Close()
 
 	// Session manager (SQLite-backed)
-	sessions := session.NewManager(storage.NewSessionStore(db), 0)
+	sessions := session.NewManager(storage.NewSessionStore(db))
 
 	// Gateway RPC server
 	addr := fmt.Sprintf("%s:%d", *bind, *port)

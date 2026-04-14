@@ -59,17 +59,25 @@ func (db *DB) importSessions(path string) (int, error) {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO sessions
-		(id, chat_id, created_at, updated_at, claude_session_id, message_count, input_tokens, output_tokens)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	sessStmt, err := tx.Prepare(`INSERT OR IGNORE INTO sessions
+		(id, chat_id, created_at, updated_at, claude_session_id, message_count, input_tokens, output_tokens, label, seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0)`)
 	if err != nil {
 		return 0, err
 	}
-	defer stmt.Close()
+	defer sessStmt.Close()
+
+	csStmt, err := tx.Prepare(`INSERT OR IGNORE INTO chat_state
+		(chat_id, active_session_id, next_seq)
+		VALUES (?, ?, 1)`)
+	if err != nil {
+		return 0, err
+	}
+	defer csStmt.Close()
 
 	count := 0
 	for _, s := range raw {
-		_, err := stmt.Exec(
+		_, err := sessStmt.Exec(
 			s.ID, s.ChatID,
 			s.CreatedAt.Format(time.RFC3339), s.UpdatedAt.Format(time.RFC3339),
 			s.ClaudeSessionID, s.MessageCount, s.InputTokens, s.OutputTokens,
@@ -78,6 +86,7 @@ func (db *DB) importSessions(path string) (int, error) {
 			log.Printf("storage: skip session %s: %v", s.ID, err)
 			continue
 		}
+		csStmt.Exec(s.ChatID, s.ID)
 		count++
 	}
 

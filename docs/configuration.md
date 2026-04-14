@@ -32,7 +32,7 @@ models:
 
 session:
   data_dir: ""                   # Default: ~/.goterm/data
-  idle_timeout: 30               # Minutes before auto-reset
+  # Sessions persist until explicit /reset command.
 
 security:
   allowed_user_ids: []           # Telegram user whitelist (empty = all)
@@ -79,7 +79,6 @@ models:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `data_dir` | string | `~/.goterm/data` | Directory for sessions and transcripts. |
-| `idle_timeout` | int | `30` | Minutes before a session auto-resets. |
 
 ### `security`
 

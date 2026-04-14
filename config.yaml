@@ -86,7 +86,7 @@ models:
 
 session:
   data_dir: ""           # default: ~/.goterm/data
-  idle_timeout: 30       # minutes before session auto-reset
+  # Sessions persist until explicit /reset command — no auto-reset on idle.
 
 memory:
   enabled: true

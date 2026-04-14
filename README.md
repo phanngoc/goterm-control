@@ -251,11 +251,13 @@ Once the gateway is running with a Telegram token:
 | Command | Description |
 |---|---|
 | `/start` | Show welcome and help |
+| `/sessions` | List and switch between sessions |
+| `/new` | Start a new conversation session |
 | `/models` | List available models with pricing |
 | `/model <name>` | Switch model (e.g. `/model opus`, `/model haiku`) |
 | `/model default` | Reset to default model |
 | `/status` | Show session info, token usage, queue depth |
-| `/reset` | Clear conversation history |
+| `/reset` | Clear current session history |
 | `/cancel` | Cancel in-flight request |
 
 ## Architecture
@@ -435,7 +437,7 @@ models:
 
 session:
   data_dir: ""                   # default: ~/.goterm/data
-  idle_timeout: 30               # minutes before auto-reset
+  # Sessions persist until explicit /reset command.
 
 security:
   allowed_user_ids: []           # Telegram user whitelist (empty = allow all)
