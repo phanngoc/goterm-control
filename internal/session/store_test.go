@@ -140,6 +140,43 @@ func TestManagerMultiSession(t *testing.T) {
 	}
 }
 
+// Regression test: if ActiveSessionID points to a non-existent session
+// (e.g. stale chat_state from migration), Get() must recover gracefully
+// instead of wiping all existing sessions in the ChatState.
+func TestManagerGetRecoversFromStaleActiveID(t *testing.T) {
+	mgr := NewManager(nil)
+
+	now := time.Now()
+	older := &Session{ID: "chat_100_old", ChatID: 100, ClaudeSessionID: "claude-old", UpdatedAt: now.Add(-time.Hour)}
+	newer := &Session{ID: "chat_100_new", ChatID: 100, ClaudeSessionID: "claude-new", UpdatedAt: now}
+
+	// Manually inject ChatState with a stale ActiveSessionID
+	mgr.chats[100] = &ChatState{
+		ActiveSessionID: "chat_100_missing", // does not exist in Sessions
+		NextSeq:         3,
+		Sessions: map[string]*Session{
+			"chat_100_old": older,
+			"chat_100_new": newer,
+		},
+	}
+
+	got := mgr.Get(100)
+	if got == nil {
+		t.Fatal("expected recovery, got nil session")
+	}
+	if got.ID != "chat_100_new" {
+		t.Errorf("expected most recent session chat_100_new, got %s", got.ID)
+	}
+
+	// Original sessions should still be present
+	if mgr.GetByID("chat_100_old") == nil {
+		t.Error("chat_100_old session lost after recovery")
+	}
+	if mgr.GetByID("chat_100_new") == nil {
+		t.Error("chat_100_new session lost after recovery")
+	}
+}
+
 func TestManagerSessionLimit(t *testing.T) {
 	mgr := NewManager(nil) // in-memory only
 
