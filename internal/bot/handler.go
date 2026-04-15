@@ -160,7 +160,10 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 		h.sendText(chatID, "🛑 Request cancelled.")
 
 	default:
-		h.sendText(chatID, fmt.Sprintf("Unknown command: /%s\n\nTry /start for help.", msg.Command()))
+		// Unknown slash commands are forwarded to Claude as-is.
+		// This lets users invoke custom Claude Code skills like /retro,
+		// /vops:plan, etc. defined in .claude/commands/.
+		h.handleMessage(msg)
 	}
 }
 
