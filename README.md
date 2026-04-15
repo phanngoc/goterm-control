@@ -426,8 +426,7 @@ Edit `config.yaml`:
 claude:
   api_key: ""                    # auto-detected from claude CLI OAuth; or set ANTHROPIC_API_KEY
   model: "claude-sonnet-4-6"     # default model
-  system_prompt: |
-    You are an AI assistant with full control over this computer...
+  system_prompt: ""  # auto-detected per OS; set to override
 
 models:
   default: ""                    # override claude.model

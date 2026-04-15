@@ -114,6 +114,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Claude.ExecutionTimeout == 0 {
 		cfg.Claude.ExecutionTimeout = 20
 	}
+	if strings.TrimSpace(cfg.Claude.SystemPrompt) == "" {
+		cfg.Claude.SystemPrompt = DefaultSystemPrompt()
+	}
 	if cfg.Tools.ShellTimeout == 0 {
 		cfg.Tools.ShellTimeout = 60
 	}
