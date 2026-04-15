@@ -81,8 +81,25 @@ func (m *Manager) Get(chatID int64) *Session {
 		if s, exists := cs.Sessions[cs.ActiveSessionID]; exists {
 			return s
 		}
+		// ChatState exists but ActiveSessionID is stale — recover by picking
+		// the most recently updated session instead of wiping all sessions.
+		if len(cs.Sessions) > 0 {
+			cs.ActiveSessionID = pickMostRecentSession(cs.Sessions)
+			m.scheduleSave()
+			return cs.Sessions[cs.ActiveSessionID]
+		}
+		// No sessions left in this ChatState — create a new one in place.
+		s := New(chatID)
+		cs.Sessions[s.ID] = s
+		cs.ActiveSessionID = s.ID
+		if cs.NextSeq < 1 {
+			cs.NextSeq = 1
+		}
+		m.scheduleSave()
+		return s
 	}
 
+	// Brand new chat — create ChatState with first session.
 	s := New(chatID)
 	m.chats[chatID] = &ChatState{
 		ActiveSessionID: s.ID,
@@ -91,6 +108,19 @@ func (m *Manager) Get(chatID int64) *Session {
 	}
 	m.scheduleSave()
 	return s
+}
+
+// pickMostRecentSession returns the ID of the most recently updated session.
+func pickMostRecentSession(sessions map[string]*Session) string {
+	var bestID string
+	var bestTime time.Time
+	for id, s := range sessions {
+		if s.UpdatedAt.After(bestTime) {
+			bestTime = s.UpdatedAt
+			bestID = id
+		}
+	}
+	return bestID
 }
 
 // GetByID returns a specific session by its ID, or nil if not found.
