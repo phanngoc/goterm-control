@@ -1,10 +1,27 @@
 ---
-layout: default
 title: Changelog
-nav_order: 10
+layout: default
 ---
 
+<section class="doc-page">
+<div class="doc-content" markdown="1">
+
 # Changelog
+
+<p class="lead">Release notes for BomClaw. The current release is <strong>v0.2.0</strong> — tagged 2026-04-25. <a href="https://github.com/phanngoc/goterm-control/releases/tag/v0.2.0" target="_blank" rel="noopener">View on GitHub →</a></p>
+
+## Latest release
+
+**v0.2.0** rolls up every change since v0.1.0: multi-session Telegram UI, SQLite hybrid storage, live `/status` reporting, rolling tool-progress window, typing + streamer heartbeat, session recovery fix, and the memory-package removal.
+
+- **Multi-session** — `/sessions` inline keyboard, `/new`, tap to switch
+- **Live `/status`** — elapsed time, last tool call, collected/queued message counts
+- **SQLite storage** — sessions + messages persisted in `~/.goterm/data/goterm.db`
+- **Rolling tool progress** — first 8 tools + sampled checkpoints every 10
+- **Configurable execution timeout** — `claude.execution_timeout` (default 20 min)
+- **Typing + heartbeat** — Telegram `typing…` keepalive + elapsed-time placeholder while Claude thinks
+
+Full notes below.
 
 ## [0.2.0] - 2026-04-25
 
@@ -98,3 +115,6 @@ Migrated from file-based storage (JSON + JSONL) to SQLite hybrid model for impro
 - **Dual-write**: JSONL transcripts still written alongside SQLite for audit compliance
 - **Backward compatible**: existing `*session.Store` and `*memory.Store` still satisfy the new interfaces
 - **Binary size**: +15MB (pure-Go SQLite driver, no CGO dependency)
+
+</div>
+</section>
