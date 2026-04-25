@@ -72,6 +72,26 @@ func (c *Collector) Done(chatID int64) (followup string, ok bool) {
 	return followup, true
 }
 
+// PendingCount returns the number of messages collected (queued) while the
+// agent was busy for chatID. Excludes any currently-running request.
+func (c *Collector) PendingCount(chatID int64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cs, ok := c.state[chatID]
+	if !ok {
+		return 0
+	}
+	return len(cs.collected)
+}
+
+// Busy reports whether the agent is currently executing for chatID.
+func (c *Collector) Busy(chatID int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cs, ok := c.state[chatID]
+	return ok && cs.busy
+}
+
 // Cancel clears collected messages for chatID.
 func (c *Collector) Cancel(chatID int64) {
 	c.mu.Lock()

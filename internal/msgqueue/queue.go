@@ -47,6 +47,11 @@ func (q *Queue) Cancel(chatID int64) {
 	q.collector.Cancel(chatID)
 }
 
+// PendingCount returns how many messages are waiting in the collector for chatID.
+func (q *Queue) PendingCount(chatID int64) int {
+	return q.collector.PendingCount(chatID)
+}
+
 // Close stops the debouncer.
 func (q *Queue) Close() {
 	q.debouncer.Close()
