@@ -185,21 +185,56 @@ func (h *Handler) showStatus(chatID int64) {
 		label = sess.ID
 	}
 	sessionCount := len(h.sessions.ListForChat(chatID))
-	h.sendText(chatID, fmt.Sprintf(
-		"📊 *Session Status*\n\n"+
-			"Chat ID: `%d`\n"+
+
+	var sb strings.Builder
+	sb.WriteString("📊 *Session Status*\n\n")
+
+	// Live run line — shows what the agent is doing right now so a long task
+	// doesn't look like a frozen bot. Mirrors openclaw's taskLine pattern.
+	info := sess.RunInfo()
+	collected := 0
+	if h.queue != nil {
+		collected = h.queue.PendingCount(chatID)
+	}
+	queueDepth := h.engine.QueueDepth(chatID)
+
+	switch {
+	case info.Running:
+		elapsed := time.Since(info.StartedAt).Truncate(time.Second)
+		sb.WriteString(fmt.Sprintf("🔄 *Running* · %s · tools: %d", elapsed, info.ToolCount))
+		if info.LastTool != "" {
+			sb.WriteString(fmt.Sprintf("\nLast tool: `%s`", info.LastTool))
+			if !info.LastToolAt.IsZero() {
+				sb.WriteString(fmt.Sprintf(" (%s ago)", time.Since(info.LastToolAt).Truncate(time.Second)))
+			}
+		}
+		if info.CurrentTask != "" {
+			sb.WriteString(fmt.Sprintf("\nTask: _%s_", info.CurrentTask))
+		}
+		if collected > 0 || queueDepth > 0 {
+			sb.WriteString(fmt.Sprintf("\nWaiting: %d collected · %d queued", collected, queueDepth))
+		}
+		sb.WriteString("\n\n")
+	case collected > 0 || queueDepth > 0:
+		sb.WriteString(fmt.Sprintf("⏳ *Pending* · %d collected · %d queued\n\n", collected, queueDepth))
+	default:
+		sb.WriteString("✅ *Idle*\n\n")
+	}
+
+	sb.WriteString(fmt.Sprintf(
+		"Chat ID: `%d`\n"+
 			"Active: %s\n"+
 			"Sessions: %d total\n"+
 			"Turns: %d\n"+
 			"Claude: `%s`\n"+
 			"Model: `%s`\n"+
-			"Tokens: %d in / %d out\n"+
-			"Queue: %d pending",
+			"Tokens: %d in / %d out",
 		chatID, label, sessionCount,
 		sess.GetMessageCount(), sessionID, modelName,
 		sess.InputTokens, sess.OutputTokens,
-		h.engine.QueueDepth(chatID),
 	))
+
+	h.sendText(chatID, sb.String())
 }
 
 func (h *Handler) handleModelsCommand(chatID int64) {
@@ -280,6 +315,10 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	// Cancel any in-flight request for this session
 	sess.Cancel()
 
+	// Track live run state so /status can report what the agent is doing.
+	sess.MarkRunning(truncateLabel(text, 60))
+	defer sess.MarkIdle()
+
 	// Configurable timeout prevents a stuck Claude CLI from blocking the queue
 	// lane forever. The user can still /cancel manually for shorter waits.
 	execTimeout := time.Duration(h.cfg.Claude.ExecutionTimeout) * time.Minute
@@ -356,8 +395,11 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		},
 		OnToolCall: func(name string, inputJSON string) {
 			addEvent(transcript.Event{Type: transcript.EventToolCall, ToolName: name, ToolInput: inputJSON})
+			label := toolLabel(name, inputJSON)
 			// Compact tool progress with short snippet: Bash(cd stock_d) → Read(main.go)
-			streamer.NoteTool(toolLabel(name, inputJSON))
+			streamer.NoteTool(label)
+			// Mirror to session so /status can show what's running right now.
+			sess.NoteTool(label)
 		},
 		OnToolResult: func(name string, toolResult tools.ToolResult) {
 			// Log to transcript only — tool results not shown to user

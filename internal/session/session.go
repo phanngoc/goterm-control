@@ -22,6 +22,24 @@ type Session struct {
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
+
+	// Live run state (not persisted) — populated while a request is executing
+	// so /status can report what the agent is currently doing.
+	runningSince time.Time `json:"-"`
+	currentTask  string    `json:"-"`
+	lastTool     string    `json:"-"`
+	lastToolAt   time.Time `json:"-"`
+	runToolCount int       `json:"-"`
+}
+
+// RunInfo is a snapshot of the live execution state for status reporting.
+type RunInfo struct {
+	Running      bool
+	StartedAt    time.Time
+	CurrentTask  string
+	LastTool     string
+	LastToolAt   time.Time
+	ToolCount    int
 }
 
 // SessionSnapshot is a mutex-free copy of session fields for persistence.
@@ -124,6 +142,62 @@ func (s *Session) Reset() {
 	s.ClaudeSessionID = ""
 	s.MessageCount = 0
 	s.UpdatedAt = time.Now()
+}
+
+// MarkRunning records that a request has started executing for this session.
+// task is a short label describing the current user prompt.
+func (s *Session) MarkRunning(task string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runningSince = time.Now()
+	s.currentTask = task
+	s.lastTool = ""
+	s.lastToolAt = time.Time{}
+	s.runToolCount = 0
+}
+
+// MarkIdle clears the live run state when a request finishes.
+func (s *Session) MarkIdle() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runningSince = time.Time{}
+	s.currentTask = ""
+	s.lastTool = ""
+	s.lastToolAt = time.Time{}
+	s.runToolCount = 0
+}
+
+// IsRunning reports whether a request is currently executing.
+func (s *Session) IsRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.runningSince.IsZero()
+}
+
+// NoteTool records the most recent tool invocation during the live run.
+func (s *Session) NoteTool(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runningSince.IsZero() {
+		return
+	}
+	s.lastTool = name
+	s.lastToolAt = time.Now()
+	s.runToolCount++
+}
+
+// RunInfo returns a snapshot of the live execution state.
+func (s *Session) RunInfo() RunInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return RunInfo{
+		Running:     !s.runningSince.IsZero(),
+		StartedAt:   s.runningSince,
+		CurrentTask: s.currentTask,
+		LastTool:    s.lastTool,
+		LastToolAt:  s.lastToolAt,
+		ToolCount:   s.runToolCount,
+	}
 }
 
 // SetCancel stores a cancel function for the current in-flight request.
