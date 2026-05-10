@@ -382,14 +382,24 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 	// Record user message
 	addEvent(transcript.Event{Type: transcript.EventUserMessage, Content: userText})
 
-	// Track assistant text for memory extraction
+	// assistantText accumulates ALL turns (for storage); turnText resets per
+	// iteration so the auto-continue heuristic only inspects the latest turn.
 	var assistantText strings.Builder
+	var turnText strings.Builder
 	var textMu sync.Mutex
+
+	// latestTodos holds the most recent TodoWrite snapshot from the model.
+	// Updated under textMu since OnToolCall and the loop body that reads it
+	// are technically separate happens-before edges (the CLI scanner goroutine
+	// has fully exited by the time we read between SendMessage calls, but we
+	// still take the lock for consistency with the other shared state).
+	var latestTodos []todoItem
 
 	cb := claude.StreamCallbacks{
 		OnText: func(chunk string) {
 			textMu.Lock()
 			assistantText.WriteString(chunk)
+			turnText.WriteString(chunk)
 			textMu.Unlock()
 			streamer.Write(chunk)
 		},
@@ -400,6 +410,14 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			streamer.NoteTool(label)
 			// Mirror to session so /status can show what's running right now.
 			sess.NoteTool(label)
+			// Snapshot the latest TodoWrite state for the auto-continue check.
+			if name == "TodoWrite" {
+				if todos := parseTodoWriteInput(inputJSON); todos != nil {
+					textMu.Lock()
+					latestTodos = todos
+					textMu.Unlock()
+				}
+			}
 		},
 		OnToolResult: func(name string, toolResult tools.ToolResult) {
 			// Log to transcript only — tool results not shown to user
@@ -422,19 +440,58 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		},
 	}
 
-	if err := h.claude.SendMessage(ctx, sess, modelID, userText, memoryContext, cb); err != nil {
-		if ctx.Err() != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				streamer.Write("\n\n⏰ Task timed out (10 min limit).")
+	currentText := userText
+	currentMemory := memoryContext
+	attempts := 0
+	for {
+		textMu.Lock()
+		turnText.Reset()
+		textMu.Unlock()
+
+		if err := h.claude.SendMessage(ctx, sess, modelID, currentText, currentMemory, cb); err != nil {
+			if ctx.Err() != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					streamer.Write("\n\n⏰ Task timed out.")
+				}
+				result.Status = execution.RunCanceled
+				streamer.Finalize()
+				return result, nil
 			}
-			result.Status = execution.RunCanceled
-			streamer.Finalize()
-			return result, nil
+			log.Printf("claude error: %v", err)
+			streamer.Write(fmt.Sprintf("\n\n❌ Error: %v", err))
+			result.Status = execution.RunFailed
+			result.Error = err
+			break
 		}
-		log.Printf("claude error: %v", err)
-		streamer.Write(fmt.Sprintf("\n\n❌ Error: %v", err))
-		result.Status = execution.RunFailed
-		result.Error = err
+
+		if attempts >= maxAutoContinue {
+			break
+		}
+
+		textMu.Lock()
+		pending := pendingTodos(latestTodos)
+		lastTurn := turnText.String()
+		textMu.Unlock()
+
+		if !shouldAutoContinue(lastTurn, pending) {
+			break
+		}
+
+		// Visible marker so the user sees a continuation rather than a
+		// silent extra round of tool calls.
+		marker := fmt.Sprintf("\n\n_…auto-continue (%d todo còn lại)…_\n\n", len(pending))
+		streamer.Write(marker)
+		textMu.Lock()
+		assistantText.WriteString(marker)
+		textMu.Unlock()
+		addEvent(transcript.Event{
+			Type:    transcript.EventUserMessage,
+			Content: fmt.Sprintf("[auto-continue %d/%d, %d pending] %s", attempts+1, maxAutoContinue, len(pending), strings.Join(pending, " | ")),
+		})
+
+		currentText = autoContinuePrompt
+		currentMemory = "" // memory injection is first-call only
+		attempts++
 	}
 
 	streamer.Finalize()
