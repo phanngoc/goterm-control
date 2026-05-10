@@ -253,6 +253,14 @@ func (s *Streamer) sendFormatted(assistantText, toolLine string) {
 		return
 	}
 
+	// When answer + tool line would overflow, chunkHTML splits at the \n\n
+	// boundary between them — orphaning the tool line in its own message
+	// below the final answer. Drop the tool line so only the answer is
+	// chunked. Tool progress was for live feedback; the answer is what stays.
+	if len(html) > maxTelegramMsg && assistantText != "" && toolLine != "" {
+		html = markdownToTelegramHTML(assistantText)
+	}
+
 	// Dedup: skip if identical to last sent (avoids pointless API calls)
 	// Anti-regression: skip if assistant text got shorter (openclaw pattern —
 	// prevents edits that make the message shrink during streaming)
