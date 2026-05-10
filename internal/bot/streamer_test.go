@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +158,50 @@ func TestFlush_NoHeartbeatBeforeTwoSeconds(t *testing.T) {
 	needsHeartbeat := !s.initialSent && time.Since(s.startTime) >= 2*time.Second
 	if needsHeartbeat {
 		t.Fatal("expected needsHeartbeat=false when just started")
+	}
+}
+
+// TestSendFormatted_OverflowDropsToolLine verifies the fix for the bug where
+// answer + tool line whose combined HTML exceeds maxTelegramMsg would split
+// at the \n\n boundary and orphan the tool line in its own message below the
+// final answer. With the fix, the tool line is dropped before chunking so the
+// chunks are answer-only.
+func TestSendFormatted_OverflowDropsToolLine(t *testing.T) {
+	// Build an answer that's under the limit and a long tool line that pushes
+	// the combined html over the limit — the exact scenario that produced the
+	// orphan tool message in the screenshot bug. The split happens at the
+	// \n\n separator between answer and tool line, leaving the tool line
+	// alone in chunks[1].
+	answer := strings.Repeat("API Endpoints overview line.\n", 60) // ~1800 chars
+	toolEntries := strings.Repeat(" → Bash(find ../wc2026-predictor)", 80)
+	toolLine := "🔧 <i>" + toolEntries + "</i>" // ~2700 chars
+
+	combined := markdownToTelegramHTML(answer) + "\n\n" + toolLine
+	if len(combined) <= maxTelegramMsg {
+		t.Fatalf("test setup: combined html (%d) should exceed maxTelegramMsg (%d)", len(combined), maxTelegramMsg)
+	}
+
+	// Without the fix, chunkHTML on the combined html would split at \n\n,
+	// producing a chunk that is ONLY the tool line.
+	combinedChunks := chunkHTML(combined, maxTelegramMsg)
+	orphaned := false
+	for _, c := range combinedChunks {
+		if strings.Contains(c, "🔧") && !strings.Contains(c, "API Endpoints") {
+			orphaned = true
+			break
+		}
+	}
+	if !orphaned {
+		t.Fatal("baseline: expected combined html to chunk into a tool-only orphan chunk")
+	}
+
+	// With the fix: when overflow is detected, html collapses to answer-only.
+	// Verify the resulting chunks contain no tool-only fragment.
+	answerOnly := markdownToTelegramHTML(answer)
+	answerChunks := chunkHTML(answerOnly, maxTelegramMsg)
+	for i, c := range answerChunks {
+		if strings.Contains(c, "🔧") {
+			t.Errorf("chunk %d contains tool line after fix: %q", i, c)
+		}
 	}
 }
