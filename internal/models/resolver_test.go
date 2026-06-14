@@ -6,8 +6,8 @@ func TestResolverBuiltinModels(t *testing.T) {
 	r := NewResolver("claude-sonnet-4-6", nil)
 
 	all := r.List()
-	if len(all) != 3 {
-		t.Fatalf("expected 3 builtin models, got %d", len(all))
+	if len(all) != 4 {
+		t.Fatalf("expected 4 builtin models, got %d", len(all))
 	}
 
 	// Default resolution
@@ -24,8 +24,11 @@ func TestResolverLookupByAlias(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"opus", "claude-opus-4-6"},
-		{"o4", "claude-opus-4-6"},
+		{"opus", "claude-opus-4-8"},
+		{"o4", "claude-opus-4-8"},
+		{"opus-4-8", "claude-opus-4-8"},
+		{"opus-4-6", "claude-opus-4-6"},
+		{"o46", "claude-opus-4-6"},
 		{"sonnet", "claude-sonnet-4-6"},
 		{"s4", "claude-sonnet-4-6"},
 		{"haiku", "claude-haiku-4-5"},
@@ -65,13 +68,13 @@ func TestResolverOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.ID != "claude-opus-4-6" {
+	if m.ID != "claude-opus-4-8" {
 		t.Errorf("expected opus, got %s", m.ID)
 	}
 
 	// Resolve should return override
 	m = r.Resolve(chatID)
-	if m.ID != "claude-opus-4-6" {
+	if m.ID != "claude-opus-4-8" {
 		t.Errorf("expected opus override, got %s", m.ID)
 	}
 
@@ -104,9 +107,9 @@ func TestResolverCustomModel(t *testing.T) {
 
 	r := NewResolver("deepseek-r1", custom)
 
-	// Should have 4 models (3 builtin + 1 custom)
-	if len(r.List()) != 4 {
-		t.Fatalf("expected 4 models, got %d", len(r.List()))
+	// Should have 5 models (4 builtin + 1 custom)
+	if len(r.List()) != 5 {
+		t.Fatalf("expected 5 models, got %d", len(r.List()))
 	}
 
 	// Default should be custom model
@@ -130,7 +133,7 @@ func TestResolverUnknownDefault(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected fallback to first model")
 	}
-	if m.ID != "claude-opus-4-6" {
+	if m.ID != "claude-opus-4-8" {
 		t.Errorf("expected opus as fallback, got %s", m.ID)
 	}
 }

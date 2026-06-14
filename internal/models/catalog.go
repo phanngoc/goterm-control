@@ -45,11 +45,23 @@ type ModelCost struct {
 func BuiltinModels() []Model {
 	return []Model{
 		{
+			ID:            "claude-opus-4-8",
+			Name:          "Claude Opus 4.8",
+			Provider:      "anthropic",
+			API:           APIClaudeCLI,
+			Aliases:       []string{"opus", "o4", "opus-4-8"},
+			ContextWindow: 1_000_000,
+			MaxTokens:     32_000,
+			Reasoning:     true,
+			Input:         []InputType{InputText, InputImage, InputDocument},
+			Cost:          ModelCost{Input: 15.0, Output: 75.0, CacheRead: 1.5, CacheWrite: 18.75},
+		},
+		{
 			ID:            "claude-opus-4-6",
 			Name:          "Claude Opus 4.6",
 			Provider:      "anthropic",
 			API:           APIClaudeCLI,
-			Aliases:       []string{"opus", "o4"},
+			Aliases:       []string{"opus-4-6", "o46"},
 			ContextWindow: 200_000,
 			MaxTokens:     32_000,
 			Reasoning:     true,

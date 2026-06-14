@@ -92,7 +92,7 @@ func Load(path string) (*Config, error) {
 		cfg.Telegram.Timeout = 60
 	}
 	if cfg.Claude.Model == "" {
-		cfg.Claude.Model = "claude-opus-4-6"
+		cfg.Claude.Model = "claude-opus-4-8"
 	}
 	if cfg.Claude.MaxTokens == 0 {
 		cfg.Claude.MaxTokens = 8192
