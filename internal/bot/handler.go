@@ -109,6 +109,14 @@ func (h *Handler) Handle(update tgbotapi.Update) {
 		return
 	}
 
+	// Media (photos, documents, audio, voice, video) → download into the
+	// workspace and hand the saved file path(s) to Claude, which reads them
+	// via its Read tool. Any caption travels along as the prompt.
+	if hasMedia(msg) {
+		h.handleMedia(msg)
+		return
+	}
+
 	// Regular message → Claude (via execution queue)
 	if msg.Text != "" {
 		h.handleMessage(msg)
@@ -131,6 +139,7 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 				"• /models — list available models\n"+
 				"• /model `<name>` — switch model\n"+
 				"• /cancel — cancel current request\n\n"+
+				"📎 Send me a photo or file (with an optional caption) and I'll read and process it.\n\n"+
 				"Just send me any message and I'll help you control your Mac!",
 		)
 
