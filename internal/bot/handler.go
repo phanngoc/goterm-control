@@ -150,6 +150,10 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 		)
 
 	case "reset":
+		if h.willFlush(chatID) {
+			h.sendText(chatID, "💾 Saving memory...")
+		}
+		h.flushMemory(chatID, "reset")
 		h.sessions.Reset(chatID)
 		h.resolver.ClearOverride(chatID)
 		h.sendText(chatID, "🔄 Conversation history cleared.")
@@ -291,6 +295,12 @@ func (h *Handler) handleModelCommand(chatID int64, arg string) {
 	}
 
 	if arg == "default" || arg == "reset" {
+		// Flush with the outgoing model — the old session is model-bound.
+		oldModel := h.currentModelID(chatID)
+		if h.willFlush(chatID) {
+			h.sendText(chatID, "💾 Saving memory...")
+		}
+		h.flushMemoryWithModel(chatID, "model-switch", oldModel)
 		h.resolver.ClearOverride(chatID)
 		// Reset session so new model takes effect cleanly
 		h.sessions.Reset(chatID)
@@ -303,11 +313,20 @@ func (h *Handler) handleModelCommand(chatID int64, arg string) {
 		return
 	}
 
+	// Capture the outgoing model before the override changes — the flush must
+	// resume the old session with the model it was created with.
+	oldModel := h.currentModelID(chatID)
+
 	m, err := h.resolver.SetOverride(chatID, arg)
 	if err != nil {
 		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
 		return
 	}
+
+	if h.willFlush(chatID) {
+		h.sendText(chatID, "💾 Saving memory...")
+	}
+	h.flushMemoryWithModel(chatID, "model-switch", oldModel)
 
 	// Reset session so the new model starts fresh (Claude CLI sessions are model-bound)
 	h.sessions.Reset(chatID)
@@ -364,6 +383,96 @@ func (h *Handler) handleRemember(chatID int64, arg string) {
 		return
 	}
 	h.sendText(chatID, fmt.Sprintf("📝 Noted in `memory/%s.md`", now.Format("2006-01-02")))
+}
+
+// --- Memory flush (openclaw pre-compaction pattern) ---
+
+// willFlush reports whether a memory flush would actually run for this chat,
+// so callers can show a "saving..." notice before a blocking flush.
+func (h *Handler) willFlush(chatID int64) bool {
+	if !h.memory.Enabled() {
+		return false
+	}
+	sess := h.sessions.Get(chatID)
+	return sess.GetSessionID() != "" && sess.GetMessageCount() > 0
+}
+
+// currentModelID resolves the active model for a chat ("" if unknown).
+func (h *Handler) currentModelID(chatID int64) string {
+	if m := h.resolver.Resolve(chatID); m != nil {
+		return m.ID
+	}
+	return ""
+}
+
+// flushMemory runs a silent turn on the active session prompting the agent to
+// write durable notes to memory files before the session context is lost.
+// It blocks until the flush finishes; errors are logged and swallowed —
+// losing a flush must never block the user's reset.
+func (h *Handler) flushMemory(chatID int64, reason string) {
+	h.flushMemoryWithModel(chatID, reason, h.currentModelID(chatID))
+}
+
+// flushMemoryWithModel is flushMemory with an explicit model — used by
+// /model, where the flush must resume the old session with its old model.
+func (h *Handler) flushMemoryWithModel(chatID int64, reason, modelID string) {
+	if !h.memory.Enabled() {
+		return
+	}
+	sess := h.sessions.Get(chatID)
+	if sess.GetSessionID() == "" || sess.GetMessageCount() == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), h.memory.FlushTimeout())
+	defer cancel()
+
+	log.Printf("memory: flush start (chat=%d reason=%s)", chatID, reason)
+	start := time.Now()
+	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
+		return h.runFlush(ctx, sess, modelID)
+	})
+	if err != nil {
+		log.Printf("memory: flush failed (chat=%d reason=%s): %v", chatID, reason, err)
+		return
+	}
+	log.Printf("memory: flush done (chat=%d reason=%s took=%s)",
+		chatID, reason, time.Since(start).Truncate(time.Millisecond))
+}
+
+// runFlush executes the silent flush turn. Nothing is streamed to Telegram;
+// the agent's reply (normally the NO_REPLY sentinel) is only logged.
+func (h *Handler) runFlush(ctx context.Context, sess *session.Session, modelID string) (*execution.RunResult, error) {
+	sess.MarkRunning("memory flush")
+	defer sess.MarkIdle()
+
+	var reply strings.Builder
+	cb := claude.StreamCallbacks{
+		OnText: func(chunk string) { reply.WriteString(chunk) },
+		OnToolCall: func(name, inputJSON string) {
+			sess.NoteTool(name)
+			log.Printf("memory: flush tool %s", toolLabel(name, inputJSON))
+		},
+	}
+
+	result := &execution.RunResult{
+		SessionID: sess.ID,
+		StartedAt: time.Now(),
+		Status:    execution.RunSuccess,
+	}
+	err := h.claude.SendMessage(ctx, sess, modelID, h.memory.FlushPrompt(time.Now()), "", cb)
+	result.EndedAt = time.Now()
+	if err != nil {
+		result.Status = execution.RunFailed
+		result.Error = err
+		return result, err
+	}
+	if h.memory.IsNoReply(reply.String()) {
+		log.Printf("memory: flush ok (NO_REPLY)")
+	} else {
+		log.Printf("memory: flush replied with text (len=%d)", len(reply.String()))
+	}
+	return result, nil
 }
 
 func (h *Handler) handleMessage(msg *tgbotapi.Message) {
@@ -678,6 +787,11 @@ func (h *Handler) showSessionList(chatID int64) {
 }
 
 func (h *Handler) handleNewSession(chatID int64) {
+	// Flush the outgoing session's memory before switching to a fresh one.
+	if h.willFlush(chatID) {
+		h.sendText(chatID, "💾 Saving memory...")
+	}
+	h.flushMemory(chatID, "new-session")
 	sess, err := h.sessions.NewSession(chatID)
 	if err != nil {
 		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
