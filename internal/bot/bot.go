@@ -10,6 +10,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -48,6 +49,8 @@ func New(cfg *config.Config) (*Bot, error) {
 		tgbotapi.BotCommand{Command: "status", Description: "Show session info"},
 		tgbotapi.BotCommand{Command: "models", Description: "List available models"},
 		tgbotapi.BotCommand{Command: "model", Description: "Switch model (e.g. /model sonnet)"},
+		tgbotapi.BotCommand{Command: "memory", Description: "Show persistent memory"},
+		tgbotapi.BotCommand{Command: "remember", Description: "Save a note to memory"},
 		tgbotapi.BotCommand{Command: "cancel", Description: "Cancel current request"},
 	)
 	if _, err := api.Request(commands); err != nil {
@@ -95,6 +98,25 @@ func New(cfg *config.Config) (*Bot, error) {
 	// Execution engine
 	engine := execution.NewEngine(execution.Hooks{}, 3)
 
+	// Persistent memory (openclaw pattern) — markdown files in the workspace
+	// that the Claude CLI reads/writes with its own tools.
+	memManager := memory.NewManager(memory.Config{
+		Enabled:             cfg.Memory.Enabled,
+		Dir:                 cfg.Memory.Dir,
+		MaxFileChars:        cfg.Memory.MaxFileChars,
+		MaxTotalChars:       cfg.Memory.MaxTotalChars,
+		FlushPrompt:         cfg.Memory.Flush.Prompt,
+		SoftThresholdTokens: cfg.Memory.Flush.SoftThresholdTokens,
+		FlushTimeout:        time.Duration(cfg.Memory.Flush.TimeoutSeconds) * time.Second,
+	})
+	if memManager.Enabled() {
+		if err := memManager.Bootstrap(); err != nil {
+			log.Printf("bot: warning: memory bootstrap failed: %v", err)
+		} else {
+			log.Printf("bot: memory enabled (dir=%s)", cfg.Memory.Dir)
+		}
+	}
+
 	// Build handler first (queue needs handler.executeMessage as callback)
 	handler := &Handler{
 		bot:              api,
@@ -105,6 +127,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		transcript:       transcriptWriter,
 		messages:         messageStore,
 		resolver:         resolver,
+		memory:           memManager,
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
 		typing:           typing,

@@ -15,6 +15,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -41,6 +42,7 @@ type Handler struct {
 	queue      *msgqueue.Queue // debounce + collect layer
 	indicator  *NameIndicator
 	typing     *TypingIndicator
+	memory     *memory.Manager // markdown persistent memory (nil-safe)
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -57,6 +59,7 @@ func NewHandler(
 	messages MessageStore,
 	resolver *models.Resolver,
 	queue *msgqueue.Queue,
+	mem *memory.Manager,
 ) *Handler {
 	return &Handler{
 		bot:              bot,
@@ -68,6 +71,7 @@ func NewHandler(
 		messages:         messages,
 		resolver:         resolver,
 		queue:            queue,
+		memory:           mem,
 		approvalRequests: make(map[string]chan bool),
 	}
 }
@@ -138,6 +142,8 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 				"• /status — show session info\n"+
 				"• /models — list available models\n"+
 				"• /model `<name>` — switch model\n"+
+				"• /memory — show persistent memory\n"+
+				"• /remember `<fact>` — save a note to memory\n"+
 				"• /cancel — cancel current request\n\n"+
 				"📎 Send me a photo or file (with an optional caption) and I'll read and process it.\n\n"+
 				"Just send me any message and I'll help you control your Mac!",
@@ -162,6 +168,12 @@ func (h *Handler) handleCommand(msg *tgbotapi.Message) {
 
 	case "model":
 		h.handleModelCommand(chatID, msg.CommandArguments())
+
+	case "memory":
+		h.showMemory(chatID)
+
+	case "remember":
+		h.handleRemember(chatID, msg.CommandArguments())
 
 	case "cancel":
 		sess := h.sessions.Get(chatID)
@@ -307,6 +319,53 @@ func (h *Handler) handleModelCommand(chatID int64, arg string) {
 	))
 }
 
+// showMemory renders persistent-memory stats and a MEMORY.md preview.
+func (h *Handler) showMemory(chatID int64) {
+	if !h.memory.Enabled() {
+		h.sendText(chatID, "💾 Memory is disabled (set `memory.enabled: true` in config).")
+		return
+	}
+	st, err := h.memory.Stats(time.Now())
+	if err != nil {
+		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("💾 *Persistent Memory*\n\n")
+	sb.WriteString(fmt.Sprintf(
+		"Dir: `%s`\n"+
+			"MEMORY.md: %d bytes\n"+
+			"Daily notes: %d files (today: %d bytes)\n",
+		st.Dir, st.MemoryMDBytes, st.DailyNoteCount, st.TodayBytes,
+	))
+	if st.MemoryMDPreview != "" {
+		sb.WriteString("\n*MEMORY.md preview:*\n")
+		sb.WriteString(st.MemoryMDPreview)
+	}
+	h.sendText(chatID, sb.String())
+}
+
+// handleRemember appends a fact to today's daily note directly — no Claude
+// turn needed, so it is instant and free.
+func (h *Handler) handleRemember(chatID int64, arg string) {
+	if !h.memory.Enabled() {
+		h.sendText(chatID, "💾 Memory is disabled (set `memory.enabled: true` in config).")
+		return
+	}
+	fact := strings.TrimSpace(arg)
+	if fact == "" {
+		h.sendText(chatID, "Usage: `/remember <fact>` — e.g. `/remember deploy freeze until Friday`")
+		return
+	}
+	now := time.Now()
+	if err := h.memory.AppendNote(now, fact); err != nil {
+		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
+		return
+	}
+	h.sendText(chatID, fmt.Sprintf("📝 Noted in `memory/%s.md`", now.Format("2006-01-02")))
+}
+
 func (h *Handler) handleMessage(msg *tgbotapi.Message) {
 	h.queue.Submit(msg.Chat.ID, msg.Text)
 }
@@ -347,15 +406,16 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 		return
 	}
 
-	// Inject recent conversation history when starting a brand-new session
-	// (first message or after explicit /reset) so Claude has some context.
-	historyContext := ""
+	// Inject persistent memory (MEMORY.md + recent daily notes) and recent
+	// conversation history when starting a brand-new session (first message
+	// or after a reset) so Claude has durable facts plus short-term context.
+	newSessionContext := ""
 	if sess.GetSessionID() == "" {
-		historyContext = h.buildHistoryContext(sess.ID, 8)
+		newSessionContext = h.memory.BuildContext(time.Now()) + h.buildHistoryContext(sess.ID, 8)
 	}
 
 	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
-		return h.runClaude(ctx, sess, chatID, modelID, text, historyContext, placeholder)
+		return h.runClaude(ctx, sess, chatID, modelID, text, newSessionContext, placeholder)
 	})
 
 	if err != nil {
