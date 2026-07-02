@@ -62,6 +62,15 @@ type streamEvent struct {
 	SessionID string      `json:"session_id,omitempty"`
 	Result    string      `json:"result,omitempty"`
 	IsError   bool        `json:"is_error,omitempty"`
+	Usage     *cliUsage   `json:"usage,omitempty"`
+}
+
+// cliUsage is the usage object on the final "result" event.
+type cliUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 type cliMessage struct {
@@ -224,6 +233,13 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 		case "result":
 			sess.IncrementMessages()
+			if ev.Usage != nil {
+				sess.AddTokens(ev.Usage.InputTokens, ev.Usage.OutputTokens)
+				// Context size proxy for the threshold memory flush: what the
+				// last call actually carried, including cached prompt tokens.
+				sess.SetLastContextTokens(ev.Usage.InputTokens +
+					ev.Usage.CacheReadInputTokens + ev.Usage.CacheCreationInputTokens)
+			}
 			if ev.IsError {
 				return fmt.Errorf("claude error: %s", ev.Result)
 			}

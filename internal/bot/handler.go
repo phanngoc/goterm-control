@@ -492,6 +492,18 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	// Cancel any in-flight request for this session
 	sess.Cancel()
 
+	// Daily/idle session rotation (openclaw pattern): flush memory, then
+	// reset so this message starts a fresh CLI session with re-injected
+	// context. Recent-history injection keeps the rotation invisible.
+	if sess.GetSessionID() != "" {
+		idle := time.Duration(h.cfg.Session.Reset.IdleMinutes) * time.Minute
+		if rotate, reason := memory.ShouldRotate(sess.LastActivity(), time.Now(), h.cfg.Session.Reset.DailyAt, idle); rotate {
+			log.Printf("session: rotating (chat=%d reason=%s)", chatID, reason)
+			h.flushMemory(chatID, reason)
+			h.sessions.Reset(chatID)
+		}
+	}
+
 	// Track live run state so /status can report what the agent is doing.
 	sess.MarkRunning(truncateLabel(text, 60))
 	defer sess.MarkIdle()
@@ -529,6 +541,18 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 
 	if err != nil {
 		log.Printf("handler: enqueue error: %v", err)
+		return
+	}
+
+	// Token-threshold memory flush: once the session context grows past the
+	// soft threshold, persist durable notes early. Fires at most once per
+	// session (flag cleared on reset); does not reset the session itself.
+	if h.memory.Enabled() {
+		if th := h.memory.SoftThresholdTokens(); th > 0 &&
+			sess.LastContextTokens() >= th && !sess.IsMemoryFlushed() {
+			sess.MarkMemoryFlushed()
+			h.flushMemory(chatID, "token-threshold")
+		}
 	}
 }
 
