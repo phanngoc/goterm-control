@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -76,8 +77,8 @@ func TestSessionStoreRoundtrip(t *testing.T) {
 	db := testDB(t)
 	store := NewSessionStore(db)
 
-	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_abc", 5, 1000, 500, "summary text", "First chat", 0)
-	s2 := session.NewFromDB("chat_200", 200, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_abc", 5, 1000, 500, "summary text", "First chat", 0, false)
+	s2 := session.NewFromDB("chat_200", 200, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0, false)
 
 	if err := store.Save(chatStates(s1, s2)); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -115,7 +116,7 @@ func TestSessionStoreUpsert(t *testing.T) {
 	db := testDB(t)
 	store := NewSessionStore(db)
 
-	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "v1", 1, 100, 50, "", "", 0)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "v1", 1, 100, 50, "", "", 0, false)
 	store.Save(chatStates(s))
 
 	// Update
@@ -138,8 +139,8 @@ func TestSessionStoreMultipleSessionsPerChat(t *testing.T) {
 	db := testDB(t)
 	store := NewSessionStore(db)
 
-	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_1", 5, 100, 50, "", "Session 1", 0)
-	s2 := session.NewFromDB("chat_100_1", 100, time.Now(), time.Now(), "claude_2", 3, 200, 80, "", "Session 2", 1)
+	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "claude_1", 5, 100, 50, "", "Session 1", 0, false)
+	s2 := session.NewFromDB("chat_100_1", 100, time.Now(), time.Now(), "claude_2", 3, 200, 80, "", "Session 2", 1, false)
 
 	chats := map[int64]*session.ChatState{
 		100: {
@@ -180,7 +181,7 @@ func TestMessageStoreRoundtrip(t *testing.T) {
 	sessStore := NewSessionStore(db)
 	msgStore := NewMessageStore(db)
 
-	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0, false)
 	sessStore.Save(chatStates(s))
 
 	msgs := []agent.Message{
@@ -216,7 +217,7 @@ func TestMessageStoreLimit(t *testing.T) {
 	sessStore := NewSessionStore(db)
 	msgStore := NewMessageStore(db)
 
-	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0, false)
 	sessStore.Save(chatStates(s))
 
 	for i := 0; i < 10; i++ {
@@ -237,7 +238,7 @@ func TestMessageStoreDeleteBySession(t *testing.T) {
 	sessStore := NewSessionStore(db)
 	msgStore := NewMessageStore(db)
 
-	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0)
+	s := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "", 0, 0, 0, "", "", 0, false)
 	sessStore.Save(chatStates(s))
 
 	msgStore.Append("chat_100", agent.Message{Role: "user", Content: "hello"})
@@ -308,5 +309,95 @@ func TestOpenIdempotent(t *testing.T) {
 	ver, _ := db2.currentVersion()
 	if ver != schemaVersion {
 		t.Errorf("version after reopen = %d, want %d", ver, schemaVersion)
+	}
+}
+
+func TestMigrateV2ToV3(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	// Build a v2 database by hand (no memory_flushed column, version 2).
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	stmts := []string{
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`INSERT INTO meta(key, value) VALUES('schema_version', '2')`,
+		`CREATE TABLE sessions (
+			id                TEXT PRIMARY KEY,
+			chat_id           INTEGER NOT NULL,
+			created_at        TEXT NOT NULL,
+			updated_at        TEXT NOT NULL,
+			claude_session_id TEXT DEFAULT '',
+			message_count     INTEGER DEFAULT 0,
+			input_tokens      INTEGER DEFAULT 0,
+			output_tokens     INTEGER DEFAULT 0,
+			compact_summary   TEXT DEFAULT '',
+			label             TEXT DEFAULT '',
+			seq               INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE chat_state (
+			chat_id           INTEGER PRIMARY KEY,
+			active_session_id TEXT NOT NULL,
+			next_seq          INTEGER DEFAULT 1
+		)`,
+		`CREATE TABLE messages (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id   TEXT NOT NULL,
+			role         TEXT NOT NULL,
+			content      TEXT NOT NULL,
+			tool_calls   TEXT DEFAULT '',
+			tool_results TEXT DEFAULT '',
+			tokens       INTEGER DEFAULT 0,
+			created_at   TEXT NOT NULL
+		)`,
+		`INSERT INTO sessions (id, chat_id, created_at, updated_at, claude_session_id, message_count)
+			VALUES ('chat_100', 100, '2026-07-01T10:00:00Z', '2026-07-01T10:00:00Z', 'claude_v2', 4)`,
+		`INSERT INTO chat_state (chat_id, active_session_id, next_seq) VALUES (100, 'chat_100', 1)`,
+	}
+	for _, s := range stmts {
+		if _, err := raw.Exec(s); err != nil {
+			t.Fatalf("seed v2 db: %v\n%s", err, s)
+		}
+	}
+	raw.Close()
+
+	// Open runs the migration.
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	defer db.Close()
+
+	ver, _ := db.currentVersion()
+	if ver != 3 {
+		t.Errorf("version = %d, want 3", ver)
+	}
+
+	// Existing row must load with memory_flushed defaulting to false.
+	loaded, err := NewSessionStore(db).Load()
+	if err != nil {
+		t.Fatalf("Load after migrate: %v", err)
+	}
+	s := loaded[100].Sessions["chat_100"]
+	if s == nil {
+		t.Fatal("session chat_100 not found after migration")
+	}
+	if s.GetSessionID() != "claude_v2" || s.GetMessageCount() != 4 {
+		t.Errorf("migrated session data lost: id=%q count=%d", s.GetSessionID(), s.GetMessageCount())
+	}
+	if s.IsMemoryFlushed() {
+		t.Error("memory_flushed should default to false after migration")
+	}
+
+	// Round-trip the new flag through Save/Load.
+	s.MarkMemoryFlushed()
+	if err := NewSessionStore(db).Save(loaded); err != nil {
+		t.Fatalf("Save after migrate: %v", err)
+	}
+	reloaded, _ := NewSessionStore(db).Load()
+	if !reloaded[100].Sessions["chat_100"].IsMemoryFlushed() {
+		t.Error("memory_flushed flag did not persist")
 	}
 }

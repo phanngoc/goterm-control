@@ -2,7 +2,7 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // DDL statements executed in order for fresh installs.
 var ddl = []string{
@@ -22,7 +22,8 @@ var ddl = []string{
 		output_tokens     INTEGER DEFAULT 0,
 		compact_summary   TEXT DEFAULT '',
 		label             TEXT DEFAULT '',
-		seq               INTEGER DEFAULT 0
+		seq               INTEGER DEFAULT 0,
+		memory_flushed    INTEGER DEFAULT 0
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_sessions_chat ON sessions(chat_id)`,
 
@@ -64,9 +65,25 @@ func (db *DB) migrate() error {
 		if err := db.migrateV1ToV2(); err != nil {
 			return fmt.Errorf("migrate v1→v2: %w", err)
 		}
-		return db.setVersion(2)
+		if err := db.setVersion(2); err != nil {
+			return err
+		}
+		ver = 2
+	}
+	if ver < 3 {
+		if err := db.migrateV2ToV3(); err != nil {
+			return fmt.Errorf("migrate v2→v3: %w", err)
+		}
+		return db.setVersion(3)
 	}
 	return nil
+}
+
+// migrateV2ToV3 adds the memory_flushed column used by the token-threshold
+// memory flush (fires at most once per session).
+func (db *DB) migrateV2ToV3() error {
+	_, err := db.conn.Exec(`ALTER TABLE sessions ADD COLUMN memory_flushed INTEGER DEFAULT 0`)
+	return err
 }
 
 // migrateV1ToV2 removes the UNIQUE constraint on chat_id, adds label/seq

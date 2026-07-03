@@ -19,9 +19,15 @@ type Session struct {
 	CompactSummary  string    `json:"compact_summary,omitempty"`
 	Label           string    `json:"label,omitempty"`
 	Seq             int       `json:"seq"`
+	MemoryFlushed   bool      `json:"memory_flushed,omitempty"` // threshold flush already ran this session
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
+
+	// lastContextTokens is the context size of the most recent CLI call
+	// (input + cache tokens). In-memory only — after a restart the threshold
+	// flush simply re-arms on the next turn.
+	lastContextTokens int `json:"-"`
 
 	// Live run state (not persisted) — populated while a request is executing
 	// so /status can report what the agent is currently doing.
@@ -55,6 +61,7 @@ type SessionSnapshot struct {
 	CompactSummary  string
 	Label           string
 	Seq             int
+	MemoryFlushed   bool
 }
 
 func New(chatID int64) *Session {
@@ -141,7 +148,45 @@ func (s *Session) Reset() {
 	defer s.mu.Unlock()
 	s.ClaudeSessionID = ""
 	s.MessageCount = 0
+	s.MemoryFlushed = false
+	s.lastContextTokens = 0
 	s.UpdatedAt = time.Now()
+}
+
+// LastActivity returns when the session last saw a turn or state change.
+func (s *Session) LastActivity() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.UpdatedAt
+}
+
+// SetLastContextTokens records the context size of the most recent CLI call.
+func (s *Session) SetLastContextTokens(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastContextTokens = n
+}
+
+// LastContextTokens returns the context size of the most recent CLI call.
+func (s *Session) LastContextTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastContextTokens
+}
+
+// MarkMemoryFlushed records that the threshold-triggered memory flush ran,
+// so it fires at most once per session. Cleared by Reset.
+func (s *Session) MarkMemoryFlushed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.MemoryFlushed = true
+}
+
+// IsMemoryFlushed reports whether the threshold flush already ran.
+func (s *Session) IsMemoryFlushed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.MemoryFlushed
 }
 
 // MarkRunning records that a request has started executing for this session.
@@ -234,11 +279,12 @@ func (s *Session) Snapshot() SessionSnapshot {
 		CompactSummary:  s.CompactSummary,
 		Label:           s.Label,
 		Seq:             s.Seq,
+		MemoryFlushed:   s.MemoryFlushed,
 	}
 }
 
 // NewFromDB creates a Session from database fields (used by SQLite store).
-func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessionID string, msgCount, inTok, outTok int, compactSummary, label string, seq int) *Session {
+func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessionID string, msgCount, inTok, outTok int, compactSummary, label string, seq int, memoryFlushed bool) *Session {
 	return &Session{
 		ID:              id,
 		ChatID:          chatID,
@@ -251,6 +297,7 @@ func NewFromDB(id string, chatID int64, created, updated time.Time, claudeSessio
 		CompactSummary:  compactSummary,
 		Label:           label,
 		Seq:             seq,
+		MemoryFlushed:   memoryFlushed,
 	}
 }
 

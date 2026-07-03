@@ -16,6 +16,7 @@ type Config struct {
 	Security SecurityConfig `yaml:"security"`
 	Tools    ToolsConfig    `yaml:"tools"`
 	Session  SessionConfig  `yaml:"session"`
+	Memory   MemoryConfig   `yaml:"memory"`
 }
 
 // ClaudeConfig is kept for backward compatibility — the claude CLI subprocess config.
@@ -65,7 +66,32 @@ type ToolsConfig struct {
 }
 
 type SessionConfig struct {
-	DataDir string `yaml:"data_dir"`
+	DataDir string      `yaml:"data_dir"`
+	Reset   ResetConfig `yaml:"reset"`
+}
+
+// ResetConfig controls automatic session rotation (openclaw pattern).
+// Memory is flushed to disk before any automatic reset.
+type ResetConfig struct {
+	DailyAt     string `yaml:"daily_at"`     // "HH:MM" local time; "off" disables (default "04:00")
+	IdleMinutes int    `yaml:"idle_minutes"` // rotate after this much inactivity; 0 disables
+}
+
+// MemoryConfig controls the markdown-based persistent memory system.
+type MemoryConfig struct {
+	Enabled       bool        `yaml:"enabled"`
+	Dir           string      `yaml:"dir"`             // memory root; default: claude.workspace
+	MaxFileChars  int         `yaml:"max_file_chars"`  // per injected file cap (default 20000)
+	MaxTotalChars int         `yaml:"max_total_chars"` // whole memory block cap (default 60000)
+	Flush         FlushConfig `yaml:"flush"`
+}
+
+// FlushConfig controls the silent memory-flush turn that runs before a
+// session is reset or when its context grows past the soft threshold.
+type FlushConfig struct {
+	SoftThresholdTokens int    `yaml:"soft_threshold_tokens"` // default 100000
+	TimeoutSeconds      int    `yaml:"timeout_seconds"`       // default 120
+	Prompt              string `yaml:"prompt"`                // override default flush prompt; {today} expands to today's note path
 }
 
 func Load(path string) (*Config, error) {
@@ -116,6 +142,27 @@ func Load(path string) (*Config, error) {
 	if cfg.Session.DataDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Session.DataDir = home + "/.goterm/data"
+	}
+	if cfg.Session.Reset.DailyAt == "" {
+		cfg.Session.Reset.DailyAt = "04:00"
+	}
+	if cfg.Memory.Dir == "" {
+		cfg.Memory.Dir = cfg.Claude.Workspace
+	} else if strings.HasPrefix(cfg.Memory.Dir, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Memory.Dir = home + cfg.Memory.Dir[1:]
+	}
+	if cfg.Memory.MaxFileChars == 0 {
+		cfg.Memory.MaxFileChars = 20000
+	}
+	if cfg.Memory.MaxTotalChars == 0 {
+		cfg.Memory.MaxTotalChars = 60000
+	}
+	if cfg.Memory.Flush.SoftThresholdTokens == 0 {
+		cfg.Memory.Flush.SoftThresholdTokens = 100000
+	}
+	if cfg.Memory.Flush.TimeoutSeconds == 0 {
+		cfg.Memory.Flush.TimeoutSeconds = 120
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {
