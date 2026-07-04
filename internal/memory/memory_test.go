@@ -57,12 +57,13 @@ func TestBuildContextIncludesFiles(t *testing.T) {
 	got := m.BuildContext(now)
 	for _, want := range []string{
 		"## Persistent Memory",
-		"memory/2026-07-02.md",
+		m.TodayNotePath(now), // absolute path — relative "memory/..." resolves to the CLI's own memory dir
 		"- user is ngoc",
 		"- today note",
-		"### Yesterday (memory/2026-07-01.md)",
+		"### Yesterday (" + m.TodayNotePath(now.AddDate(0, 0, -1)) + ")",
 		"- yesterday note",
-		"grep -ri",
+		"grep -ri \"<keyword>\" " + m.NotesDir() + " " + m.MemoryFilePath(),
+		"Do NOT write these notes into any ~/.claude/projects",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("BuildContext missing %q", want)
@@ -98,7 +99,7 @@ func TestBuildContextPerFileCap(t *testing.T) {
 	os.WriteFile(m.MemoryFilePath(), []byte(strings.Repeat("x", 500)), 0644)
 
 	got := m.BuildContext(now)
-	if !strings.Contains(got, "[truncated — read MEMORY.md for the rest]") {
+	if !strings.Contains(got, "[truncated — read "+m.MemoryFilePath()+" for the rest]") {
 		t.Error("missing per-file truncation marker")
 	}
 	if strings.Contains(got, strings.Repeat("x", 200)) {
@@ -115,8 +116,9 @@ func TestBuildContextTotalCap(t *testing.T) {
 	if !strings.Contains(got, "[memory truncated") {
 		t.Error("missing total truncation marker")
 	}
-	if len([]rune(got)) > 600 {
-		t.Errorf("block not capped: %d chars", len([]rune(got)))
+	marker := "\n[memory truncated — read " + m.MemoryFilePath() + " and " + m.NotesDir() + " for full contents]\n"
+	if maxLen := 500 + len([]rune(marker)); len([]rune(got)) > maxLen {
+		t.Errorf("block not capped: %d chars, want <= %d", len([]rune(got)), maxLen)
 	}
 }
 
@@ -152,16 +154,20 @@ func TestFlushPrompt(t *testing.T) {
 	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.Local)
 
 	got := m.FlushPrompt(now)
-	if !strings.Contains(got, "memory/2026-07-02.md") {
-		t.Errorf("flush prompt missing today path: %q", got)
+	if !strings.Contains(got, m.TodayNotePath(now)) {
+		t.Errorf("flush prompt missing absolute today path: %q", got)
+	}
+	if !strings.Contains(got, m.MemoryFilePath()) {
+		t.Errorf("flush prompt missing absolute MEMORY.md path: %q", got)
 	}
 	if !strings.Contains(got, NoReplySentinel) {
 		t.Error("flush prompt missing sentinel")
 	}
 
 	custom := testManager(t, Config{FlushPrompt: "save to {today} please"})
-	if got := custom.FlushPrompt(now); got != "save to memory/2026-07-02.md please" {
-		t.Errorf("custom prompt: %q", got)
+	want := "save to " + custom.TodayNotePath(now) + " please"
+	if got := custom.FlushPrompt(now); got != want {
+		t.Errorf("custom prompt: %q, want %q", got, want)
 	}
 }
 
