@@ -132,6 +132,25 @@ Commands:
 
 // --- gateway command ---
 
+// resolveDashboardDir finds the built dashboard. Under launchd the process
+// cwd is "/" (no WorkingDirectory in the plist), so a cwd-relative path 404s;
+// fall back to the directory the binary lives in (the project root).
+func resolveDashboardDir() string {
+	const rel = "dashboard/dist"
+	if _, err := os.Stat(rel); err == nil {
+		return rel
+	}
+	if exe, err := os.Executable(); err == nil {
+		exe, _ = filepath.EvalSymlinks(exe)
+		dir := filepath.Join(filepath.Dir(exe), rel)
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+	}
+	log.Printf("gateway: dashboard assets not found (%s) — dashboard disabled", rel)
+	return ""
+}
+
 func runGateway(args []string) {
 	fs := flag.NewFlagSet("gateway", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "Path to config file")
@@ -232,7 +251,7 @@ func runGateway(args []string) {
 		}
 	}
 
-	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), "dashboard/dist")
+	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir())
 
 	// Start Telegram bot polling in background
 	if tgBot != nil {
