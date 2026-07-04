@@ -45,4 +45,17 @@ type StatusResult struct {
 	DefaultModel  string   `json:"default_model"`
 	ActiveSessions int     `json:"active_sessions"`
 	Channels      []string `json:"channels"`
+	Runs          []RunInfo `json:"runs,omitempty"` // in-flight agent runs (live)
+}
+
+// RunInfo describes one in-flight agent run for status consumers
+// (dashboard, menu bar tray).
+type RunInfo struct {
+	ChatID    int64  `json:"chat_id"`
+	SessionID string `json:"session_id"`
+	Label     string `json:"label,omitempty"`
+	Task      string `json:"task,omitempty"`
+	LastTool  string `json:"last_tool,omitempty"`
+	ToolCount int    `json:"tool_count"`
+	StartedAt string `json:"started_at"`
 }

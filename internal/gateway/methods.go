@@ -25,6 +25,7 @@ type Deps struct {
 	System        string // system prompt
 	DataDir       string // data directory for transcripts
 	Uptime        func() time.Duration
+	Runs          func() []RunInfo // live in-flight runs (nil when no bot attached)
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -61,6 +62,9 @@ func handleStatus(deps Deps) (json.RawMessage, error) {
 		DefaultModel:   deps.Resolver.Default(),
 		ActiveSessions: len(sessions),
 		Channels:       []string{"telegram", "gateway", "dashboard"},
+	}
+	if deps.Runs != nil {
+		result.Runs = deps.Runs()
 	}
 	return json.Marshal(result)
 }

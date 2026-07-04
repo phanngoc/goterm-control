@@ -149,6 +149,12 @@ func New(cfg *config.Config) (*Bot, error) {
 	}, nil
 }
 
+// Sessions exposes the bot's live session manager (read-only use: the
+// gateway status RPC reports in-flight run info from it).
+func (b *Bot) Sessions() *session.Manager {
+	return b.sessions
+}
+
 // Run starts the long-polling loop. Blocks until ctx is done.
 func (b *Bot) Run() {
 	u := tgbotapi.NewUpdate(0)
