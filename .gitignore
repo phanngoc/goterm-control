@@ -6,3 +6,4 @@ dashboard/dist
 *.env
 !.env.example
 config.local.yaml
+/bomtray
