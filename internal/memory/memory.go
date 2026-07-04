@@ -57,10 +57,6 @@ func (m *Manager) TodayNotePath(now time.Time) string {
 
 func (m *Manager) dayStamp(t time.Time) string { return t.In(m.loc).Format("2006-01-02") }
 
-// relNote is the workspace-relative daily-note path used inside prompts,
-// e.g. "memory/2026-07-02.md" — the CLI runs with the workspace as cwd.
-func (m *Manager) relNote(t time.Time) string { return "memory/" + m.dayStamp(t) + ".md" }
-
 // Bootstrap creates the memory directory and seeds MEMORY.md if missing.
 // It never overwrites existing files.
 func (m *Manager) Bootstrap() error {
@@ -89,23 +85,25 @@ func (m *Manager) BuildContext(now time.Time) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(policyHeader, m.relNote(now)))
+	sb.WriteString(fmt.Sprintf(policyHeader, m.MemoryFilePath(), m.NotesDir(), m.TodayNotePath(now)))
 
-	sb.WriteString("\n### MEMORY.md\n")
-	sb.WriteString(m.readCapped(m.MemoryFilePath(), "MEMORY.md", "(empty)"))
+	sb.WriteString(fmt.Sprintf("\n### %s\n", m.MemoryFilePath()))
+	sb.WriteString(m.readCapped(m.MemoryFilePath(), "(empty)"))
 
-	sb.WriteString(fmt.Sprintf("\n\n### Today (%s)\n", m.relNote(now)))
-	sb.WriteString(m.readCapped(m.TodayNotePath(now), m.relNote(now), "(no notes yet)"))
+	sb.WriteString(fmt.Sprintf("\n\n### Today (%s)\n", m.TodayNotePath(now)))
+	sb.WriteString(m.readCapped(m.TodayNotePath(now), "(no notes yet)"))
 
 	yesterday := now.AddDate(0, 0, -1)
-	sb.WriteString(fmt.Sprintf("\n\n### Yesterday (%s)\n", m.relNote(yesterday)))
-	sb.WriteString(m.readCapped(m.TodayNotePath(yesterday), m.relNote(yesterday), "(no notes)"))
+	sb.WriteString(fmt.Sprintf("\n\n### Yesterday (%s)\n", m.TodayNotePath(yesterday)))
+	sb.WriteString(m.readCapped(m.TodayNotePath(yesterday), "(no notes)"))
 	sb.WriteString("\n")
 
 	out := sb.String()
 	if max := m.cfg.MaxTotalChars; max > 0 {
 		if r := []rune(out); len(r) > max {
-			out = string(r[:max]) + "\n[memory truncated — read MEMORY.md and memory/ for full contents]\n"
+			out = string(r[:max]) + fmt.Sprintf(
+				"\n[memory truncated — read %s and %s for full contents]\n",
+				m.MemoryFilePath(), m.NotesDir())
 		}
 	}
 	return out
@@ -113,7 +111,7 @@ func (m *Manager) BuildContext(now time.Time) string {
 
 // readCapped reads a file trimmed and capped at MaxFileChars, appending a
 // truncation marker that points the agent at the on-disk file.
-func (m *Manager) readCapped(path, relPath, empty string) string {
+func (m *Manager) readCapped(path, empty string) string {
 	data, err := os.ReadFile(path)
 	content := strings.TrimSpace(string(data))
 	if err != nil || content == "" {
@@ -121,7 +119,7 @@ func (m *Manager) readCapped(path, relPath, empty string) string {
 	}
 	if max := m.cfg.MaxFileChars; max > 0 {
 		if r := []rune(content); len(r) > max {
-			return string(r[:max]) + fmt.Sprintf("\n[truncated — read %s for the rest]", relPath)
+			return string(r[:max]) + fmt.Sprintf("\n[truncated — read %s for the rest]", path)
 		}
 	}
 	return content
