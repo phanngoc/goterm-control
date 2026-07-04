@@ -191,6 +191,17 @@ func runGateway(args []string) {
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	startTime := time.Now()
 
+	// Create the Telegram bot first so the gateway status RPC can report its
+	// live run state (menu bar tray polls /api/status).
+	var tgBot *bot.Bot
+	if cfg.Telegram.Token != "" {
+		tgBot, err = bot.New(cfg)
+		if err != nil {
+			log.Printf("gateway: telegram bot init failed: %v", err)
+			tgBot = nil
+		}
+	}
+
 	deps := gateway.Deps{
 		Sessions: sessions,
 		Resolver: resolver,
@@ -199,21 +210,37 @@ func runGateway(args []string) {
 		DataDir:  cfg.Session.DataDir,
 		Uptime:   func() time.Duration { return time.Since(startTime) },
 	}
+	if tgBot != nil {
+		deps.Runs = func() []gateway.RunInfo {
+			var out []gateway.RunInfo
+			for _, s := range tgBot.Sessions().List() {
+				info := s.RunInfo()
+				if !info.Running {
+					continue
+				}
+				out = append(out, gateway.RunInfo{
+					ChatID:    s.ChatID,
+					SessionID: s.ID,
+					Label:     s.GetLabel(),
+					Task:      info.CurrentTask,
+					LastTool:  info.LastTool,
+					ToolCount: info.ToolCount,
+					StartedAt: info.StartedAt.Format(time.RFC3339),
+				})
+			}
+			return out
+		}
+	}
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), "dashboard/dist")
 
-	// Start Telegram bot in background if configured
-	if cfg.Telegram.Token != "" {
-		tgBot, err := bot.New(cfg)
-		if err != nil {
-			log.Printf("gateway: telegram bot init failed: %v", err)
-		} else {
-			go func() {
-				log.Println("gateway: starting Telegram bot")
-				tgBot.Run()
-			}()
-			defer tgBot.Shutdown()
-		}
+	// Start Telegram bot polling in background
+	if tgBot != nil {
+		go func() {
+			log.Println("gateway: starting Telegram bot")
+			tgBot.Run()
+		}()
+		defer tgBot.Shutdown()
 	}
 
 	// Kill any stale process holding our port (prevents "address already in use"

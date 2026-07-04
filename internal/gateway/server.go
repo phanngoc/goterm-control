@@ -56,6 +56,18 @@ func (s *Server) Start(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","uptime":"%s"}`, time.Since(s.startedAt).Round(time.Second))
 	})
+	// Plain HTTP mirror of the "status" RPC method — lets simple pollers
+	// (menu bar tray) avoid the WebSocket handshake.
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		res, err := s.handler(r.Context(), "status", nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(res)
+	})
 
 	if s.dashboardDir != "" {
 		fs := http.FileServer(http.Dir(s.dashboardDir))
