@@ -371,8 +371,13 @@ func TestMigrateV2ToV3(t *testing.T) {
 	defer db.Close()
 
 	ver, _ := db.currentVersion()
-	if ver != 3 {
-		t.Errorf("version = %d, want 3", ver)
+	if ver != schemaVersion {
+		t.Errorf("version = %d, want %d", ver, schemaVersion)
+	}
+	// v4 tables must exist after the chained migration.
+	var name string
+	if err := db.conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&name); err != nil {
+		t.Errorf("users table missing after migration: %v", err)
 	}
 
 	// Existing row must load with memory_flushed defaulting to false.

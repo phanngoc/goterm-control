@@ -11,11 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ngocp/goterm-control/internal/auth"
 )
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // allow all origins for dev
-}
 
 // Server is a WebSocket JSON-RPC server for remote control of the agent.
 // StreamSendHandler handles streaming "send" requests, emitting partial events.
@@ -26,6 +23,8 @@ type Server struct {
 	dashboardDir  string
 	handler       MethodHandler
 	streamHandler StreamSendHandler
+	auth          *auth.Manager // nil-safe; enforces dashboard auth when enabled
+	upgrader      websocket.Upgrader
 	httpSrv       *http.Server
 	startedAt     time.Time
 	mu            sync.Mutex
@@ -35,13 +34,19 @@ type Server struct {
 // MethodHandler processes RPC method calls.
 type MethodHandler func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error)
 
-func NewServer(addr string, handler MethodHandler, streamHandler StreamSendHandler, dashboardDir string) *Server {
+func NewServer(addr string, handler MethodHandler, streamHandler StreamSendHandler, dashboardDir string, authMgr *auth.Manager) *Server {
 	return &Server{
 		addr:          addr,
 		dashboardDir:  dashboardDir,
 		handler:       handler,
 		streamHandler: streamHandler,
-		clients:       make(map[*websocket.Conn]bool),
+		auth:          authMgr,
+		upgrader: websocket.Upgrader{
+			// Same-host, localhost, and the configured public host only —
+			// blocks cross-site WebSocket hijacking from arbitrary origins.
+			CheckOrigin: authMgr.CheckOrigin,
+		},
+		clients: make(map[*websocket.Conn]bool),
 	}
 }
 
@@ -56,10 +61,18 @@ func (s *Server) Start(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","uptime":"%s"}`, time.Since(s.startedAt).Round(time.Second))
 	})
+	// Dashboard auth endpoints (username/password → session cookie).
+	if s.auth != nil {
+		mux.HandleFunc("/api/login", s.auth.HandleLogin)
+		mux.HandleFunc("/api/logout", s.auth.HandleLogout)
+		mux.HandleFunc("/api/me", s.auth.HandleMe)
+	}
+
 	// Plain HTTP mirror of the "status" RPC method — lets simple pollers
-	// (menu bar tray) avoid the WebSocket handshake.
-	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+	// (menu bar tray) avoid the WebSocket handshake. Requires a login
+	// session when auth is enabled, except for direct loopback clients
+	// (the tray); tunnel traffic always carries forwarding headers.
+	mux.HandleFunc("/api/status", s.auth.RequireAuthExceptLocal(func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.handler(r.Context(), "status", nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -67,7 +80,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(res)
-	})
+	}))
 
 	if s.dashboardDir != "" {
 		fs := http.FileServer(http.Dir(s.dashboardDir))
@@ -107,7 +120,19 @@ func (s *Server) Uptime() time.Duration {
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	// Resolve the login session BEFORE upgrading; browsers send cookies on
+	// the WS handshake. Principal is nil when auth is disabled.
+	var principal *Principal
+	if s.auth.Enabled() {
+		user := s.auth.UserFromRequest(r)
+		if user == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		principal = &Principal{Username: user.Username, Role: user.Role}
+	}
+
+	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("gateway: ws upgrade failed: %v", err)
 		return
@@ -161,9 +186,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		// Handle requests async so long-running sends don't block the read loop
 		go func(req Request) {
+			ctx := WithPrincipal(context.Background(), principal)
+
+			// Role gate: viewers may only call read-only methods. The
+			// streaming "send" path bypasses the method handler, so check here.
+			if !principal.Allowed(req.Method) {
+				writeJSON(Response{
+					ID:    req.ID,
+					Error: &RPCError{Code: -32603, Message: fmt.Sprintf("forbidden: role %q cannot call %q", principal.Role, req.Method)},
+				})
+				return
+			}
+
 			// For "send", use streaming handler that sends partial events
 			if req.Method == "send" && s.streamHandler != nil {
-				s.streamHandler(context.Background(), req, func(ev StreamEvent) {
+				s.streamHandler(ctx, req, func(ev StreamEvent) {
 					ev.ID = req.ID
 					if ev.Type == "response" {
 						// Final response — send as proper Response
@@ -178,7 +215,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			result, err := s.handler(context.Background(), req.Method, req.Params)
+			result, err := s.handler(ctx, req.Method, req.Params)
 
 			var resp Response
 			resp.ID = req.ID
