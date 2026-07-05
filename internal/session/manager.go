@@ -24,6 +24,13 @@ type SessionPersister interface {
 	Save(chats map[int64]*ChatState) error
 }
 
+// SessionDeleter is an optional SessionPersister extension for backends that
+// can delete individual sessions (needed because Save only upserts — without
+// a real delete, pruned sessions would resurrect from disk on next Load).
+type SessionDeleter interface {
+	DeleteSession(sessionID string) error
+}
+
 // Manager stores sessions keyed by chat ID with disk persistence.
 type Manager struct {
 	mu    sync.RWMutex
@@ -174,8 +181,17 @@ func (m *Manager) NewSession(chatID int64) (*Session, error) {
 		return s, nil
 	}
 
+	// At the cap: evict the oldest idle sessions instead of failing, so
+	// /new always works. Their SQLite rows (and messages, via FK cascade)
+	// are deleted; transcript JSONL files stay on disk as the audit trail.
 	if len(cs.Sessions) >= MaxSessionsPerChat {
-		return nil, fmt.Errorf("session limit reached (%d)", MaxSessionsPerChat)
+		evicted := m.pruneOldestLocked(cs, MaxSessionsPerChat-1)
+		if len(evicted) > 0 {
+			log.Printf("session: pruned %d oldest session(s) for chat %d: %v", len(evicted), chatID, evicted)
+		}
+		if len(cs.Sessions) >= MaxSessionsPerChat {
+			return nil, fmt.Errorf("session limit reached (%d) and no session is evictable", MaxSessionsPerChat)
+		}
 	}
 
 	seq := cs.NextSeq
@@ -185,6 +201,38 @@ func (m *Manager) NewSession(chatID int64) (*Session, error) {
 	cs.NextSeq = seq + 1
 	m.scheduleSave()
 	return s, nil
+}
+
+// pruneOldestLocked evicts the least-recently-updated sessions from cs until
+// at most keep remain. The active session and any session with an in-flight
+// run are never evicted. Returns the evicted session IDs. Caller holds m.mu.
+func (m *Manager) pruneOldestLocked(cs *ChatState, keep int) []string {
+	candidates := make([]*Session, 0, len(cs.Sessions))
+	for id, s := range cs.Sessions {
+		if id == cs.ActiveSessionID || s.IsRunning() {
+			continue
+		}
+		candidates = append(candidates, s)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].UpdatedAt.Before(candidates[j].UpdatedAt)
+	})
+
+	deleter, _ := m.store.(SessionDeleter)
+	var evicted []string
+	for _, s := range candidates {
+		if len(cs.Sessions) <= keep {
+			break
+		}
+		delete(cs.Sessions, s.ID)
+		evicted = append(evicted, s.ID)
+		if deleter != nil {
+			if err := deleter.DeleteSession(s.ID); err != nil {
+				log.Printf("session: delete %s from store: %v", s.ID, err)
+			}
+		}
+	}
+	return evicted
 }
 
 // SwitchActive changes the active session for a chat.
