@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -135,6 +136,11 @@ func handleSessionsList(deps Deps) (json.RawMessage, error) {
 			all = append(all, s)
 		}
 	}
+
+	// Newest sessions first (stubs without timestamps sink to the bottom).
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].UpdatedAt.After(all[j].UpdatedAt)
+	})
 
 	infos := make([]SessionInfo, 0, len(all))
 	for _, s := range all {

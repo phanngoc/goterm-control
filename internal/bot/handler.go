@@ -19,6 +19,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
@@ -43,6 +44,7 @@ type Handler struct {
 	indicator  *NameIndicator
 	typing     *TypingIndicator
 	memory     *memory.Manager // markdown persistent memory (nil-safe)
+	titler     *titler.Titler  // async session auto-naming (nil-safe)
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -581,8 +583,22 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		eventsMu.Unlock()
 	}
 
-	// Record user message
-	addEvent(transcript.Event{Type: transcript.EventUserMessage, Content: userText})
+	// Persist the user message immediately (transcript + SQLite) so it
+	// survives a crash mid-run instead of waiting for the reply to finish.
+	if h.transcript != nil {
+		err := h.transcript.Append(sess.ID, transcript.Event{
+			Type: transcript.EventUserMessage, Timestamp: time.Now(),
+			SessionID: sess.ID, ChatID: chatID, Content: userText,
+		})
+		if err != nil {
+			log.Printf("handler: transcript write error: %v", err)
+		}
+	}
+	if h.messages != nil {
+		if err := h.messages.Append(sess.ID, agent.Message{Role: "user", Content: userText}); err != nil {
+			log.Printf("handler: message store user error: %v", err)
+		}
+	}
 
 	// assistantText accumulates ALL turns (for storage); turnText resets per
 	// iteration so the auto-continue heuristic only inspects the latest turn.
@@ -711,28 +727,43 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		}
 	}
 
-	// Persist messages to SQLite (queryable history)
-	if h.messages != nil {
-		if err := h.messages.Append(sess.ID, agent.Message{Role: "user", Content: userText}); err != nil {
-			log.Printf("handler: message store user error: %v", err)
-		}
-		if respText != "" {
-			if err := h.messages.Append(sess.ID, agent.Message{Role: "assistant", Content: respText}); err != nil {
-				log.Printf("handler: message store assistant error: %v", err)
-			}
+	// Persist assistant response to SQLite (the user message was already
+	// stored at the start of the run).
+	if h.messages != nil && respText != "" {
+		if err := h.messages.Append(sess.ID, agent.Message{Role: "assistant", Content: respText}); err != nil {
+			log.Printf("handler: message store assistant error: %v", err)
 		}
 	}
 
-	// Auto-label session from first user message
+	// Label the session: instant fallback from the first user message, then
+	// an async rename to a summary of the whole conversation.
 	if sess.GetLabel() == "" && userText != "" {
 		sess.SetLabel(truncateLabel(userText, 40))
 	}
+	h.refreshSessionLabel(sess)
 
 	// Mark session dirty for persistence
 	h.sessions.MarkDirty()
 
 	result.EndedAt = time.Now()
 	return result, nil
+}
+
+// refreshSessionLabel regenerates the session label as a short summary of
+// recent conversation content. Runs async; keeps the old label on failure.
+func (h *Handler) refreshSessionLabel(sess *session.Session) {
+	if h.titler == nil || h.messages == nil {
+		return
+	}
+	msgs, err := h.messages.LoadHistory(sess.ID, 8)
+	if err != nil || len(msgs) == 0 {
+		return
+	}
+	h.titler.Refresh(sess.ID, msgs, func(title string) {
+		sess.SetLabel(title)
+		h.sessions.MarkDirty()
+		log.Printf("titler: session %s renamed to %q", sess.ID, title)
+	})
 }
 
 func (h *Handler) handleCallback(cb *tgbotapi.CallbackQuery) {

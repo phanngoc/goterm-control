@@ -230,7 +230,9 @@ func runGateway(args []string) {
 	// live run state (menu bar tray polls /api/status).
 	var tgBot *bot.Bot
 	if cfg.Telegram.Token != "" {
-		tgBot, err = bot.New(cfg)
+		// Share db + session manager with the gateway so session renames and
+		// turn counters show up in the dashboard without a reload.
+		tgBot, err = bot.New(cfg, db, sessions)
 		if err != nil {
 			log.Printf("gateway: telegram bot init failed: %v", err)
 			tgBot = nil

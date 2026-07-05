@@ -9,6 +9,8 @@ export type Session = {
   output_tokens: number
   created_at: string
   updated_at: string
+  label?: string
+  seq?: number
 }
 
 export type TranscriptEvent = {
