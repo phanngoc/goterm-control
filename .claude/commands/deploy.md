@@ -27,10 +27,14 @@ artifacts into `~/.bomclaw/` and restart.
    ```
 
 3. **Install artifacts to ~/.bomclaw** and re-sign (launchd refuses unsigned
-   swaps; identifier keeps TCC/LWCR identity stable):
+   swaps). Sign with the "BomClaw Code Signing" keychain identity — it keeps
+   the TCC identity stable across deploys so Documents/Desktop grants survive
+   binary swaps. Ad-hoc (`-s -`) is the fallback, but every ad-hoc rebuild is
+   a NEW TCC identity and macOS re-asks for folder permissions:
    ```bash
    cp bomclaw ~/.bomclaw/bomclaw
-   codesign -f -s - --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
+   codesign -f -s "BomClaw Code Signing" --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw \
+     || codesign -f -s - --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
    cp config.yaml ~/.bomclaw/config.yaml
    cp .env ~/.bomclaw/.env
    rm -rf ~/.bomclaw/dashboard/dist && cp -R dashboard/dist ~/.bomclaw/dashboard/dist
