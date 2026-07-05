@@ -177,19 +177,48 @@ func TestManagerGetRecoversFromStaleActiveID(t *testing.T) {
 	}
 }
 
-func TestManagerSessionLimit(t *testing.T) {
+func TestManagerSessionLimitPrunesOldest(t *testing.T) {
 	mgr := NewManager(nil) // in-memory only
 
-	mgr.Get(100) // creates first session
+	first := mgr.Get(100) // creates first session (oldest)
 	for i := 1; i < MaxSessionsPerChat; i++ {
 		if _, err := mgr.NewSession(100); err != nil {
 			t.Fatalf("NewSession %d: %v", i, err)
 		}
 	}
 
-	// Should fail at the limit
-	_, err := mgr.NewSession(100)
-	if err == nil {
-		t.Error("expected error at session limit")
+	// At the limit: NewSession must evict the oldest idle session, not fail.
+	s, err := mgr.NewSession(100)
+	if err != nil {
+		t.Fatalf("NewSession at limit: %v", err)
+	}
+	if got := len(mgr.ListForChat(100)); got > MaxSessionsPerChat {
+		t.Errorf("sessions = %d, want <= %d", got, MaxSessionsPerChat)
+	}
+	if mgr.GetByID(first.ID) != nil {
+		t.Errorf("oldest session %s should have been pruned", first.ID)
+	}
+	// The new session is active.
+	if mgr.ActiveSessionID(100) != s.ID {
+		t.Errorf("active = %s, want %s", mgr.ActiveSessionID(100), s.ID)
+	}
+}
+
+func TestManagerPruneSkipsRunningSessions(t *testing.T) {
+	mgr := NewManager(nil)
+
+	first := mgr.Get(100)
+	first.MarkRunning("long task") // oldest but busy — must not be evicted
+	for i := 1; i < MaxSessionsPerChat; i++ {
+		if _, err := mgr.NewSession(100); err != nil {
+			t.Fatalf("NewSession %d: %v", i, err)
+		}
+	}
+
+	if _, err := mgr.NewSession(100); err != nil {
+		t.Fatalf("NewSession at limit: %v", err)
+	}
+	if mgr.GetByID(first.ID) == nil {
+		t.Error("running session was evicted")
 	}
 }

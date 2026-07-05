@@ -165,6 +165,13 @@ func (s *SQLiteSessionStore) Save(chats map[int64]*session.ChatState) error {
 	return tx.Commit()
 }
 
+// DeleteSession removes a session row; its messages go with it via the
+// ON DELETE CASCADE foreign key. Implements session.SessionDeleter.
+func (s *SQLiteSessionStore) DeleteSession(sessionID string) error {
+	_, err := s.db.conn.Exec(`DELETE FROM sessions WHERE id = ?`, sessionID)
+	return err
+}
+
 // pickMostRecent returns the ID of the most recently updated session.
 func pickMostRecent(sessions map[string]*session.Session) string {
 	var bestID string

@@ -401,3 +401,42 @@ func TestMigrateV2ToV3(t *testing.T) {
 		t.Error("memory_flushed flag did not persist")
 	}
 }
+
+func TestSessionStoreDeleteSession(t *testing.T) {
+	db := testDB(t)
+	store := NewSessionStore(db)
+	msgStore := NewMessageStore(db)
+
+	s1 := session.NewFromDB("chat_100", 100, time.Now(), time.Now(), "c1", 1, 0, 0, "", "", 0, false)
+	s2 := session.NewFromDB("chat_100_1", 100, time.Now(), time.Now(), "c2", 1, 0, 0, "", "", 1, false)
+	chats := map[int64]*session.ChatState{
+		100: {
+			ActiveSessionID: "chat_100_1",
+			NextSeq:         2,
+			Sessions:        map[string]*session.Session{"chat_100": s1, "chat_100_1": s2},
+		},
+	}
+	if err := store.Save(chats); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	msgStore.Append("chat_100", agent.Message{Role: "user", Content: "old"})
+
+	if err := store.DeleteSession("chat_100"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, exists := loaded[100].Sessions["chat_100"]; exists {
+		t.Error("deleted session still present after Load")
+	}
+	if _, exists := loaded[100].Sessions["chat_100_1"]; !exists {
+		t.Error("surviving session lost")
+	}
+	// Messages must cascade with the session row.
+	if count, _ := msgStore.Count("chat_100"); count != 0 {
+		t.Errorf("messages not cascaded: count = %d", count)
+	}
+}
