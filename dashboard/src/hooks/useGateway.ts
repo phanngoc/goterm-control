@@ -24,11 +24,18 @@ export function useGateway() {
       waiters.current = []
     }
 
-    socket.onclose = (e) => {
+    socket.onclose = async (e) => {
       console.log('[gateway] disconnected', e.code)
       ready.current = false
       setConnected(false)
-      if (e.code !== 1000) setTimeout(connect, 3000)
+      if (e.code === 1000) return
+      // Session may have expired mid-use — a reconnect loop would 401
+      // forever, so check auth first and bounce to the login screen.
+      try {
+        const r = await fetch('/api/me')
+        if (r.status === 401) { location.reload(); return }
+      } catch {}
+      setTimeout(connect, 3000)
     }
 
     socket.onerror = () => socket.close()

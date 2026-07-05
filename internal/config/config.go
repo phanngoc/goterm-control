@@ -17,6 +17,21 @@ type Config struct {
 	Tools    ToolsConfig    `yaml:"tools"`
 	Session  SessionConfig  `yaml:"session"`
 	Memory   MemoryConfig   `yaml:"memory"`
+	Gateway  GatewayConfig  `yaml:"gateway"`
+}
+
+// GatewayConfig holds gateway HTTP server settings.
+type GatewayConfig struct {
+	Auth AuthConfig `yaml:"auth"`
+}
+
+// AuthConfig controls dashboard username/password authentication.
+// MUST be enabled before exposing the gateway via a public tunnel — the
+// dashboard RPC drives a bypassPermissions agent with full machine control.
+type AuthConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	PublicHost      string `yaml:"public_host"`       // e.g. "bot.bomclaw.org" (WS Origin allowlist)
+	SessionTTLHours int    `yaml:"session_ttl_hours"` // default 168 (7 days)
 }
 
 // ClaudeConfig is kept for backward compatibility — the claude CLI subprocess config.
@@ -163,6 +178,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Memory.Flush.TimeoutSeconds == 0 {
 		cfg.Memory.Flush.TimeoutSeconds = 120
+	}
+	if cfg.Gateway.Auth.SessionTTLHours == 0 {
+		cfg.Gateway.Auth.SessionTTLHours = 168
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {

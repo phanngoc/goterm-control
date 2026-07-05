@@ -21,6 +21,7 @@ import (
 
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/auth"
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
@@ -92,6 +93,8 @@ func main() {
 			}
 		}
 		runGateway(os.Args[2:])
+	case "user":
+		runUserCmd(os.Args[2:])
 	case "send":
 		runSend(os.Args[2:])
 	case "status":
@@ -206,6 +209,19 @@ func runGateway(args []string) {
 	// Session manager (SQLite-backed)
 	sessions := session.NewManager(storage.NewSessionStore(db))
 
+	// Dashboard auth (username/password). When enabled, /ws and /api/* need
+	// a login session — required before exposing the gateway via a tunnel.
+	authMgr := auth.NewManager(auth.Config{
+		Enabled:    cfg.Gateway.Auth.Enabled,
+		PublicHost: cfg.Gateway.Auth.PublicHost,
+		SessionTTL: time.Duration(cfg.Gateway.Auth.SessionTTLHours) * time.Hour,
+	}, storage.NewUserStore(db))
+	if cfg.Gateway.Auth.Enabled {
+		log.Printf("gateway: dashboard auth enabled (public_host=%s)", cfg.Gateway.Auth.PublicHost)
+	} else {
+		log.Printf("gateway: dashboard auth DISABLED — do not expose this port publicly")
+	}
+
 	// Gateway RPC server
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	startTime := time.Now()
@@ -251,7 +267,7 @@ func runGateway(args []string) {
 		}
 	}
 
-	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir())
+	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir(), authMgr)
 
 	// Start Telegram bot polling in background
 	if tgBot != nil {

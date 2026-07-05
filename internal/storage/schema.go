@@ -2,7 +2,7 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // DDL statements executed in order for fresh installs.
 var ddl = []string{
@@ -44,6 +44,21 @@ var ddl = []string{
 		created_at   TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id)`,
+
+	`CREATE TABLE IF NOT EXISTS users (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		username      TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		role          TEXT DEFAULT 'admin',
+		created_at    TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS web_sessions (
+		token_hash TEXT PRIMARY KEY,
+		user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		expires_at TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
 }
 
 // migrate creates tables and imports legacy data if needed.
@@ -74,7 +89,41 @@ func (db *DB) migrate() error {
 		if err := db.migrateV2ToV3(); err != nil {
 			return fmt.Errorf("migrate v2→v3: %w", err)
 		}
-		return db.setVersion(3)
+		if err := db.setVersion(3); err != nil {
+			return err
+		}
+		ver = 3
+	}
+	if ver < 4 {
+		if err := db.migrateV3ToV4(); err != nil {
+			return fmt.Errorf("migrate v3→v4: %w", err)
+		}
+		return db.setVersion(4)
+	}
+	return nil
+}
+
+// migrateV3ToV4 adds the users and web_sessions tables for dashboard auth.
+func (db *DB) migrateV3ToV4() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			username      TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			role          TEXT DEFAULT 'admin',
+			created_at    TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS web_sessions (
+			token_hash TEXT PRIMARY KEY,
+			user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.conn.Exec(stmt); err != nil {
+			return err
+		}
 	}
 	return nil
 }

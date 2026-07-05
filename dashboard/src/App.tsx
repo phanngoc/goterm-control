@@ -4,8 +4,9 @@ import { useGateway } from './hooks/useGateway'
 import SessionList from './components/SessionList'
 import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
+import type { Me } from './Root'
 
-export default function App() {
+export default function App({ me, onLogout }: { me: Me; onLogout?: () => void }) {
   const { call } = useGateway()
   const tab = useStore(s => s.tab)
   const setTab = useStore(s => s.setTab)
@@ -87,7 +88,7 @@ export default function App() {
           </h1>
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>
-        <nav className="flex gap-1">
+        <nav className="flex items-center gap-1">
           {(['sessions', 'chat', 'status'] as const).map(t => (
             <button
               key={t}
@@ -99,6 +100,17 @@ export default function App() {
               {t === 'sessions' ? 'Sessions' : t === 'chat' ? 'Chat' : 'Status'}
             </button>
           ))}
+          {onLogout && (
+            <>
+              <span className="ml-2 text-xs text-gray-500">{me.username}{me.role === 'viewer' ? ' (viewer)' : ''}</span>
+              <button
+                onClick={onLogout}
+                className="px-3 py-1 text-sm rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+              >
+                Logout
+              </button>
+            </>
+          )}
         </nav>
       </header>
 
