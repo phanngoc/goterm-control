@@ -118,6 +118,10 @@ func mustReadPasswordHash() string {
 	return hash
 }
 
+// stdinReader is shared across readPassword calls: a fresh bufio.Reader per
+// call would buffer ahead and swallow the second (confirm) line of piped input.
+var stdinReader = bufio.NewReader(os.Stdin)
+
 func readPassword(prompt string) string {
 	fmt.Print(prompt)
 	if term.IsTerminal(int(syscall.Stdin)) {
@@ -129,7 +133,7 @@ func readPassword(prompt string) string {
 		return strings.TrimSpace(string(b))
 	}
 	// Non-TTY (piped) input — read a line.
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := stdinReader.ReadString('\n')
 	if err != nil && line == "" {
 		log.Fatalf("read password: %v", err)
 	}
