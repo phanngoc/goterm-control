@@ -15,3 +15,8 @@ func newWalkFilter(_ string) *walkFilter {
 func (wf *walkFilter) shouldSkip(_ string, _ os.FileInfo) bool {
 	return false
 }
+
+// grepExcludeDirs is a no-op on non-macOS platforms.
+func grepExcludeDirs(_ string) []string {
+	return nil
+}

@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore, ChatMessage } from '../stores/store'
+import { eventsToMessages } from '../lib/transcript'
 import Markdown from 'react-markdown'
 
 export default function ChatView({ call }: { call: (m: string, p?: any) => Promise<any> }) {
   const messages = useStore(s => s.messages)
   const addMessage = useStore(s => s.addMessage)
+  const setMessages = useStore(s => s.setMessages)
   const sending = useStore(s => s.sending)
   const setSending = useStore(s => s.setSending)
   const activeSessionId = useStore(s => s.activeSessionId)
@@ -21,6 +23,20 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
   useEffect(() => {
     inputRef.current?.focus()
   }, [activeSessionId])
+
+  // While the last message is a partial snapshot (bot still replying after a
+  // page reload), poll the transcript every 10s to show fresh progress.
+  useEffect(() => {
+    const last = messages[messages.length - 1]
+    if (!last?.partial || !activeSessionId || sending) return
+    const t = setInterval(async () => {
+      try {
+        const events = await call('transcript.get', { session_id: activeSessionId })
+        if (Array.isArray(events)) setMessages(eventsToMessages(events))
+      } catch {}
+    }, 10_000)
+    return () => clearInterval(t)
+  }, [messages, activeSessionId, sending, call, setMessages])
 
   const resetStreaming = useStore(s => s.resetStreaming)
   const streamingText = useStore(s => s.streamingText)
@@ -161,6 +177,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div className="prose prose-sm prose-invert max-w-none [&_pre]:bg-gray-900 [&_pre]:rounded-lg [&_pre]:p-2 [&_code]:text-violet-300 [&_p]:my-1">
           <Markdown>{message.content}</Markdown>
         </div>
+        {message.partial && (
+          <div className="text-xs text-yellow-500/80 mt-1 animate-pulse">
+            ⏳ đang trả lời… (bản lưu tạm mỗi 10s)
+          </div>
+        )}
         <div className="text-[10px] text-gray-500 mt-1">
           {new Date(message.timestamp).toLocaleTimeString()}
         </div>

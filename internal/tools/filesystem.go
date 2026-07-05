@@ -251,17 +251,18 @@ func (t *FileSystemTool) SearchFiles(ctx context.Context, raw json.RawMessage) (
 	searchPath := resolvePath(inp.Path)
 
 	if inp.SearchContent {
-		// Use grep for content search
-		args := []string{"-r", "--include=" + inp.FilePattern, "-n", "-m", "5", inp.Pattern, searchPath}
-		if inp.FilePattern == "" {
-			args = []string{"-r", "-n", "-m", "5", inp.Pattern, searchPath}
+		// Use grep for content search. Home-rooted searches exclude
+		// TCC-protected dirs (Music, Pictures, …) to avoid macOS
+		// permission dialogs.
+		excludes := strings.Join(grepExcludeDirs(searchPath), " ")
+		if excludes != "" {
+			excludes += " "
 		}
 		shell := &ShellTool{DefaultTimeout: 30, MaxOutputBytes: 4096}
-		cmd := fmt.Sprintf("grep -r -n --include='%s' -m 5 %q %q 2>/dev/null | head -100", inp.FilePattern, inp.Pattern, searchPath)
+		cmd := fmt.Sprintf("grep -r -n %s--include='%s' -m 5 %q %q 2>/dev/null | head -100", excludes, inp.FilePattern, inp.Pattern, searchPath)
 		if inp.FilePattern == "" {
-			cmd = fmt.Sprintf("grep -r -n -m 5 %q %q 2>/dev/null | head -100", inp.Pattern, searchPath)
+			cmd = fmt.Sprintf("grep -r -n %s-m 5 %q %q 2>/dev/null | head -100", excludes, inp.Pattern, searchPath)
 		}
-		_ = args
 		return shell.Run(ctx, mustJSON(map[string]interface{}{
 			"command": cmd,
 		}))
