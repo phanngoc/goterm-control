@@ -7,3 +7,5 @@ dashboard/dist
 !.env.example
 config.local.yaml
 /bomtray
+/bdscrawler
+__pycache__/

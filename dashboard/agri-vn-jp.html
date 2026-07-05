@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nông nghiệp Việt Nam vs Nhật Bản 2025</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --vn: #DA251D;
+      --jp: #BC002D;
+      --vn-light: #ff6b6b;
+      --jp-light: #ff9999;
+      --bg: #0d1117;
+      --card: #161b22;
+      --card2: #1c2333;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --blue: #58a6ff;
+      --purple: #bc8cff;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* HERO */
+    .hero {
+      background: linear-gradient(135deg, #0d1117 0%, #1a0a0a 40%, #0a0a1a 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 48px 40px 36px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -80px; right: -80px;
+      width: 320px; height: 320px;
+      background: radial-gradient(circle, rgba(218,37,29,0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: -60px; left: -60px;
+      width: 260px; height: 260px;
+      background: radial-gradient(circle, rgba(88,166,255,0.1) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .hero h1 {
+      font-size: 36px;
+      font-weight: 800;
+      line-height: 1.15;
+      background: linear-gradient(90deg, #ff6b6b, #ff9999, #58a6ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 10px;
+    }
+    .hero-sub {
+      font-size: 15px;
+      color: var(--muted);
+      max-width: 640px;
+    }
+    .hero-badges {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid;
+    }
+    .badge-vn { background: rgba(218,37,29,0.15); border-color: rgba(218,37,29,0.4); color: #ff8080; }
+    .badge-jp { background: rgba(88,166,255,0.1); border-color: rgba(88,166,255,0.3); color: #58a6ff; }
+    .badge-trade { background: rgba(63,185,80,0.1); border-color: rgba(63,185,80,0.3); color: var(--green); }
+
+    /* LAYOUT */
+    .main { padding: 32px 40px; max-width: 1400px; margin: 0 auto; }
+
+    /* SECTION TITLE */
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 40px 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* KPI GRID */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+    .kpi-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .kpi-card:hover { border-color: #484f58; transform: translateY(-2px); }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      border-radius: 12px 12px 0 0;
+    }
+    .kpi-card.vn::before { background: linear-gradient(90deg, var(--vn), var(--vn-light)); }
+    .kpi-card.jp::before { background: linear-gradient(90deg, var(--jp), #58a6ff); }
+    .kpi-card.neutral::before { background: linear-gradient(90deg, var(--green), var(--purple)); }
+    .kpi-flag { font-size: 22px; margin-bottom: 8px; }
+    .kpi-label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .kpi-value {
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .kpi-card.vn .kpi-value { color: var(--vn-light); }
+    .kpi-card.jp .kpi-value { color: #7db9ff; }
+    .kpi-card.neutral .kpi-value { color: var(--green); }
+    .kpi-sub { font-size: 12px; color: var(--muted); }
+    .kpi-delta {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 10px;
+      margin-top: 6px;
+    }
+    .kpi-delta.up { background: rgba(63,185,80,0.15); color: var(--green); }
+    .kpi-delta.down { background: rgba(248,81,73,0.15); color: #f85149; }
+
+    /* CHART GRID */
+    .chart-grid { display: grid; gap: 20px; }
+    .chart-grid-2 { grid-template-columns: 1fr 1fr; }
+    .chart-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+    @media(max-width: 900px) {
+      .chart-grid-2, .chart-grid-3 { grid-template-columns: 1fr; }
+    }
+
+    .chart-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .chart-card h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .chart-card .chart-desc {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 18px;
+    }
+    .chart-wrap { position: relative; }
+
+    /* COMPARISON TABLE */
+    .compare-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .compare-table thead th {
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .compare-table tbody tr {
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      transition: background 0.15s;
+    }
+    .compare-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+    .compare-table td {
+      padding: 12px 16px;
+      vertical-align: middle;
+    }
+    .compare-table td:first-child { color: var(--muted); font-size: 12px; }
+    .td-vn { color: var(--vn-light); font-weight: 700; }
+    .td-jp { color: #7db9ff; font-weight: 700; }
+    .advantage {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .adv-vn { background: rgba(218,37,29,0.15); color: #ff8080; }
+    .adv-jp { background: rgba(88,166,255,0.12); color: #58a6ff; }
+    .adv-tie { background: rgba(210,153,34,0.15); color: var(--yellow); }
+
+    /* BILATERAL */
+    .bilateral-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media(max-width: 700px) { .bilateral-grid { grid-template-columns: 1fr; } }
+
+    .flow-card {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px;
+    }
+    .flow-card h4 { font-size: 13px; font-weight: 700; margin-bottom: 14px; }
+    .flow-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      font-size: 13px;
+    }
+    .flow-item:last-child { border-bottom: none; }
+    .flow-name { color: var(--muted); }
+    .flow-val { font-weight: 700; }
+    .bar-mini {
+      height: 4px;
+      border-radius: 2px;
+      margin-top: 4px;
+      background: rgba(255,255,255,0.06);
+      position: relative;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      position: absolute;
+      left: 0; top: 0;
+    }
+
+    /* OPPORTUNITY CARDS */
+    .opportunity-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .opp-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .opp-icon { font-size: 28px; margin-bottom: 10px; }
+    .opp-title { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+    .opp-desc { font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .opp-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .opp-tag {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 8px;
+      background: rgba(88,166,255,0.1);
+      color: #58a6ff;
+      border: 1px solid rgba(88,166,255,0.2);
+    }
+    .opp-tag.green {
+      background: rgba(63,185,80,0.1);
+      color: var(--green);
+      border-color: rgba(63,185,80,0.2);
+    }
+    .opp-tag.red {
+      background: rgba(218,37,29,0.12);
+      color: #ff8080;
+      border-color: rgba(218,37,29,0.25);
+    }
+
+    /* FOOTER */
+    .footer {
+      text-align: center;
+      padding: 28px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+      margin-top: 48px;
+    }
+    .footer a { color: var(--blue); text-decoration: none; }
+
+    /* TIMELINE */
+    .timeline { display: flex; flex-direction: column; gap: 0; }
+    .tl-item {
+      display: flex;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(48,54,61,0.4);
+    }
+    .tl-item:last-child { border-bottom: none; }
+    .tl-year {
+      min-width: 50px;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--blue);
+    }
+    .tl-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--blue);
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+    .tl-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+    .tl-text span { color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-label">Báo cáo Phân tích Thị trường 2025</div>
+  <h1>Nông nghiệp Việt Nam<br>vs Nhật Bản</h1>
+  <p class="hero-sub">Phân tích so sánh toàn diện: quy mô, cấu trúc, xuất khẩu, cơ hội hợp tác và xu hướng 2025-2030</p>
+  <div class="hero-badges">
+    <span class="badge badge-vn">🇻🇳 Việt Nam — Emerging Exporter</span>
+    <span class="badge badge-jp">🇯🇵 Nhật Bản — Premium Importer</span>
+    <span class="badge badge-trade">🤝 Kim ngạch song phương $1.5B+/năm</span>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- KPI SECTION - VIETNAM -->
+  <div class="section-title">🇻🇳 Chỉ số Nông nghiệp Việt Nam</div>
+  <div class="kpi-grid">
+    <div class="kpi-card vn">
+      <div class="kpi-flag">🌾</div>
+      <div class="kpi-label">Xuất khẩu Nông nghiệp 2025</div>
+      <div class="kpi-value">$70B</div>
+      <div class="kpi-sub">Kỷ lục lịch sử</div>
+      <div class="kpi-delta up">▲ +12% YoY</div>
+    </div>
+    <div class="kpi-card vn">
+      <div class="kpi-flag">☕</div>
+      <div class="kpi-label">Xuất khẩu Cà phê 2025</div>
+      <div class="kpi-value">$8.7B</div>
+      <div class="kpi-sub">#2 thế giới</div>
+      <div class="kpi-delta up">▲ +54.4%</div>
+    </div>
+    <div class="kpi-card vn">
+      <div class="kpi-flag">🍚</div>
+      <div class="kpi-label">Xuất khẩu Gạo 2024</div>
+      <div class="kpi-value">$5B+</div>
+      <div class="kpi-sub">9 triệu tấn</div>
+      <div class="kpi-delta up">▲ +24% giá trị</div>
+    </div>
+    <div class="kpi-card vn">
+      <div class="kpi-flag">🦐</div>
+      <div class="kpi-label">Xuất khẩu Tôm 2024</div>
+      <div class="kpi-value">$4B</div>
+      <div class="kpi-sub">Tôm thẻ + Tôm sú</div>
+      <div class="kpi-delta up">▲ +17%</div>
+    </div>
+    <div class="kpi-card vn">
+      <div class="kpi-flag">🥬</div>
+      <div class="kpi-label">Rau quả 11T/2025</div>
+      <div class="kpi-value">$7.8B</div>
+      <div class="kpi-sub">Kỷ lục 11 tháng</div>
+      <div class="kpi-delta up">▲ +25%</div>
+    </div>
+    <div class="kpi-card vn">
+      <div class="kpi-flag">📊</div>
+      <div class="kpi-label">Tỷ trọng GDP Nông nghiệp</div>
+      <div class="kpi-value">11.6%</div>
+      <div class="kpi-sub">~12% lao động nông thôn</div>
+      <div class="kpi-delta up">Ổn định</div>
+    </div>
+  </div>
+
+  <!-- KPI SECTION - JAPAN -->
+  <div class="section-title">🇯🇵 Chỉ số Nông nghiệp Nhật Bản</div>
+  <div class="kpi-grid">
+    <div class="kpi-card jp">
+      <div class="kpi-flag">🏭</div>
+      <div class="kpi-label">Sản lượng Nông nghiệp 2023</div>
+      <div class="kpi-value">¥9.5T</div>
+      <div class="kpi-sub">~$63B</div>
+      <div class="kpi-delta up">▲ +5.5% YoY</div>
+    </div>
+    <div class="kpi-card jp">
+      <div class="kpi-flag">📦</div>
+      <div class="kpi-label">Nhập khẩu Nông sản 2024</div>
+      <div class="kpi-value">¥9.5T</div>
+      <div class="kpi-sub">+5.4% YoY</div>
+      <div class="kpi-delta down">▼ Phụ thuộc nhập khẩu cao</div>
+    </div>
+    <div class="kpi-card jp">
+      <div class="kpi-flag">✈️</div>
+      <div class="kpi-label">Xuất khẩu Thực phẩm 2024</div>
+      <div class="kpi-value">¥1.5T</div>
+      <div class="kpi-sub">Kỷ lục lịch sử</div>
+      <div class="kpi-delta up">▲ +3.7%</div>
+    </div>
+    <div class="kpi-card jp">
+      <div class="kpi-flag">👴</div>
+      <div class="kpi-label">Độ tuổi Nông dân TB</div>
+      <div class="kpi-value">69.2</div>
+      <div class="kpi-sub">71.7% trên 65 tuổi</div>
+      <div class="kpi-delta down">▼ Già hóa nghiêm trọng</div>
+    </div>
+    <div class="kpi-card jp">
+      <div class="kpi-flag">🔬</div>
+      <div class="kpi-label">R&D Nông nghiệp/GDP</div>
+      <div class="kpi-value">3.5%</div>
+      <div class="kpi-sub">Công nghệ tiên tiến</div>
+      <div class="kpi-delta up">▲ Top 5 thế giới</div>
+    </div>
+    <div class="kpi-card jp">
+      <div class="kpi-flag">📈</div>
+      <div class="kpi-label">Tỷ trọng GDP Nông nghiệp</div>
+      <div class="kpi-value">1.1%</div>
+      <div class="kpi-sub">Post-industrial economy</div>
+      <div class="kpi-delta down">▼ Giảm dần</div>
+    </div>
+  </div>
+
+  <!-- CHARTS ROW 1 -->
+  <div class="section-title">📊 Biểu đồ so sánh</div>
+  <div class="chart-grid chart-grid-2">
+    <div class="chart-card">
+      <h3>Kim ngạch Xuất khẩu Nông sản (tỷ USD)</h3>
+      <div class="chart-desc">Việt Nam vs Nhật Bản — Tăng trưởng 2020-2025</div>
+      <div class="chart-wrap"><canvas id="exportChart" height="220"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Cơ cấu Xuất khẩu Nông sản Việt Nam 2025</h3>
+      <div class="chart-desc">Tỷ trọng các nhóm hàng chính (% tổng $70B)</div>
+      <div class="chart-wrap"><canvas id="vnExportPie" height="220"></canvas></div>
+    </div>
+  </div>
+
+  <div class="chart-grid chart-grid-3" style="margin-top:20px">
+    <div class="chart-card">
+      <h3>Tỷ trọng GDP Nông nghiệp (%)</h3>
+      <div class="chart-desc">VN vs JP vs ASEAN TB</div>
+      <div class="chart-wrap"><canvas id="gdpShareChart" height="220"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Xuất khẩu VN sang Nhật theo mặt hàng (triệu USD 2025)</h3>
+      <div class="chart-desc">Quý 4/2025, tổng ~$1.34B/năm</div>
+      <div class="chart-wrap"><canvas id="bilateralBar" height="220"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Năng suất Lao động Nông nghiệp</h3>
+      <div class="chart-desc">USD/lao động/năm — khoảng cách 10x</div>
+      <div class="chart-wrap"><canvas id="productivityChart" height="220"></canvas></div>
+    </div>
+  </div>
+
+  <!-- COMPARISON TABLE -->
+  <div class="section-title">📋 Bảng so sánh toàn diện</div>
+  <div class="chart-card">
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th>Chỉ tiêu</th>
+          <th>🇻🇳 Việt Nam</th>
+          <th>🇯🇵 Nhật Bản</th>
+          <th>Lợi thế</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Kim ngạch xuất khẩu NN</td>
+          <td class="td-vn">$70 tỷ (2025)</td>
+          <td class="td-jp">¥1.5T (~$10B)</td>
+          <td><span class="advantage adv-vn">VN Dẫn</span></td>
+        </tr>
+        <tr>
+          <td>Tỷ trọng trong GDP</td>
+          <td class="td-vn">11.6%</td>
+          <td class="td-jp">1.1%</td>
+          <td><span class="advantage adv-vn">VN (quy mô)</span></td>
+        </tr>
+        <tr>
+          <td>Nhập khẩu nông sản</td>
+          <td class="td-vn">~$15B</td>
+          <td class="td-jp">$63B+ (phụ thuộc)</td>
+          <td><span class="advantage adv-vn">VN Tự chủ</span></td>
+        </tr>
+        <tr>
+          <td>Năng suất lao động</td>
+          <td class="td-vn">~$8,000/người/năm</td>
+          <td class="td-jp">~$80,000/người/năm</td>
+          <td><span class="advantage adv-jp">JP 10x</span></td>
+        </tr>
+        <tr>
+          <td>R&D / GDP</td>
+          <td class="td-vn">~0.5%</td>
+          <td class="td-jp">~3.5%</td>
+          <td><span class="advantage adv-jp">JP Vượt trội</span></td>
+        </tr>
+        <tr>
+          <td>Độ tuổi lao động nông nghiệp</td>
+          <td class="td-vn">~35-40 tuổi</td>
+          <td class="td-jp">69.2 tuổi (TB)</td>
+          <td><span class="advantage adv-vn">VN Trẻ hóa</span></td>
+        </tr>
+        <tr>
+          <td>Diện tích đất nông nghiệp</td>
+          <td class="td-vn">~9.2 triệu ha</td>
+          <td class="td-jp">~4.3 triệu ha</td>
+          <td><span class="advantage adv-vn">VN 2x</span></td>
+        </tr>
+        <tr>
+          <td>Chi phí sản xuất</td>
+          <td class="td-vn">Thấp (lương ~$400/th)</td>
+          <td class="td-jp">Rất cao ($2,800/th)</td>
+          <td><span class="advantage adv-vn">VN Cạnh tranh</span></td>
+        </tr>
+        <tr>
+          <td>Chất lượng & Thương hiệu</td>
+          <td class="td-vn">Đang xây dựng</td>
+          <td class="td-jp">Premium, Wagyu, Kobe</td>
+          <td><span class="advantage adv-jp">JP Premium</span></td>
+        </tr>
+        <tr>
+          <td>Ứng dụng công nghệ</td>
+          <td class="td-vn">Đang chuyển đổi số</td>
+          <td class="td-jp">Precision farming, AI, IoT</td>
+          <td><span class="advantage adv-jp">JP Tiên tiến</span></td>
+        </tr>
+        <tr>
+          <td>Tự cung thực phẩm (calorie)</td>
+          <td class="td-vn">>120% (xuất siêu)</td>
+          <td class="td-jp">~38% (nhập siêu)</td>
+          <td><span class="advantage adv-vn">VN Tự chủ</span></td>
+        </tr>
+        <tr>
+          <td>Tăng trưởng xuất khẩu NN</td>
+          <td class="td-vn">+12-20%/năm</td>
+          <td class="td-jp">+3-4%/năm</td>
+          <td><span class="advantage adv-vn">VN Động lực</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- BILATERAL TRADE -->
+  <div class="section-title">🤝 Thương mại Song phương Nông sản VN – Nhật</div>
+  <div class="bilateral-grid">
+    <div class="flow-card">
+      <h4>🇻🇳 → 🇯🇵 Việt Nam xuất sang Nhật (~$1.34B/quý)</h4>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Thủy sản (tôm, cá tra)</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:52%;background:linear-gradient(90deg,#ff6b6b,#ff9999)"></div></div>
+        </div>
+        <div class="flow-val td-vn">~$520M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Rau quả nhiệt đới</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:20%;background:linear-gradient(90deg,#ff6b6b,#ff9999)"></div></div>
+        </div>
+        <div class="flow-val td-vn">~$200M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Cà phê, chè</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:18%;background:linear-gradient(90deg,#ff6b6b,#ff9999)"></div></div>
+        </div>
+        <div class="flow-val td-vn">~$180M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Gỗ & sản phẩm gỗ</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:15%;background:linear-gradient(90deg,#ff6b6b,#ff9999)"></div></div>
+        </div>
+        <div class="flow-val td-vn">~$150M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Gạo chất lượng cao</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:8%;background:linear-gradient(90deg,#ff6b6b,#ff9999)"></div></div>
+        </div>
+        <div class="flow-val td-vn">~$80M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Khác (cao su, hạt điều...)</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:21%;background:linear-gradient(90deg,#ff6b6b,#ff9999)"></div></div>
+        </div>
+        <div class="flow-val td-vn">~$210M</div>
+      </div>
+    </div>
+
+    <div class="flow-card">
+      <h4>🇯🇵 → 🇻🇳 Nhật xuất sang Việt (~$202M/quý)</h4>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Giống cây trồng, vật nuôi</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:35%;background:linear-gradient(90deg,#58a6ff,#7db9ff)"></div></div>
+        </div>
+        <div class="flow-val td-jp">~$70M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Máy móc nông nghiệp</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:30%;background:linear-gradient(90deg,#58a6ff,#7db9ff)"></div></div>
+        </div>
+        <div class="flow-val td-jp">~$61M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Phân bón & hóa chất NN</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:20%;background:linear-gradient(90deg,#58a6ff,#7db9ff)"></div></div>
+        </div>
+        <div class="flow-val td-jp">~$40M</div>
+      </div>
+      <div class="flow-item">
+        <div>
+          <div class="flow-name">Thực phẩm chế biến cao cấp</div>
+          <div class="bar-mini"><div class="bar-fill" style="width:15%;background:linear-gradient(90deg,#58a6ff,#7db9ff)"></div></div>
+        </div>
+        <div class="flow-val td-jp">~$31M</div>
+      </div>
+
+      <div style="margin-top:20px;padding:14px;background:rgba(63,185,80,0.08);border:1px solid rgba(63,185,80,0.2);border-radius:8px;">
+        <div style="font-size:12px;color:var(--green);font-weight:700;margin-bottom:6px;">✅ Cán cân Thương mại</div>
+        <div style="font-size:22px;font-weight:800;color:var(--green);">+$1.14B/quý</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">Thặng dư lớn nghiêng về Việt Nam — tăng 15.5% YoY</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OPPORTUNITY SECTION -->
+  <div class="section-title">🚀 Cơ hội Hợp tác & Đầu tư</div>
+  <div class="opportunity-grid">
+    <div class="opp-card">
+      <div class="opp-icon">🤖</div>
+      <div class="opp-title">Smart Farming & AgriTech</div>
+      <div class="opp-desc">Nhật có công nghệ precision farming, IoT nông nghiệp tiên tiến. Việt Nam có đất đai và lao động. Tiềm năng hợp tác triển khai tại ĐBSCL, Tây Nguyên.</div>
+      <div class="opp-tags">
+        <span class="opp-tag">IoT</span>
+        <span class="opp-tag">Drone</span>
+        <span class="opp-tag green">Tiềm năng cao</span>
+      </div>
+    </div>
+    <div class="opp-card">
+      <div class="opp-icon">🥬</div>
+      <div class="opp-title">Rau quả & Trái cây nhiệt đới</div>
+      <div class="opp-desc">Nhật có thu nhập cao, ưa trái cây ngoại. Việt Nam có thanh long, sầu riêng, xoài, vải. Thị trường Nhật trả giá premium 3-5x giá nội địa VN.</div>
+      <div class="opp-tags">
+        <span class="opp-tag red">Xuất khẩu VN</span>
+        <span class="opp-tag green">Premium price</span>
+      </div>
+    </div>
+    <div class="opp-card">
+      <div class="opp-icon">🐟</div>
+      <div class="opp-title">Thủy sản chế biến sâu</div>
+      <div class="opp-desc">Nhật là thị trường thủy sản số 2 của VN (15.6% thị phần). Cơ hội chế biến sâu thay vì xuất thô — tăng giá trị gia tăng 3-4 lần.</div>
+      <div class="opp-tags">
+        <span class="opp-tag red">$520M+/năm</span>
+        <span class="opp-tag">Chế biến sâu</span>
+        <span class="opp-tag green">Tăng GTGT</span>
+      </div>
+    </div>
+    <div class="opp-card">
+      <div class="opp-icon">🌱</div>
+      <div class="opp-title">Organic & Nông nghiệp sạch</div>
+      <div class="opp-desc">Nhật ký 10 MoU hợp tác nông nghiệp 2024. Hỗ trợ VN sản xuất lúa phát thải thấp, chứng nhận GlobalGAP/JAS cho sản phẩm vào Nhật.</div>
+      <div class="opp-tags">
+        <span class="opp-tag">10 MoU 2024</span>
+        <span class="opp-tag green">ESG</span>
+        <span class="opp-tag">GlobalGAP</span>
+      </div>
+    </div>
+    <div class="opp-card">
+      <div class="opp-icon">📦</div>
+      <div class="opp-title">Logistics lạnh & Bảo quản</div>
+      <div class="opp-desc">Chuỗi lạnh là điểm yếu của VN. Doanh nghiệp Nhật (Mitsubishi, Sumitomo) đang đầu tư kho lạnh, cảng biển, logistics nông sản tại VN.</div>
+      <div class="opp-tags">
+        <span class="opp-tag">Cold chain</span>
+        <span class="opp-tag">FDI Nhật</span>
+        <span class="opp-tag green">Hạ tầng</span>
+      </div>
+    </div>
+    <div class="opp-card">
+      <div class="opp-icon">☕</div>
+      <div class="opp-title">Cà phê Specialty Vietnam</div>
+      <div class="opp-desc">VN xuất cà phê $8.7B (2025). Nhật là thị trường specialty coffee phát triển mạnh. Cơ hội xây dựng thương hiệu cà phê cao cấp VN tại Nhật.</div>
+      <div class="opp-tags">
+        <span class="opp-tag red">$8.7B/năm</span>
+        <span class="opp-tag">Specialty</span>
+        <span class="opp-tag green">▲ +54.4%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- COOPERATION TIMELINE -->
+  <div class="section-title">📅 Lộ trình Hợp tác VN – Nhật 2024-2030</div>
+  <div class="chart-grid chart-grid-2">
+    <div class="chart-card">
+      <div class="timeline">
+        <div class="tl-item">
+          <div class="tl-year">2023</div>
+          <div class="tl-dot"></div>
+          <div class="tl-text">Đối thoại nông nghiệp cấp cao VN-Nhật lần 5 <span>— Xác định 5 lĩnh vực hợp tác ưu tiên</span></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-year">2024</div>
+          <div class="tl-dot" style="background:var(--green)"></div>
+          <div class="tl-text">Ký 10 MoU hợp tác nông nghiệp, lâm nghiệp, thủy sản <span>— Cam kết hỗ trợ kỹ thuật và công nghệ</span></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-year">2025</div>
+          <div class="tl-dot" style="background:#d29922"></div>
+          <div class="tl-text">Ký kết "Tầm nhìn Hợp tác Nông nghiệp VN-Nhật 2025-2029" <span>— Smart farm, lúa phát thải thấp, logistics lạnh</span></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-year">2026-27</div>
+          <div class="tl-dot" style="background:var(--purple)"></div>
+          <div class="tl-text">Mở rộng thị trường rau quả, thủy sản chế biến vào Nhật <span>— Mục tiêu $2B kim ngạch/năm</span></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-year">2030</div>
+          <div class="tl-dot" style="background:#ff6b6b"></div>
+          <div class="tl-text">Mục tiêu xuất nông sản VN sang Nhật $3-4B <span>— VN trở thành top 3 nhà cung cấp nông sản cho Nhật</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <h3>Chỉ số Tự cung thực phẩm (Calorie basis, %)</h3>
+      <div class="chart-desc">Năng lực tự cung ứng thực phẩm — điểm mạnh của VN</div>
+      <div class="chart-wrap"><canvas id="foodSecurityChart" height="240"></canvas></div>
+    </div>
+  </div>
+
+</div><!-- end main -->
+
+<div class="footer">
+  Dashboard tổng hợp dữ liệu từ:
+  <a href="https://vietnamnet.vn/en/vietnam-s-agricultural-exports-soar-to-record-70-billion-in-2025-2478261.html">VietnamNet</a> ·
+  <a href="https://www.nso.gov.vn/en/data-and-statistics/2026/01/socio-economic-situation-in-the-fourth-quarter-and-2025/">NSO Vietnam</a> ·
+  <a href="https://www.oecd.org/en/publications/agricultural-policy-monitoring-and-evaluation-2025_a80ac398-en/full-report/japan_d94ab3f7.html">OECD Japan 2025</a> ·
+  <a href="https://vietnamnews.vn/economy/1724628/viet-nam-japan-beef-up-agricultural-cooperation-sign-10-mou.html">VietnamNews</a> ·
+  <a href="https://b-company.jp/regular-update-on-vietnam-agriculture-market-q4-2025">B-Company Japan</a>
+  &nbsp;|&nbsp; Cập nhật: Tháng 4/2026
+</div>
+
+<script>
+const COLORS = {
+  vn: '#ff6b6b', vnLight: 'rgba(255,107,107,0.2)',
+  jp: '#58a6ff', jpLight: 'rgba(88,166,255,0.15)',
+  green: '#3fb950', yellow: '#d29922', purple: '#bc8cff',
+  muted: '#8b949e', bg: '#161b22', border: '#30363d', text: '#e6edf3'
+};
+Chart.defaults.color = COLORS.muted;
+Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
+Chart.defaults.font.size = 11;
+
+// 1. Export Line Chart
+new Chart(document.getElementById('exportChart'), {
+  type: 'line',
+  data: {
+    labels: ['2020','2021','2022','2023','2024','2025'],
+    datasets: [
+      {
+        label: '🇻🇳 VN (tỷ USD)',
+        data: [41.2, 48.6, 53.2, 55.8, 62.5, 70.0],
+        borderColor: COLORS.vn, backgroundColor: COLORS.vnLight,
+        borderWidth: 2.5, tension: 0.4, fill: true, pointRadius: 4,
+        pointBackgroundColor: COLORS.vn
+      },
+      {
+        label: '🇯🇵 JP (tỷ USD)',
+        data: [7.1, 7.8, 9.2, 9.8, 10.0, 10.4],
+        borderColor: COLORS.jp, backgroundColor: COLORS.jpLight,
+        borderWidth: 2.5, tension: 0.4, fill: true, pointRadius: 4,
+        pointBackgroundColor: COLORS.jp
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { position: 'top' },
+      tooltip: { mode: 'index', intersect: false }
+    },
+    scales: {
+      x: { grid: { color: COLORS.border } },
+      y: {
+        grid: { color: COLORS.border },
+        ticks: { callback: v => '$' + v + 'B' }
+      }
+    }
+  }
+});
+
+// 2. VN Export Pie
+new Chart(document.getElementById('vnExportPie'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Điện tử/Linh kiện', 'Dệt may/Giày', 'Rau quả', 'Thủy sản', 'Cà phê', 'Gạo', 'Gỗ', 'Khác'],
+    datasets: [{
+      data: [36, 13, 11, 10, 12, 7, 5, 6],
+      backgroundColor: [
+        '#58a6ff','#bc8cff','#3fb950','#ff6b6b','#d29922','#ff9999','#7db9ff','#484f58'
+      ],
+      borderColor: '#161b22',
+      borderWidth: 2
+    }]
+  },
+  options: {
+    responsive: true,
+    cutout: '62%',
+    plugins: {
+      legend: { position: 'right', labels: { boxWidth: 12, padding: 8 } },
+      tooltip: { callbacks: { label: c => ` ${c.label}: ${c.parsed}%` } }
+    }
+  }
+});
+
+// 3. GDP Share Bar
+new Chart(document.getElementById('gdpShareChart'), {
+  type: 'bar',
+  data: {
+    labels: ['🇻🇳 Việt Nam', '🇯🇵 Nhật Bản', 'ASEAN TB', '🌏 Thế giới TB'],
+    datasets: [{
+      label: '% GDP',
+      data: [11.6, 1.1, 10.5, 4.3],
+      backgroundColor: ['rgba(255,107,107,0.75)','rgba(88,166,255,0.75)','rgba(210,153,34,0.6)','rgba(63,185,80,0.6)'],
+      borderColor: ['#ff6b6b','#58a6ff','#d29922','#3fb950'],
+      borderWidth: 1.5, borderRadius: 6
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false } },
+      y: {
+        grid: { color: COLORS.border },
+        ticks: { callback: v => v + '%' },
+        beginAtZero: true
+      }
+    }
+  }
+});
+
+// 4. Bilateral Bar (VN → JP categories)
+new Chart(document.getElementById('bilateralBar'), {
+  type: 'bar',
+  data: {
+    labels: ['Thủy sản','Rau quả','Cà phê','Gỗ','Gạo','Cao su/Khác'],
+    datasets: [{
+      label: 'Triệu USD',
+      data: [520, 200, 180, 150, 80, 210],
+      backgroundColor: 'rgba(255,107,107,0.7)',
+      borderColor: '#ff6b6b',
+      borderWidth: 1.5, borderRadius: 6
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        grid: { color: COLORS.border },
+        ticks: { callback: v => '$' + v + 'M' }
+      },
+      y: { grid: { display: false } }
+    }
+  }
+});
+
+// 5. Productivity Radar/Bar
+new Chart(document.getElementById('productivityChart'), {
+  type: 'bar',
+  data: {
+    labels: ['VN NN', 'VN TB', 'ASEAN TB', 'JP NN', 'JP TB'],
+    datasets: [{
+      label: 'USD/lao động/năm',
+      data: [8000, 18000, 22000, 80000, 95000],
+      backgroundColor: [
+        'rgba(255,107,107,0.7)','rgba(255,107,107,0.4)',
+        'rgba(210,153,34,0.6)',
+        'rgba(88,166,255,0.7)','rgba(88,166,255,0.4)'
+      ],
+      borderColor: ['#ff6b6b','#ff6b6b','#d29922','#58a6ff','#58a6ff'],
+      borderWidth: 1.5, borderRadius: 6
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false } },
+      y: {
+        grid: { color: COLORS.border },
+        ticks: { callback: v => '$' + (v/1000) + 'K' },
+        beginAtZero: true
+      }
+    }
+  }
+});
+
+// 6. Food Security Bar
+new Chart(document.getElementById('foodSecurityChart'), {
+  type: 'bar',
+  data: {
+    labels: ['🇻🇳 Việt Nam', '🇯🇵 Nhật Bản', '🇰🇷 Hàn Quốc', '🇩🇪 Đức', '🇺🇸 Mỹ'],
+    datasets: [{
+      label: 'Tự cung thực phẩm (%)',
+      data: [125, 38, 45, 84, 132],
+      backgroundColor: [
+        'rgba(255,107,107,0.8)','rgba(88,166,255,0.7)',
+        'rgba(210,153,34,0.7)','rgba(63,185,80,0.6)','rgba(63,185,80,0.8)'
+      ],
+      borderColor: ['#ff6b6b','#58a6ff','#d29922','#3fb950','#3fb950'],
+      borderWidth: 1.5, borderRadius: 6
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false } },
+      y: {
+        grid: { color: COLORS.border },
+        ticks: { callback: v => v + '%' },
+        beginAtZero: true,
+        max: 150
+      }
+    }
+  }
+});
+</script>
+</body>
+</html>

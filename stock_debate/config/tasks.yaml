@@ -1,0 +1,118 @@
+technical_initial:
+  description: >
+    Here is the stock data for {symbol}:
+
+    {context}
+
+    Provide your initial analysis and 4-week price direction outlook.
+    Be concise and specific. State clearly: BULLISH / BEARISH / NEUTRAL.
+  expected_output: >
+    A concise technical analysis with: stance (BULLISH/BEARISH/NEUTRAL),
+    key indicator readings, support/resistance levels, and 4-week directional view.
+  agent: technical_analyst
+
+fundamental_initial:
+  description: >
+    Here is the stock data for {symbol}:
+
+    {context}
+
+    Provide your initial analysis and 4-week price direction outlook.
+    Be concise and specific. State clearly: BULLISH / BEARISH / NEUTRAL.
+  expected_output: >
+    A concise fundamental analysis with: stance (BULLISH/BEARISH/NEUTRAL),
+    valuation assessment, key financial health metrics, and 4-week directional view.
+  agent: fundamental_analyst
+
+macro_initial:
+  description: >
+    Here is the stock data for {symbol}:
+
+    {context}
+
+    Provide your initial analysis and 4-week price direction outlook.
+    Be concise and specific. State clearly: BULLISH / BEARISH / NEUTRAL.
+  expected_output: >
+    A concise macro/sentiment analysis with: stance (BULLISH/BEARISH/NEUTRAL),
+    macro environment assessment, sector dynamics, and 4-week directional view.
+  agent: macro_analyst
+
+technical_rebuttal:
+  description: >
+    You have just heard the initial analyses from the Technical Analyst,
+    Fundamental Analyst, and Macro Analyst (see context above).
+
+    Now respond to the other analysts:
+    - Where do you agree and why?
+    - Where do you disagree and why?
+    - Strengthen or revise your own outlook based on what you've heard.
+    Be direct and specific.
+  expected_output: >
+    A direct rebuttal from the Technical Analyst: agreements, disagreements,
+    and a revised or confirmed stance (BULLISH/BEARISH/NEUTRAL) with reasoning.
+  agent: technical_analyst
+  context:
+    - technical_initial
+    - fundamental_initial
+    - macro_initial
+
+fundamental_rebuttal:
+  description: >
+    You have just heard the initial analyses from the Technical Analyst,
+    Fundamental Analyst, and Macro Analyst (see context above).
+
+    Now respond to the other analysts:
+    - Where do you agree and why?
+    - Where do you disagree and why?
+    - Strengthen or revise your own outlook based on what you've heard.
+    Be direct and specific.
+  expected_output: >
+    A direct rebuttal from the Fundamental Analyst: agreements, disagreements,
+    and a revised or confirmed stance (BULLISH/BEARISH/NEUTRAL) with reasoning.
+  agent: fundamental_analyst
+  context:
+    - technical_initial
+    - fundamental_initial
+    - macro_initial
+
+macro_rebuttal:
+  description: >
+    You have just heard the initial analyses from the Technical Analyst,
+    Fundamental Analyst, and Macro Analyst (see context above).
+
+    Now respond to the other analysts:
+    - Where do you agree and why?
+    - Where do you disagree and why?
+    - Strengthen or revise your own outlook based on what you've heard.
+    Be direct and specific.
+  expected_output: >
+    A direct rebuttal from the Macro Analyst: agreements, disagreements,
+    and a revised or confirmed stance (BULLISH/BEARISH/NEUTRAL) with reasoning.
+  agent: macro_analyst
+  context:
+    - technical_initial
+    - fundamental_initial
+    - macro_initial
+
+synthesis:
+  description: >
+    Stock under review: {symbol}
+
+    You have the complete debate transcript (initial analyses + rebuttals) in context.
+    Synthesize the debate into a final investment verdict structured as:
+
+    1. KEY AGREEMENTS — where analysts align
+    2. KEY DISAGREEMENTS — where they diverge and why
+    3. RISK FACTORS — main downside risks identified
+    4. FINAL VERDICT — BULLISH / BEARISH / NEUTRAL with 4-week price outlook
+    and confidence level (Low / Medium / High)
+
+    Be direct. No disclaimers. Professional but accessible language.
+  expected_output: >
+    A structured final verdict with 4 sections: Key Agreements, Key Disagreements,
+    Risk Factors, and Final Verdict (stance + 4-week outlook + confidence level).
+  agent: portfolio_manager
+  context:
+    - technical_rebuttal
+    - fundamental_rebuttal
+    - macro_rebuttal
