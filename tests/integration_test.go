@@ -83,7 +83,7 @@ func requireEnv(t *testing.T, key string) string {
 // OAuth tokens (sk-ant-oat...) use CLI subprocess; API keys use direct API.
 func makeProvider(apiKey string) agent.ModelProvider {
 	if strings.HasPrefix(apiKey, "sk-ant-oat") {
-		return claude.NewCLIProvider()
+		return claude.NewCLIProvider("")
 	}
 	return anthropicClient.New(apiKey)
 }

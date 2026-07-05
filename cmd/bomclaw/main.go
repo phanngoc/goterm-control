@@ -189,7 +189,7 @@ func runGateway(args []string) {
 	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
 		// OAuth subscription token — must use claude CLI subprocess
 		log.Println("gateway: using Claude CLI provider (OAuth token detected)")
-		provider = claude.NewCLIProvider()
+		provider = claude.NewCLIProvider(cfg.Claude.Workspace)
 	} else {
 		// Direct API key (sk-ant-api03-...)
 		log.Println("gateway: using direct Anthropic API provider")
@@ -399,7 +399,7 @@ func runChat(args []string) {
 
 	var chatProvider agent.ModelProvider
 	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
-		chatProvider = claude.NewCLIProvider()
+		chatProvider = claude.NewCLIProvider(cfg.Claude.Workspace)
 	} else {
 		chatProvider = anthropicClient.New(cfg.Claude.APIKey)
 	}
