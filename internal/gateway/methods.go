@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
@@ -286,6 +287,36 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 
 		// Track streamed text for persistence
 		var streamedText strings.Builder
+		var streamMu sync.Mutex
+
+		// Snapshot the in-progress reply every 10s so a dashboard reload
+		// mid-run shows current progress instead of a blank bubble.
+		partialDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			lastLen := 0
+			for {
+				select {
+				case <-partialDone:
+					return
+				case <-ticker.C:
+					streamMu.Lock()
+					snap := streamedText.String()
+					streamMu.Unlock()
+					if snap == "" || len(snap) == lastLen {
+						continue
+					}
+					lastLen = len(snap)
+					tw.Append(sessionID, transcript.Event{
+						Type: transcript.EventAssistantPartial, Timestamp: time.Now(),
+						SessionID: sessionID, Content: snap,
+					})
+				}
+			}
+		}()
+		stopPartial := sync.OnceFunc(func() { close(partialDone) })
+		defer stopPartial()
 
 		result, err := agent.RunAgent(agentCtx, agent.RunParams{
 			Provider:     deps.Provider,
@@ -297,7 +328,9 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			Tools:        deps.Tools,
 			MaxTokens:    maxTokens,
 			OnText: func(text string) {
+				streamMu.Lock()
 				streamedText.WriteString(text)
+				streamMu.Unlock()
 				emit(StreamEvent{Type: "stream", Event: "text", Data: text})
 			},
 			OnToolCall: func(name, input string) {
@@ -305,6 +338,9 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 				emit(StreamEvent{Type: "stream", Event: "tool", Data: summary})
 			},
 		})
+
+		// Stop snapshotting before the final assistant_text is written.
+		stopPartial()
 
 		// Persist assistant response
 		responseText := ""
@@ -338,21 +374,37 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 	}
 }
 
-// transcriptToMessages converts transcript events to agent.Message for context injection.
+// transcriptToMessages converts transcript events to agent.Message for context
+// injection. Partial snapshots are superseded by the final assistant_text of
+// their turn; only a trailing partial (interrupted run) is kept.
 func transcriptToMessages(events []transcript.Event) []agent.Message {
 	var msgs []agent.Message
+	var lastPartial string
+	flushPartial := func() {
+		if lastPartial != "" {
+			msgs = append(msgs, agent.Message{Role: "assistant", Content: lastPartial})
+			lastPartial = ""
+		}
+	}
 	for _, ev := range events {
 		switch ev.Type {
 		case transcript.EventUserMessage:
+			flushPartial()
 			if ev.Content != "" {
 				msgs = append(msgs, agent.Message{Role: "user", Content: ev.Content})
 			}
 		case transcript.EventAssistantText:
+			lastPartial = "" // final supersedes this turn's partials
 			if ev.Content != "" {
 				msgs = append(msgs, agent.Message{Role: "assistant", Content: ev.Content})
 			}
+		case transcript.EventAssistantPartial:
+			if ev.Content != "" {
+				lastPartial = ev.Content
+			}
 		}
 	}
+	flushPartial()
 	return msgs
 }
 

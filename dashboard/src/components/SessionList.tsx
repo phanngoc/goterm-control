@@ -1,4 +1,5 @@
 import { useStore, Session } from '../stores/store'
+import { eventsToMessages } from '../lib/transcript'
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -112,28 +113,3 @@ export default function SessionList({ call }: { call: (m: string, p?: any) => Pr
   )
 }
 
-function eventsToMessages(events: any[]) {
-  const msgs: any[] = []
-  let currentTools: string[] = []
-
-  for (const ev of events) {
-    switch (ev.type) {
-      case 'user_message':
-        msgs.push({ role: 'user', content: ev.content || '', timestamp: ev.ts })
-        break
-      case 'tool_call':
-        currentTools.push(ev.tool_name || '')
-        break
-      case 'assistant_text':
-        msgs.push({
-          role: 'assistant',
-          content: ev.content || '',
-          timestamp: ev.ts,
-          tools: currentTools.length > 0 ? [...currentTools] : undefined,
-        })
-        currentTools = []
-        break
-    }
-  }
-  return msgs
-}

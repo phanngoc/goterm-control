@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
-import { useStore, ChatMessage } from './stores/store'
+import { useStore } from './stores/store'
 import { useGateway } from './hooks/useGateway'
+import { eventsToMessages } from './lib/transcript'
 import SessionList from './components/SessionList'
 import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
@@ -123,25 +124,3 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   )
 }
 
-function eventsToMessages(events: any[]): ChatMessage[] {
-  const msgs: ChatMessage[] = []
-  let currentTools: string[] = []
-  for (const ev of events) {
-    switch (ev.type) {
-      case 'user_message':
-        msgs.push({ role: 'user', content: ev.content || '', timestamp: ev.ts })
-        break
-      case 'tool_call':
-        currentTools.push(ev.tool_name || '')
-        break
-      case 'assistant_text':
-        msgs.push({
-          role: 'assistant', content: ev.content || '', timestamp: ev.ts,
-          tools: currentTools.length > 0 ? [...currentTools] : undefined,
-        })
-        currentTools = []
-        break
-    }
-  }
-  return msgs
-}

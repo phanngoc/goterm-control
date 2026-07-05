@@ -606,6 +606,15 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 	var turnText strings.Builder
 	var textMu sync.Mutex
 
+	// Snapshot the in-progress reply every 10s so a dashboard reload mid-run
+	// shows how far the bot has gotten (and a crash keeps the last prefix).
+	stopPartial := h.startPartialSaver(sess.ID, chatID, func() string {
+		textMu.Lock()
+		defer textMu.Unlock()
+		return assistantText.String()
+	})
+	defer stopPartial()
+
 	// latestTodos holds the most recent TodoWrite snapshot from the model.
 	// Updated under textMu since OnToolCall and the loop body that reads it
 	// are technically separate happens-before edges (the CLI scanner goroutine
@@ -714,6 +723,10 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 
 	streamer.Finalize()
 
+	// Stop the partial saver before writing the final assistant_text so no
+	// partial snapshot lands after the event that supersedes it.
+	stopPartial()
+
 	// Record assistant response
 	respText := assistantText.String()
 	if respText != "" {
@@ -747,6 +760,46 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 
 	result.EndedAt = time.Now()
 	return result, nil
+}
+
+// partialSaveInterval is how often an in-progress reply is snapshotted to
+// the transcript so reloads mid-run show current progress.
+const partialSaveInterval = 10 * time.Second
+
+// startPartialSaver periodically appends an assistant_partial snapshot of
+// the streaming reply to the transcript. snapshot must be safe to call from
+// another goroutine. The returned stop function is idempotent and must be
+// called before the final assistant_text is written.
+func (h *Handler) startPartialSaver(sessionID string, chatID int64, snapshot func() string) func() {
+	if h.transcript == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(partialSaveInterval)
+		defer ticker.Stop()
+		lastLen := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				snap := snapshot()
+				if snap == "" || len(snap) == lastLen {
+					continue
+				}
+				lastLen = len(snap)
+				err := h.transcript.Append(sessionID, transcript.Event{
+					Type: transcript.EventAssistantPartial, Timestamp: time.Now(),
+					SessionID: sessionID, ChatID: chatID, Content: snap,
+				})
+				if err != nil {
+					log.Printf("handler: partial save error: %v", err)
+				}
+			}
+		}
+	}()
+	return sync.OnceFunc(func() { close(done) })
 }
 
 // refreshSessionLabel regenerates the session label as a short summary of

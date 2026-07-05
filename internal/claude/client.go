@@ -106,7 +106,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// Resumed sessions already carry full conversation history in the CLI,
 	// so injecting memory again causes context pollution (e.g. old topics
 	// overriding the user's current intent).
-	systemPrompt := c.systemPrompt
+	systemPrompt := c.systemPrompt + fsGuardPrompt
 	if memoryContext != "" && isNewSession {
 		systemPrompt += memoryContext
 	}
@@ -252,6 +252,16 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	return cmd.Wait()
 }
+
+// fsGuardPrompt keeps the CLI's own file tools (Glob, Grep, Bash find …)
+// away from macOS TCC-protected folders. The gateway runs headless under
+// launchd, so a stray recursive scan of $HOME pops permission dialogs the
+// user cannot see the reason for.
+const fsGuardPrompt = "\n\n## File access\n" +
+	"- Never scan, list, or search ~/Music, ~/Pictures, ~/Movies, or ~/Downloads " +
+	"unless the user explicitly asks for a file there.\n" +
+	"- Avoid recursive searches rooted at the home directory (~); root them at the " +
+	"workspace or a specific project directory instead.\n"
 
 // buildArgs constructs the claude CLI argument list.
 func buildArgs(model, sessionID string, isNew bool, systemPrompt string) []string {

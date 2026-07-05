@@ -14,7 +14,7 @@ export type Session = {
 }
 
 export type TranscriptEvent = {
-  type: 'user_message' | 'assistant_text' | 'tool_call' | 'tool_result' | 'session_start' | 'session_reset'
+  type: 'user_message' | 'assistant_text' | 'assistant_partial' | 'tool_call' | 'tool_result' | 'session_start' | 'session_reset'
   ts: string
   session_id?: string
   chat_id?: number
@@ -29,6 +29,7 @@ export type ChatMessage = {
   content: string
   timestamp: string
   tools?: string[]
+  partial?: boolean // reply still streaming (or interrupted) — snapshot only
 }
 
 type Tab = 'chat' | 'sessions' | 'status'

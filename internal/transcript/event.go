@@ -12,6 +12,12 @@ const (
 	EventToolResult    EventType = "tool_result"
 	EventSessionStart  EventType = "session_start"
 	EventSessionReset  EventType = "session_reset"
+
+	// EventAssistantPartial is a periodic full snapshot of an in-progress
+	// reply, written every ~10s while the agent streams. Readers show the
+	// last partial only when no final assistant_text follows it — the final
+	// event supersedes all partials of that turn.
+	EventAssistantPartial EventType = "assistant_partial"
 )
 
 // Event is a single transcript entry, serialized as one JSON line.
