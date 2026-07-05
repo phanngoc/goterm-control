@@ -11,7 +11,11 @@ function timeAgo(dateStr: string): string {
 }
 
 export default function SessionList({ call }: { call: (m: string, p?: any) => Promise<any> }) {
-  const sessions = useStore(s => s.sessions)
+  const rawSessions = useStore(s => s.sessions)
+  // Newest first — the server already sorts, but keep the invariant client-side too.
+  const sessions = [...rawSessions].sort(
+    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  )
   const setActiveSessionId = useStore(s => s.setActiveSessionId)
   const setMessages = useStore(s => s.setMessages)
   const setTab = useStore(s => s.setTab)
@@ -87,11 +91,12 @@ export default function SessionList({ call }: { call: (m: string, p?: any) => Pr
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="font-mono text-sm text-gray-300">{s.id}</span>
-                <span className="text-xs text-gray-500">{s.message_count} turns</span>
+                <span className="text-sm text-gray-200 truncate">{s.label || s.id}</span>
+                <span className="text-xs text-gray-500 shrink-0">{s.message_count} turns</span>
               </div>
-              <div className="text-xs text-gray-500 mt-0.5">
+              <div className="text-xs text-gray-500 mt-0.5 truncate">
                 {timeAgo(s.updated_at)} · {s.input_tokens + s.output_tokens} tokens
+                {s.label ? <span className="font-mono"> · {s.id}</span> : null}
               </div>
             </div>
             <button

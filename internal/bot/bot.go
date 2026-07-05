@@ -1,12 +1,14 @@
 package bot
 
 import (
-	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/ngocp/goterm-control/internal/agent"
+	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -15,6 +17,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
+	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
@@ -31,8 +34,10 @@ type Bot struct {
 	typing    *TypingIndicator
 }
 
-// New creates and initialises the bot.
-func New(cfg *config.Config) (*Bot, error) {
+// New creates and initialises the bot. db and sessions are shared with the
+// gateway so label renames and turn counters are visible to the dashboard
+// immediately (two managers on one SQLite file would clobber each other).
+func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
 		return nil, err
@@ -69,15 +74,6 @@ func New(cfg *config.Config) (*Bot, error) {
 		MaxOutputBytes: cfg.Tools.MaxOutputBytes,
 		AllowedPaths:   cfg.Tools.AllowedPaths,
 	})
-
-	// Storage — SQLite database
-	db, err := storage.Open(filepath.Join(cfg.Session.DataDir, "goterm.db"))
-	if err != nil {
-		return nil, fmt.Errorf("storage: %w", err)
-	}
-
-	// Session persistence (SQLite-backed) — sessions persist until /reset.
-	sessions := session.NewManager(storage.NewSessionStore(db))
 
 	// Transcript writer (JSONL audit trail — kept alongside SQLite)
 	transcriptWriter := transcript.NewWriter(filepath.Join(cfg.Session.DataDir, "transcripts"))
@@ -117,6 +113,21 @@ func New(cfg *config.Config) (*Bot, error) {
 		}
 	}
 
+	// Session titler — renames sessions to a content summary after each turn.
+	// Uses the direct API when an API key is configured; otherwise falls back
+	// to the claude CLI (which the bot already requires for OAuth tokens).
+	var titleProvider agent.ModelProvider
+	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-api") {
+		titleProvider = anthropicClient.New(cfg.Claude.APIKey)
+	} else {
+		titleProvider = claude.NewCLIProvider()
+	}
+	titleModel := resolver.Default()
+	if m := resolver.Lookup("haiku"); m != nil {
+		titleModel = m.ID
+	}
+	sessionTitler := titler.New(titleProvider, titleModel)
+
 	// Build handler first (queue needs handler.executeMessage as callback)
 	handler := &Handler{
 		bot:              api,
@@ -128,6 +139,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		messages:         messageStore,
 		resolver:         resolver,
 		memory:           memManager,
+		titler:           sessionTitler,
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
 		typing:           typing,
