@@ -120,7 +120,7 @@ func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, e
 	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-api") {
 		titleProvider = anthropicClient.New(cfg.Claude.APIKey)
 	} else {
-		titleProvider = claude.NewCLIProvider()
+		titleProvider = claude.NewCLIProvider(cfg.Claude.Workspace)
 	}
 	titleModel := resolver.Default()
 	if m := resolver.Lookup("haiku"); m != nil {

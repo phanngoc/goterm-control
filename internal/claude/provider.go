@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ngocp/goterm-control/internal/agent"
@@ -20,10 +22,22 @@ import (
 // Bash, Read, Edit etc. on its own. Our browser_* tools are NOT available to the
 // CLI directly. For browser automation with OAuth tokens, the agent loop should
 // use this provider for text generation, and execute browser tools locally.
-type CLIProvider struct{}
+type CLIProvider struct {
+	// workspace is the CLI subprocess working directory. Critical on macOS:
+	// project-level permission deny rules (.claude/settings.json) load from
+	// the cwd, and file searches root there — a launchd-inherited cwd of "/"
+	// would skip the deny rules and scan TCC-protected folders.
+	workspace string
+}
 
-func NewCLIProvider() *CLIProvider {
-	return &CLIProvider{}
+// NewCLIProvider creates a provider whose CLI subprocesses run in workspace.
+// An empty workspace falls back to ~/goterm-workspace.
+func NewCLIProvider(workspace string) *CLIProvider {
+	if workspace == "" {
+		home, _ := os.UserHomeDir()
+		workspace = filepath.Join(home, "goterm-workspace")
+	}
+	return &CLIProvider{workspace: workspace}
 }
 
 // Stream spawns `claude -p --output-format stream-json` and emits events.
@@ -47,11 +61,15 @@ func (p *CLIProvider) Stream(ctx context.Context, params agent.StreamParams) (<-
 		"--strict-mcp-config",
 	}
 
-	if params.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", params.SystemPrompt)
-	}
+	// Always carry the file-access guard so the CLI's own tools stay out of
+	// TCC-protected folders (same rule as the bot path in client.go).
+	args = append(args, "--append-system-prompt", params.SystemPrompt+fsGuardPrompt)
 
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
+	// Run in the workspace so its .claude/settings.json deny rules apply and
+	// searches root there instead of the launchd cwd ("/").
+	_ = os.MkdirAll(p.workspace, 0755)
+	cmd.Dir = p.workspace
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = filteredEnv(envVarsToRemove)
 
