@@ -11,7 +11,9 @@ import (
 	"github.com/ngocp/goterm-control/internal/storage"
 )
 
-func testManager(t *testing.T) (*Manager, *storage.UserStore) {
+// emptyManager returns an enabled manager over a database with no account —
+// the state of a fresh install before `bomclaw passwd`.
+func emptyManager(t *testing.T) (*Manager, *storage.UserStore) {
 	t.Helper()
 	db, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -20,15 +22,21 @@ func testManager(t *testing.T) (*Manager, *storage.UserStore) {
 	t.Cleanup(func() { db.Close() })
 
 	users := storage.NewUserStore(db)
+	m := NewManager(Config{Enabled: true, PublicHost: "bot.bomclaw.org", SessionTTL: time.Hour}, users)
+	return m, users
+}
+
+func testManager(t *testing.T) (*Manager, *storage.UserStore) {
+	t.Helper()
+	m, users := emptyManager(t)
+
 	hash, err := HashPassword("secret123")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if err := users.CreateUser("ngoc", hash, "admin"); err != nil {
+	if err := users.CreateUser("ngoc", hash); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-
-	m := NewManager(Config{Enabled: true, PublicHost: "bot.bomclaw.org", SessionTTL: time.Hour}, users)
 	return m, users
 }
 
@@ -87,6 +95,61 @@ func TestLoginWrongPassword(t *testing.T) {
 	}
 	if w := doLogin(t, m, `{"username":"ghost","password":"secret123"}`); w.Code != http.StatusUnauthorized {
 		t.Errorf("unknown user = %d, want 401", w.Code)
+	}
+}
+
+// TestNoAccountFailsClosed is the critical invariant: a gateway with auth
+// enabled but no account created must reject everything, never fall open. The
+// dashboard RPC drives a bypassPermissions agent and sits behind a public
+// tunnel, so a fail-open here is remote shell access.
+func TestNoAccountFailsClosed(t *testing.T) {
+	m, _ := emptyManager(t)
+
+	if w := doLogin(t, m, `{"username":"ngoc","password":"secret123"}`); w.Code != http.StatusUnauthorized {
+		t.Errorf("login with no account = %d, want 401", w.Code)
+	}
+
+	w := httptest.NewRecorder()
+	m.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})(w, httptest.NewRequest("GET", "/api/status", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("RequireAuth with no account = %d, want 401", w.Code)
+	}
+
+	mw := httptest.NewRecorder()
+	m.HandleMe(mw, httptest.NewRequest("GET", "/api/me", nil))
+	if mw.Code != http.StatusUnauthorized {
+		t.Errorf("/api/me with no account = %d, want 401", mw.Code)
+	}
+}
+
+// TestPasswordRotationRevokesSessions covers what `bomclaw passwd` relies on:
+// changing the password logs every browser out.
+func TestPasswordRotationRevokesSessions(t *testing.T) {
+	m, users := testManager(t)
+
+	w := doLogin(t, m, `{"username":"ngoc","password":"secret123"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login = %d, want 200", w.Code)
+	}
+	var sess *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == CookieName {
+			sess = c
+		}
+	}
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.AddCookie(sess)
+	if u := m.UserFromRequest(req); u == nil {
+		t.Fatal("session should be valid before rotation")
+	}
+
+	if err := users.DeleteAllWebSessions(); err != nil {
+		t.Fatalf("DeleteAllWebSessions: %v", err)
+	}
+	if u := m.UserFromRequest(req); u != nil {
+		t.Error("session still valid after password rotation")
 	}
 }
 

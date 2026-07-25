@@ -121,15 +121,10 @@ func (s *Server) Uptime() time.Duration {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Resolve the login session BEFORE upgrading; browsers send cookies on
-	// the WS handshake. Principal is nil when auth is disabled.
-	var principal *Principal
-	if s.auth.Enabled() {
-		user := s.auth.UserFromRequest(r)
-		if user == nil {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-		principal = &Principal{Username: user.Username, Role: user.Role}
+	// the WS handshake.
+	if s.auth.Enabled() && s.auth.UserFromRequest(r) == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
 	}
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
@@ -186,17 +181,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		// Handle requests async so long-running sends don't block the read loop
 		go func(req Request) {
-			ctx := WithPrincipal(context.Background(), principal)
-
-			// Role gate: viewers may only call read-only methods. The
-			// streaming "send" path bypasses the method handler, so check here.
-			if !principal.Allowed(req.Method) {
-				writeJSON(Response{
-					ID:    req.ID,
-					Error: &RPCError{Code: -32603, Message: fmt.Sprintf("forbidden: role %q cannot call %q", principal.Role, req.Method)},
-				})
-				return
-			}
+			ctx := context.Background()
 
 			// For "send", use streaming handler that sends partial events
 			if req.Method == "send" && s.streamHandler != nil {

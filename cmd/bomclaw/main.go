@@ -93,8 +93,8 @@ func main() {
 			}
 		}
 		runGateway(os.Args[2:])
-	case "user":
-		runUserCmd(os.Args[2:])
+	case "passwd":
+		runPasswdCmd(os.Args[2:])
 	case "send":
 		runSend(os.Args[2:])
 	case "status":
@@ -130,6 +130,7 @@ Commands:
   status             Show gateway status (via WebSocket)
   models             List available models
   chat               Interactive CLI chat with the agent (no gateway needed)
+  passwd             Set the dashboard password (creates the account if none)
   help               Show this help`)
 }
 

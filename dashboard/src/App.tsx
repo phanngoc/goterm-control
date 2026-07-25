@@ -103,7 +103,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
           ))}
           {onLogout && (
             <>
-              <span className="ml-2 text-xs text-gray-500">{me.username}{me.role === 'viewer' ? ' (viewer)' : ''}</span>
+              <span className="ml-2 text-xs text-gray-500">{me.username}</span>
               <button
                 onClick={onLogout}
                 className="px-3 py-1 text-sm rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"

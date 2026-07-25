@@ -5,7 +5,6 @@ import LoginView from './components/LoginView'
 export interface Me {
   enabled: boolean
   username: string
-  role: string
 }
 
 // Root gates the whole app behind /api/me: the WebSocket only connects

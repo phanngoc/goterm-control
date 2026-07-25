@@ -33,11 +33,6 @@ type Deps struct {
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
 func NewMethodHandler(deps Deps) MethodHandler {
 	return func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-		// Defense in depth: the WS layer already gates by role, but any other
-		// entry point carrying a principal is checked here too.
-		if p := PrincipalFrom(ctx); !p.Allowed(method) {
-			return nil, fmt.Errorf("forbidden: role %q cannot call %q", p.Role, method)
-		}
 		switch method {
 		case "status":
 			return handleStatus(deps)
