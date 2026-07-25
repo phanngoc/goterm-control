@@ -6,16 +6,16 @@ import (
 	"time"
 )
 
-// User is a dashboard login account.
+// User is the dashboard login account. BomClaw is single-account: there is
+// exactly one row in the users table, created by `bomclaw passwd`.
 type User struct {
 	ID           int64
 	Username     string
 	PasswordHash string
-	Role         string // "admin" | "viewer"
 	CreatedAt    time.Time
 }
 
-// UserStore manages dashboard users and their web sessions.
+// UserStore manages the dashboard account and its web sessions.
 type UserStore struct {
 	db *DB
 }
@@ -24,11 +24,11 @@ func NewUserStore(db *DB) *UserStore {
 	return &UserStore{db: db}
 }
 
-// CreateUser inserts a new user. Fails if the username exists.
-func (s *UserStore) CreateUser(username, passwordHash, role string) error {
+// CreateUser inserts the account. Fails if the username exists.
+func (s *UserStore) CreateUser(username, passwordHash string) error {
 	_, err := s.db.conn.Exec(
-		`INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)`,
-		username, passwordHash, role, time.Now().Format(time.RFC3339),
+		`INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)`,
+		username, passwordHash, time.Now().Format(time.RFC3339),
 	)
 	return err
 }
@@ -36,21 +36,29 @@ func (s *UserStore) CreateUser(username, passwordHash, role string) error {
 // GetUser returns a user by username, or nil if not found.
 func (s *UserStore) GetUser(username string) (*User, error) {
 	row := s.db.conn.QueryRow(
-		`SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?`, username)
+		`SELECT id, username, password_hash, created_at FROM users WHERE username = ?`, username)
 	return scanUser(row)
 }
 
 // GetUserByID returns a user by ID, or nil if not found.
 func (s *UserStore) GetUserByID(id int64) (*User, error) {
 	row := s.db.conn.QueryRow(
-		`SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?`, id)
+		`SELECT id, username, password_hash, created_at FROM users WHERE id = ?`, id)
+	return scanUser(row)
+}
+
+// FirstUser returns the existing account, or nil when none has been created.
+// Used to enforce the single-account invariant in `bomclaw passwd`.
+func (s *UserStore) FirstUser() (*User, error) {
+	row := s.db.conn.QueryRow(
+		`SELECT id, username, password_hash, created_at FROM users ORDER BY id LIMIT 1`)
 	return scanUser(row)
 }
 
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	var created string
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &created)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &created)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -61,44 +69,10 @@ func scanUser(row *sql.Row) (*User, error) {
 	return &u, nil
 }
 
-// ListUsers returns all users ordered by creation.
-func (s *UserStore) ListUsers() ([]User, error) {
-	rows, err := s.db.conn.Query(
-		`SELECT id, username, password_hash, role, created_at FROM users ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []User
-	for rows.Next() {
-		var u User
-		var created string
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &created); err != nil {
-			return nil, err
-		}
-		u.CreatedAt, _ = time.Parse(time.RFC3339, created)
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
-// SetPassword updates a user's password hash.
+// SetPassword updates the account's password hash.
 func (s *UserStore) SetPassword(username, passwordHash string) error {
 	res, err := s.db.conn.Exec(
 		`UPDATE users SET password_hash = ? WHERE username = ?`, passwordHash, username)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("user %q not found", username)
-	}
-	return nil
-}
-
-// DeleteUser removes a user; their web sessions cascade.
-func (s *UserStore) DeleteUser(username string) error {
-	res, err := s.db.conn.Exec(`DELETE FROM users WHERE username = ?`, username)
 	if err != nil {
 		return err
 	}
@@ -147,9 +121,9 @@ func (s *UserStore) DeleteWebSession(tokenHash string) error {
 	return err
 }
 
-// PruneExpiredSessions removes all expired web sessions.
-func (s *UserStore) PruneExpiredSessions() error {
-	_, err := s.db.conn.Exec(
-		`DELETE FROM web_sessions WHERE expires_at < ?`, time.Now().Format(time.RFC3339))
+// DeleteAllWebSessions logs out every browser. Called on password change so a
+// rotated password actually revokes access.
+func (s *UserStore) DeleteAllWebSessions() error {
+	_, err := s.db.conn.Exec(`DELETE FROM web_sessions`)
 	return err
 }

@@ -123,7 +123,7 @@ func (m *Manager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(m.cfg.SessionTTL.Seconds()),
 	})
 	log.Printf("auth: %s logged in from %s", user.Username, ip)
-	writeJSON(w, map[string]string{"username": user.Username, "role": user.Role})
+	writeJSON(w, map[string]string{"username": user.Username})
 }
 
 // HandleLogout deletes the current session and clears the cookie.
@@ -142,7 +142,7 @@ func (m *Manager) HandleLogout(w http.ResponseWriter, r *http.Request) {
 // returns 200 with enabled=false so the SPA skips the login screen.
 func (m *Manager) HandleMe(w http.ResponseWriter, r *http.Request) {
 	if !m.Enabled() {
-		writeJSON(w, map[string]any{"enabled": false, "username": "", "role": "admin"})
+		writeJSON(w, map[string]any{"enabled": false, "username": ""})
 		return
 	}
 	user := m.UserFromRequest(r)
@@ -150,7 +150,7 @@ func (m *Manager) HandleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, map[string]any{"enabled": true, "username": user.Username, "role": user.Role})
+	writeJSON(w, map[string]any{"enabled": true, "username": user.Username})
 }
 
 // UserFromRequest resolves the session cookie to a user, or nil.
