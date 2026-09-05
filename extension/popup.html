@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>BomClaw Browser Bridge</h1>
+  </header>
+
+  <p id="state" class="state">Not connected</p>
+  <p id="error" class="error" hidden></p>
+
+  <label>Gateway endpoint
+    <input id="url" type="text" placeholder="ws://127.0.0.1:18789/ext" spellcheck="false" />
+  </label>
+  <label>Pairing token
+    <input id="token" type="password" placeholder="from `bomclaw browser token`" spellcheck="false" />
+  </label>
+
+  <div class="row">
+    <button id="connect" class="primary">Connect</button>
+    <button id="disconnect" hidden>Disconnect</button>
+  </div>
+
+  <p class="hint">
+    Run <code>bomclaw browser token</code> on the machine running the gateway,
+    then paste the endpoint and token above. While connected, your agent can
+    drive this browser with your logged-in sessions.
+  </p>
+  <script src="popup.js"></script>
+</body>
+</html>

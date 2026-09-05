@@ -224,6 +224,7 @@ bomclaw chat        Interactive CLI chat (direct API, no gateway needed)
 bomclaw send        Send a message via the gateway
 bomclaw status      Show gateway status
 bomclaw models      List available models
+bomclaw browser     Drive your own browser via the Browser Bridge extension
 ```
 
 ### Examples
@@ -242,6 +243,11 @@ bomclaw models      List available models
 
 # Check gateway health
 ./bomclaw status
+
+# Drive your own logged-in browser (see docs/browser-bridge.md)
+./bomclaw browser token          # pair the Chrome extension with this
+./bomclaw browser navigate https://example.com
+./bomclaw browser snapshot
 ```
 
 ### Telegram Commands
@@ -394,6 +400,23 @@ The agent has 25 tools for full computer control:
 | `browser_eval` | Execute JavaScript in the browser |
 | `browser_wait` | Wait for element, text, or timeout |
 
+**Your own browser (Browser Bridge extension):**
+
+The tools above drive a Chrome that BomClaw launches itself — logged out of
+everything. The [Browser Bridge](docs/browser-bridge.md) is the other half: a
+Chrome extension you install in your everyday browser, paired to the gateway,
+so the agent can work in tabs you are already signed into. The agent reaches it
+through `bomclaw browser <subcommand>` rather than a tool, and the refs are the
+same numbering as the tools above.
+
+```bash
+bomclaw browser token                    # pair the extension
+bomclaw browser tabs                     # list your open tabs
+bomclaw browser tabs focus 42            # act on one of them
+bomclaw browser snapshot
+bomclaw browser click n17
+```
+
 ### Data Persistence
 
 All state lives under `~/.goterm/data/`:
@@ -474,12 +497,14 @@ cmd/
   goterm/main.go            Legacy Telegram-only entry point
 
 dashboard/                  React web dashboard (Vite + TailwindCSS)
+extension/                  Chrome extension: Browser Bridge (MV3)
 
 internal/
   agent/                    Core agent loop + types
   anthropic/                Direct Anthropic API client
   bot/                      Telegram bot (handler, streamer)
   browser/                  Chrome DevTools Protocol (CDP) client
+  browserbridge/            Browser Bridge hub: the extension's socket + policy
   channel/                  Channel interface + CLI implementation
   claude/                   Claude CLI subprocess (OAuth2 provider)
   config/                   YAML config loading

@@ -1,6 +1,10 @@
 package gateway
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/ngocp/goterm-control/internal/browserbridge"
+)
 
 // Request is a JSON-RPC-style request from a client.
 type Request struct {
@@ -25,7 +29,7 @@ type RPCError struct {
 // StreamEvent is sent during streaming responses.
 type StreamEvent struct {
 	ID    string `json:"id"`
-	Type  string `json:"type"`  // "stream" or "response"
+	Type  string `json:"type"`            // "stream" or "response"
 	Event string `json:"event,omitempty"` // "text", "tool", "error", "end"
 	Data  string `json:"data,omitempty"`
 }
@@ -40,12 +44,13 @@ type SendParams struct {
 
 // StatusResult is returned by the "status" method.
 type StatusResult struct {
-	Running       bool     `json:"running"`
-	Uptime        string   `json:"uptime"`
-	DefaultModel  string   `json:"default_model"`
-	ActiveSessions int     `json:"active_sessions"`
-	Channels      []string `json:"channels"`
-	Runs          []RunInfo `json:"runs,omitempty"` // in-flight agent runs (live)
+	Running        bool                  `json:"running"`
+	Uptime         string                `json:"uptime"`
+	DefaultModel   string                `json:"default_model"`
+	ActiveSessions int                   `json:"active_sessions"`
+	Channels       []string              `json:"channels"`
+	Runs           []RunInfo             `json:"runs,omitempty"`    // in-flight agent runs (live)
+	Browser        *browserbridge.Status `json:"browser,omitempty"` // Browser Bridge; nil when disabled
 }
 
 // RunInfo describes one in-flight agent run for status consumers
