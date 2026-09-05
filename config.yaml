@@ -4,6 +4,21 @@
 # codex only accepts models with api: codex-cli (e.g. gpt-6-astra).
 provider: "claude"
 
+# Identity in the shared coordination database. MUST be unique per gateway on a
+# machine: two agents sharing an id overwrite each other's registration and
+# mis-address every task and message between them.
+agent:
+  id: "bomclaw"
+  name: "BomClaw"
+  # ws_addr: "ws://127.0.0.1:18789/ws"   # default: derived from --bind/--port
+
+# Shared database holding traces, tasks and inter-agent messages. Every agent
+# on the machine opens the same file; session data stays per-agent.
+coord:
+  enabled: true
+  path: ""                    # default ~/.goterm-shared/data/coord.db
+  trace_retention_days: 7     # 0 keeps traces forever
+
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
   timeout: 60      # polling timeout in seconds

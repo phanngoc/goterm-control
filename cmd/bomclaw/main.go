@@ -19,16 +19,16 @@ import (
 	"path/filepath"
 	"runtime"
 
-	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/agent"
+	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/auth"
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/codex"
-	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/config"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/daemon"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
@@ -418,6 +418,20 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 	if wsAddr == "" {
 		wsAddr = fmt.Sprintf("ws://%s:%d/ws", bind, port)
 	}
+	// Two gateways sharing an agent id would overwrite each other's row and
+	// mis-address every task and message. It cannot be prevented from here —
+	// the id is config — but a live peer already holding it is worth shouting
+	// about, because the symptom (work vanishing) is otherwise baffling.
+	if existing, err := cdb.ListAgents(); err == nil {
+		for _, a := range existing {
+			if a.ID == cfg.Agent.ID && a.Online && a.WSAddr != "" && a.WSAddr != wsAddr {
+				log.Printf("coord: WARNING agent id %q is already held by a live gateway at %s — "+
+					"set a distinct agent.id in this config or the two will overwrite each other",
+					cfg.Agent.ID, a.WSAddr)
+			}
+		}
+	}
+
 	if err := cdb.RegisterAgent(coord.Agent{
 		ID:          cfg.Agent.ID,
 		DisplayName: cfg.Agent.Name,
