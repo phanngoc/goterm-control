@@ -33,6 +33,28 @@ type Client interface {
 	Name() string
 }
 
+// TurnSink is where a turn's output goes as it happens — the one part of a turn
+// that knows which channel it is talking to. Telegram edits a message in place;
+// the dashboard pushes WebSocket events. Everything else about a turn (trace,
+// transcript, message store, memory, auto-continue) is channel-agnostic and
+// lives once, in the bot's turn engine.
+//
+// It is declared here, in the neutral package, rather than in bot or gateway:
+// Go compares method parameter types by identity, so two structurally equal
+// interfaces in two packages would make the engine satisfy neither caller.
+type TurnSink interface {
+	// Write appends a chunk of the assistant's reply.
+	Write(chunk string)
+	// NoteTool reports a tool the model just invoked, as a short label.
+	NoteTool(label string)
+	// Flush forces any buffered output out before something else is sent.
+	Flush()
+	// SendPhoto delivers an image the turn produced (e.g. a screenshot).
+	SendPhoto(path, caption string)
+	// Finalize marks the reply complete.
+	Finalize()
+}
+
 // ExtractScreenshotPath finds the .png/.jpg path in a screencapture command so
 // the bot can send the file as a photo instead of echoing the shell output.
 // Handles quoted paths like screencapture -x "/tmp/foo.png".

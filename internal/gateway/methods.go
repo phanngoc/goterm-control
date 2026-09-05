@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,7 +13,9 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/trace"
@@ -46,6 +49,62 @@ type Deps struct {
 	// NotesFile is the markdown rendering of shared notes, rewritten whenever
 	// a note is added so agents can read it with their file tools.
 	NotesFile string
+
+	// Turn is the bot's turn engine. When set, dashboard messages run through
+	// it and therefore behave exactly like Telegram messages: the CLI owns the
+	// tool loop, memory is injected, the messages table is written, and the
+	// trace has tool spans. Nil only when the Telegram bot failed to start —
+	// the handler then falls back to the standalone agent loop and says so.
+	Turn TurnRunner
+}
+
+// TurnRunner is the slice of *bot.Handler the gateway needs. Declared here so
+// gateway does not have to import bot.
+type TurnRunner interface {
+	RunTurn(ctx context.Context, sess *session.Session, chatID int64, modelID, userText string, sink TurnSink) (*execution.RunResult, error)
+}
+
+// TurnSink is the shared channel-output contract; wsSink implements it over a
+// WebSocket. Must be the same named type bot uses, or *bot.Handler would not
+// satisfy TurnRunner — Go matches method parameter types by identity.
+type TurnSink = chat.TurnSink
+
+// wsSink delivers a turn to a dashboard client as stream events. It is the
+// dashboard's counterpart of the Telegram Streamer: same interface, different
+// wire. It also keeps the assembled reply so the caller can hand it back in
+// the final response frame.
+type wsSink struct {
+	emit func(StreamEvent)
+	mu   sync.Mutex
+	text strings.Builder
+}
+
+func (w *wsSink) Write(chunk string) {
+	w.mu.Lock()
+	w.text.WriteString(chunk)
+	w.mu.Unlock()
+	w.emit(StreamEvent{Type: "stream", Event: "text", Data: chunk})
+}
+
+func (w *wsSink) NoteTool(label string) {
+	w.emit(StreamEvent{Type: "stream", Event: "tool", Data: label})
+}
+
+// Flush and Finalize exist for Telegram, where output is batched into message
+// edits. WebSocket delivery is already immediate.
+func (w *wsSink) Flush()    {}
+func (w *wsSink) Finalize() {}
+
+// SendPhoto has no dashboard equivalent yet; surface the path so the user can
+// open it, instead of silently dropping the screenshot.
+func (w *wsSink) SendPhoto(path, caption string) {
+	w.emit(StreamEvent{Type: "stream", Event: "tool", Data: caption + ": " + path})
+}
+
+func (w *wsSink) Text() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.text.String()
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -290,6 +349,43 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			sess = deps.Sessions.Get(dashboardChatID) // creates it on first use
 		}
 
+		// One execution path for both channels. The turn engine persists the
+		// user message, the reply, the transcript, the session counters and
+		// the trace itself — the same way it does for Telegram — so this
+		// handler only has to move bytes to the socket and send the final
+		// response frame.
+		if deps.Turn != nil && sess != nil {
+			modelID := deps.Resolver.Default()
+			if p.ModelID != "" {
+				if m := deps.Resolver.Lookup(p.ModelID); m != nil {
+					modelID = m.ID
+				}
+			}
+			agentCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+
+			sink := &wsSink{emit: emit}
+			result, err := deps.Turn.RunTurn(agentCtx, sess, sess.ChatID, modelID, p.Message, sink)
+			if err != nil {
+				errMsg := err.Error()
+				if agentCtx.Err() != nil {
+					errMsg = "Request timed out (5 min limit). Partial response saved."
+				}
+				emit(StreamEvent{Type: "stream", Event: "error", Data: errMsg})
+			} else if result != nil && result.Status == execution.RunFailed && result.Error != nil {
+				emit(StreamEvent{Type: "stream", Event: "error", Data: result.Error.Error()})
+			}
+
+			finalResult, _ := json.Marshal(map[string]any{
+				"text":       sink.Text(),
+				"session_id": sess.ID,
+				"iterations": 0,
+			})
+			emit(StreamEvent{Type: "response", Data: string(finalResult)})
+			return
+		}
+		log.Printf("gateway: turn engine unavailable — running dashboard message through the standalone agent loop (no memory, no CLI tool loop)")
+
 		tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
 
 		// Persist user message IMMEDIATELY so it survives reload
@@ -473,8 +569,9 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			})
 		}
 
-		// Record the turn against the session, the same way the Telegram path
-		// does, so the session list reflects what actually happened here.
+		// Fallback path only: the standalone loop does not touch session
+		// counters, so record the turn by hand. On the shared path above the
+		// engine already did this — counting here too would double it.
 		if sess != nil {
 			sess.IncrementMessages()
 			if result != nil {

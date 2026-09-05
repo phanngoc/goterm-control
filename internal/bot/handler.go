@@ -540,13 +540,10 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	// Inject persistent memory (MEMORY.md + recent daily notes) and recent
 	// conversation history when starting a brand-new session (first message
 	// or after a reset) so Claude has durable facts plus short-term context.
-	newSessionContext := ""
-	if sess.GetSessionID() == "" {
-		newSessionContext = h.memory.BuildContext(time.Now()) + h.buildHistoryContext(sess.ID, 8)
-	}
+	newSessionContext := h.NewSessionContext(sess)
 
 	_, err := h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
-		return h.runClaude(ctx, sess, chatID, modelID, text, newSessionContext, placeholder)
+		return h.runClaude(ctx, sess, chatID, modelID, text, newSessionContext, NewStreamer(h.bot, chatID, placeholder))
 	})
 
 	if err != nil {
@@ -566,8 +563,46 @@ func (h *Handler) executeMessage(chatID int64, text string) {
 	}
 }
 
+// TurnSink is where a turn's output goes as it happens. It is the only part of
+// a turn that knows which channel it is talking to: Telegram edits a message in
+// place, the dashboard pushes WebSocket events. *Streamer satisfies it for
+// Telegram; the gateway supplies its own. Everything else about a turn — trace,
+// transcript, message store, memory, auto-continue — is identical for both, and
+// lives once, in runClaude.
+//
+// Aliased from the neutral chat package on purpose: Go compares method
+// parameter types by identity, not structure, so a locally declared interface
+// here and another in gateway would make RunTurn satisfy neither.
+type TurnSink = chat.TurnSink
+
+// RunTurn runs one user message through the same engine the Telegram bot uses,
+// delivering output to sink. Callers outside this package (the gateway) use it
+// so a message typed on the dashboard is executed, traced and persisted exactly
+// like one typed on Telegram — the same CLI-owned tool loop, the same memory
+// injection, the same messages table. Before this, the dashboard ran through a
+// separate agent loop and the two channels drifted apart feature by feature.
+//
+// The turn is queued on the chat's execution engine, so a web message and a
+// Telegram message for the same chat can never run concurrently.
+func (h *Handler) RunTurn(ctx context.Context, sess *session.Session, chatID int64, modelID, userText string, sink TurnSink) (*execution.RunResult, error) {
+	memoryContext := h.NewSessionContext(sess)
+	return h.engine.Enqueue(ctx, chatID, func(ctx context.Context) (*execution.RunResult, error) {
+		return h.runClaude(ctx, sess, chatID, modelID, userText, memoryContext, sink)
+	})
+}
+
+// NewSessionContext returns the memory and recent-history block injected into
+// a session's FIRST turn, or "" for a session the CLI already knows. A resumed
+// session carries its history itself; injecting again pollutes the context.
+func (h *Handler) NewSessionContext(sess *session.Session) string {
+	if sess.GetSessionID() != "" {
+		return ""
+	}
+	return h.memory.BuildContext(time.Now()) + h.buildHistoryContext(sess.ID, 8)
+}
+
 // runClaude executes a single Claude CLI call with streaming, transcript recording, and memory extraction.
-func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID int64, modelID, userText, memoryContext string, placeholderMsgID int) (*execution.RunResult, error) {
+func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID int64, modelID, userText, memoryContext string, streamer TurnSink) (*execution.RunResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -576,8 +611,6 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		StartedAt: time.Now(),
 		Status:    execution.RunSuccess,
 	}
-
-	streamer := NewStreamer(h.bot, chatID, placeholderMsgID)
 
 	// Open the trace for this turn. Every model call and every tool the model
 	// runs hangs off this root, so the admin page can replay the turn as a
