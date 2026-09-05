@@ -5,6 +5,7 @@ import { eventsToMessages } from './lib/transcript'
 import SessionList from './components/SessionList'
 import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
+import AdminView from './admin/AdminView'
 import type { Me } from './Root'
 
 export default function App({ me, onLogout }: { me: Me; onLogout?: () => void }) {
@@ -29,6 +30,8 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       }
     } else if (path === '/status') {
       setTab('status')
+    } else if (path === '/admin') {
+      setTab('admin')
     }
   }, [setActiveSessionId, setTab])
 
@@ -38,6 +41,8 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       history.replaceState(null, '', `/chat/${activeSessionId}`)
     } else if (tab === 'status') {
       history.replaceState(null, '', '/status')
+    } else if (tab === 'admin') {
+      history.replaceState(null, '', '/admin')
     } else if (tab === 'sessions') {
       history.replaceState(null, '', '/')
     }
@@ -90,7 +95,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>
         <nav className="flex items-center gap-1">
-          {(['sessions', 'chat', 'status'] as const).map(t => (
+          {(['sessions', 'chat', 'status', 'admin'] as const).map(t => (
             <button
               key={t}
               onClick={() => { setTab(t); if (t === 'sessions') setActiveSessionId(null) }}
@@ -98,7 +103,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
                 tab === t ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
               }`}
             >
-              {t === 'sessions' ? 'Sessions' : t === 'chat' ? 'Chat' : 'Status'}
+              {t === 'sessions' ? 'Sessions' : t === 'chat' ? 'Chat' : t === 'status' ? 'Status' : 'Admin'}
             </button>
           ))}
           {onLogout && (
@@ -119,6 +124,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         {tab === 'sessions' && <SessionList call={call} />}
         {tab === 'chat' && <ChatView call={call} />}
         {tab === 'status' && <StatusBar />}
+        {tab === 'admin' && <AdminView call={call} />}
       </main>
     </div>
   )

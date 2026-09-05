@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -19,15 +20,21 @@ import (
 
 // Deps holds the dependencies needed by RPC method handlers.
 type Deps struct {
-	Sessions      *session.Manager
-	Resolver      *models.Resolver
-	Provider      agent.ModelProvider
-	ToolExecutor  agent.ToolExecutor
-	Tools         []agent.ToolDef
-	System        string // system prompt
-	DataDir       string // data directory for transcripts
-	Uptime        func() time.Duration
-	Runs          func() []RunInfo // live in-flight runs (nil when no bot attached)
+	Sessions     *session.Manager
+	Resolver     *models.Resolver
+	Provider     agent.ModelProvider
+	ToolExecutor agent.ToolExecutor
+	Tools        []agent.ToolDef
+	System       string // system prompt
+	DataDir      string // data directory for transcripts
+	Uptime       func() time.Duration
+	Runs         func() []RunInfo // live in-flight runs (nil when no bot attached)
+
+	// Coord is the shared coordination database (traces, tasks, inter-agent
+	// messages). Nil when coordination is disabled — every admin.* method
+	// then reports that rather than failing obscurely.
+	Coord   *coord.DB
+	AgentID string
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -50,6 +57,26 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleSend(ctx, deps, params)
 		case "cancel":
 			return handleCancel(deps)
+
+		// --- admin / observability ---
+		case "admin.overview":
+			return handleAdminOverview(deps)
+		case "traces.list":
+			return handleTracesList(deps, params)
+		case "traces.get":
+			return handleTraceGet(deps, params)
+		case "tasks.list":
+			return handleTasksList(deps, params)
+		case "tasks.get":
+			return handleTaskGet(deps, params)
+		case "tasks.create":
+			return handleTaskCreate(deps, params)
+		case "tasks.cancel":
+			return handleTaskCancel(deps, params)
+		case "messages.list":
+			return handleMessagesList(deps, params)
+		case "messages.send":
+			return handleMessageSend(deps, params)
 		default:
 			return nil, fmt.Errorf("unknown method: %s", method)
 		}

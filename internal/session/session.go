@@ -149,6 +149,13 @@ func (s *Session) AddTokens(input, output int) {
 	s.UpdatedAt = time.Now()
 }
 
+// Tokens returns the running input/output totals for this session.
+func (s *Session) Tokens() (input, output int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.InputTokens, s.OutputTokens
+}
+
 // GetLabel returns the human-readable session label.
 func (s *Session) GetLabel() string {
 	s.mu.Lock()

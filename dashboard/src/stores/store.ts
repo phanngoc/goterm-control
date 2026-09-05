@@ -32,7 +32,7 @@ export type ChatMessage = {
   partial?: boolean // reply still streaming (or interrupted) — snapshot only
 }
 
-type Tab = 'chat' | 'sessions' | 'status'
+type Tab = 'chat' | 'sessions' | 'status' | 'admin'
 
 interface Store {
   // Connection

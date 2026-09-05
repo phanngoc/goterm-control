@@ -15,6 +15,13 @@ type Config struct {
 	// Each has its own auth; see docs/design/shared-agent-memory.md §13 Q1.
 	Provider string `yaml:"provider"`
 
+	// Agent identifies this gateway process in the shared coordination
+	// database — traces, tasks and inter-agent messages are all keyed by it.
+	Agent AgentConfig `yaml:"agent"`
+
+	// Coord configures the database shared by every agent on this machine.
+	Coord CoordConfig `yaml:"coord"`
+
 	Telegram TelegramConfig `yaml:"telegram"`
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Models   ModelsConfig   `yaml:"models"`
@@ -24,6 +31,30 @@ type Config struct {
 	Memory   MemoryConfig   `yaml:"memory"`
 	Gateway  GatewayConfig  `yaml:"gateway"`
 }
+
+// AgentConfig names this agent. Two agents on one machine MUST NOT share an
+// id: it is the primary key in the shared agents table and the addressee for
+// task assignment and inter-agent messages.
+type AgentConfig struct {
+	ID     string `yaml:"id"`      // default "bomclaw"
+	Name   string `yaml:"name"`    // display name for the admin page
+	WSAddr string `yaml:"ws_addr"` // how a peer agent reaches this one
+}
+
+// CoordConfig configures the shared coordination database (traces, tasks,
+// inter-agent messages). Separate from session.data_dir on purpose: session
+// tables carry the write volume of a live conversation, coordination data is
+// low volume and worthless unless every agent sees the same rows.
+type CoordConfig struct {
+	// Enabled is a pointer so an absent key means "on" while an explicit
+	// `enabled: false` still turns it off — a plain bool cannot tell those apart.
+	Enabled            *bool  `yaml:"enabled"`
+	Path               string `yaml:"path"`                 // default ~/.goterm-shared/data/coord.db
+	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
+}
+
+// IsEnabled reports whether the shared coordination database should be opened.
+func (c CoordConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
 
 // GatewayConfig holds gateway HTTP server settings.
 type GatewayConfig struct {
@@ -136,6 +167,19 @@ func Load(path string) (*Config, error) {
 	// Defaults
 	if cfg.Provider == "" {
 		cfg.Provider = ProviderClaude
+	}
+	if cfg.Agent.ID == "" {
+		cfg.Agent.ID = "bomclaw"
+	}
+	if cfg.Agent.Name == "" {
+		cfg.Agent.Name = cfg.Agent.ID
+	}
+	if strings.HasPrefix(cfg.Coord.Path, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Coord.Path = home + cfg.Coord.Path[1:]
+	}
+	if cfg.Coord.TraceRetentionDays == 0 {
+		cfg.Coord.TraceRetentionDays = 7
 	}
 	if cfg.Telegram.Timeout == 0 {
 		cfg.Telegram.Timeout = 60
