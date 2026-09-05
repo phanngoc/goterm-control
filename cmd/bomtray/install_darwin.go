@@ -8,7 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
+
+// xmlEscape keeps a path or URL safe inside the plist.
+func xmlEscape(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
+	return r.Replace(s)
+}
 
 const trayAgentLabel = "com.bomclaw.tray"
 
@@ -20,8 +27,7 @@ const trayPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<string>%s</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>%s</string>
-	</array>
+%s	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -52,7 +58,19 @@ func runInstall() {
 	logPath := filepath.Join(home, ".goterm/logs/tray.err.log")
 	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
 
-	plist := fmt.Sprintf(trayPlistTemplate, trayAgentLabel, binPath, logPath)
+	// Spell the agent list out in the plist rather than relying on the
+	// binary's defaults: the defaults can change, and a plist that says what
+	// it watches is one you can read when the menu shows the wrong thing.
+	args := []string{binPath}
+	for _, u := range defaultAgents {
+		args = append(args, "-agent", u)
+	}
+	var argXML strings.Builder
+	for _, a := range args {
+		fmt.Fprintf(&argXML, "\t\t<string>%s</string>\n", xmlEscape(a))
+	}
+
+	plist := fmt.Sprintf(trayPlistTemplate, trayAgentLabel, argXML.String(), logPath)
 	path := trayPlistPath()
 	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
 		log.Fatalf("bomtray: write plist: %v", err)

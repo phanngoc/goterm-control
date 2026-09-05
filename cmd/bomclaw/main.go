@@ -365,6 +365,8 @@ func runGateway(args []string) {
 		Uptime:        func() time.Duration { return time.Since(startTime) },
 		Coord:         coordDB,
 		AgentID:       cfg.Agent.ID,
+		AgentName:     cfg.Agent.Name,
+		Workspace:     cfg.Claude.Workspace,
 		ProviderName:  cfg.Provider,
 		Trace:         gwTrace,
 		PokeTasks:     runner.Poke,

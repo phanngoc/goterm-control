@@ -41,6 +41,8 @@ type Deps struct {
 	// then reports that rather than failing obscurely.
 	Coord        *coord.DB
 	AgentID      string
+	AgentName    string          // display name, for the menu bar and dashboard
+	Workspace    string          // this agent's workspace directory
 	ProviderName string          // "claude" | "codex", for trace metadata
 	Trace        *trace.Recorder // nil-safe: nil disables tracing on this path
 
@@ -187,6 +189,9 @@ func handleStatus(deps Deps) (json.RawMessage, error) {
 	sessions := deps.Sessions.List()
 	result := StatusResult{
 		Running:        true,
+		AgentID:        deps.AgentID,
+		AgentName:      deps.AgentName,
+		Workspace:      deps.Workspace,
 		Uptime:         deps.Uptime().Round(time.Second).String(),
 		DefaultModel:   deps.Resolver.Default(),
 		ActiveSessions: len(sessions),

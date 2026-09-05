@@ -167,6 +167,21 @@ type Stats struct {
 const previewChars = 600
 
 // Stats returns a summary of the memory files on disk.
+// Dir returns the memory root this manager was configured with.
+func (m *Manager) Dir() string { return m.cfg.Dir }
+
+// StatsIn reports stats for an arbitrary memory directory. The menu bar needs
+// this: it watches several agents, each with its own workspace, and learns
+// which directory to read only once a gateway answers — too late to have been
+// baked into the manager at startup.
+func (m *Manager) StatsIn(dir string, now time.Time) (Stats, error) {
+	if dir == "" || dir == m.cfg.Dir {
+		return m.Stats(now)
+	}
+	scoped := &Manager{cfg: Config{Enabled: true, Dir: dir}, loc: m.loc}
+	return scoped.Stats(now)
+}
+
 func (m *Manager) Stats(now time.Time) (Stats, error) {
 	st := Stats{Dir: m.cfg.Dir}
 	if !m.Enabled() {

@@ -44,7 +44,15 @@ type SendParams struct {
 
 // StatusResult is returned by the "status" method.
 type StatusResult struct {
-	Running        bool                  `json:"running"`
+	Running bool `json:"running"`
+
+	// Who this gateway is. A machine runs several, and every consumer — the
+	// menu bar, the dashboard, a peer — otherwise has to infer identity from
+	// the port it happened to dial.
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentName string `json:"agent_name,omitempty"`
+	Workspace string `json:"workspace,omitempty"` // where this agent's files live
+
 	Uptime         string                `json:"uptime"`
 	DefaultModel   string                `json:"default_model"`
 	ActiveSessions int                   `json:"active_sessions"`
