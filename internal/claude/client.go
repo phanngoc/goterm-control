@@ -279,6 +279,14 @@ func buildArgs(model, sessionID string, isNew bool, systemPrompt string) []strin
 		// Disable user MCP servers to prevent Serena/etc. startup browser popups.
 		"--mcp-config", emptyMCPConfig,
 		"--strict-mcp-config",
+		// Same isolation, for skills. The CLI otherwise loads whatever is in
+		// ~/.claude/skills, which is the operator's own interactive toolkit —
+		// and some of it competes for this agent's work. A headless-browser
+		// skill advertising "open in browser" and "take a screenshot" wins
+		// those requests over `bomclaw browser`, so the agent quietly drives
+		// a logged-out browser and reports the site as inaccessible. Scoped to
+		// the subprocess: the operator's own sessions keep every skill.
+		"--disable-slash-commands",
 	}
 
 	if !isNew {
