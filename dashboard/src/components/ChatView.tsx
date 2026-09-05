@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore, ChatMessage } from '../stores/store'
 import { eventsToMessages } from '../lib/transcript'
-import Markdown from 'react-markdown'
+import MessageMarkdown from './MessageMarkdown'
 
 export default function ChatView({ call }: { call: (m: string, p?: any) => Promise<any> }) {
   const messages = useStore(s => s.messages)
@@ -107,9 +107,7 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
                 </div>
               )}
               {streamingText ? (
-                <div className="prose prose-sm prose-invert max-w-none [&_pre]:bg-gray-900 [&_pre]:rounded-lg [&_pre]:p-2 [&_code]:text-violet-300 [&_p]:my-1">
-                  <Markdown>{streamingText}</Markdown>
-                </div>
+                <MessageMarkdown>{streamingText}</MessageMarkdown>
               ) : (
                 <span className="animate-pulse text-gray-400">Thinking...</span>
               )}
@@ -174,9 +172,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             🔧 {compactTools(message.tools)}
           </div>
         )}
-        <div className="prose prose-sm prose-invert max-w-none [&_pre]:bg-gray-900 [&_pre]:rounded-lg [&_pre]:p-2 [&_code]:text-violet-300 [&_p]:my-1">
-          <Markdown>{message.content}</Markdown>
-        </div>
+        <MessageMarkdown>{message.content}</MessageMarkdown>
         {message.partial && (
           <div className="text-xs text-yellow-500/80 mt-1 animate-pulse">
             ⏳ đang trả lời… (bản lưu tạm mỗi 10s)

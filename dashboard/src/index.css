@@ -1,1 +1,4 @@
 @import "tailwindcss";
+/* `prose` classes in the chat come from this plugin. Without it Tailwind v4
+   generates nothing for them and every message renders as unstyled HTML. */
+@plugin "@tailwindcss/typography";
