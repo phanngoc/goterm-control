@@ -12,7 +12,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ngocp/goterm-control/internal/agent"
-	"github.com/ngocp/goterm-control/internal/claude"
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
@@ -34,7 +34,7 @@ type MessageStore interface {
 type Handler struct {
 	bot        *tgbotapi.BotAPI
 	sessions   *session.Manager
-	claude     *claude.Client
+	llm        chat.Client // claude or codex CLI, chosen by cfg.Provider
 	cfg        *config.Config
 	engine     *execution.Engine
 	transcript *transcript.Writer
@@ -54,7 +54,7 @@ type Handler struct {
 func NewHandler(
 	bot *tgbotapi.BotAPI,
 	sessions *session.Manager,
-	claudeClient *claude.Client,
+	llm chat.Client,
 	cfg *config.Config,
 	engine *execution.Engine,
 	transcriptWriter *transcript.Writer,
@@ -66,7 +66,7 @@ func NewHandler(
 	return &Handler{
 		bot:              bot,
 		sessions:         sessions,
-		claude:           claudeClient,
+		llm:              llm,
 		cfg:              cfg,
 		engine:           engine,
 		transcript:       transcriptWriter,
@@ -449,7 +449,7 @@ func (h *Handler) runFlush(ctx context.Context, sess *session.Session, modelID s
 	defer sess.MarkIdle()
 
 	var reply strings.Builder
-	cb := claude.StreamCallbacks{
+	cb := chat.StreamCallbacks{
 		OnText: func(chunk string) { reply.WriteString(chunk) },
 		OnToolCall: func(name, inputJSON string) {
 			sess.NoteTool(name)
@@ -462,7 +462,7 @@ func (h *Handler) runFlush(ctx context.Context, sess *session.Session, modelID s
 		StartedAt: time.Now(),
 		Status:    execution.RunSuccess,
 	}
-	err := h.claude.SendMessage(ctx, sess, modelID, h.memory.FlushPrompt(time.Now()), "", cb)
+	err := h.llm.SendMessage(ctx, sess, modelID, h.memory.FlushPrompt(time.Now()), "", cb)
 	result.EndedAt = time.Now()
 	if err != nil {
 		result.Status = execution.RunFailed
@@ -622,7 +622,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 	// still take the lock for consistency with the other shared state).
 	var latestTodos []todoItem
 
-	cb := claude.StreamCallbacks{
+	cb := chat.StreamCallbacks{
 		OnText: func(chunk string) {
 			textMu.Lock()
 			assistantText.WriteString(chunk)
@@ -675,7 +675,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		turnText.Reset()
 		textMu.Unlock()
 
-		if err := h.claude.SendMessage(ctx, sess, modelID, currentText, currentMemory, cb); err != nil {
+		if err := h.llm.SendMessage(ctx, sess, modelID, currentText, currentMemory, cb); err != nil {
 			if ctx.Err() != nil {
 				if ctx.Err() == context.DeadlineExceeded {
 					streamer.Write("\n\n⏰ Task timed out.")
@@ -684,7 +684,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 				streamer.Finalize()
 				return result, nil
 			}
-			log.Printf("claude error: %v", err)
+			log.Printf("%s error: %v", h.llm.Name(), err)
 			streamer.Write(fmt.Sprintf("\n\n❌ Error: %v", err))
 			result.Status = execution.RunFailed
 			result.Error = err

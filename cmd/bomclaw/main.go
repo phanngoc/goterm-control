@@ -25,6 +25,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
+	"github.com/ngocp/goterm-control/internal/codex"
 	"github.com/ngocp/goterm-control/internal/config"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/daemon"
@@ -185,17 +186,8 @@ func runGateway(args []string) {
 		cancel()
 	}()
 
-	// Create model provider: use CLI for OAuth tokens, direct API for API keys
-	var provider agent.ModelProvider
-	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
-		// OAuth subscription token — must use claude CLI subprocess
-		log.Println("gateway: using Claude CLI provider (OAuth token detected)")
-		provider = claude.NewCLIProvider(cfg.Claude.Workspace)
-	} else {
-		// Direct API key (sk-ant-api03-...)
-		log.Println("gateway: using direct Anthropic API provider")
-		provider = anthropicClient.New(cfg.Claude.APIKey)
-	}
+	// Create model provider: codex CLI, claude CLI (OAuth), or direct API key.
+	provider := buildProvider(cfg)
 
 	// Model resolver
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
@@ -382,6 +374,23 @@ func runModels(_ []string) {
 	}
 }
 
+// buildProvider picks the model backend for one-shot text calls, following
+// cfg.Provider first and then the shape of the Anthropic credential.
+func buildProvider(cfg *config.Config) agent.ModelProvider {
+	if cfg.Provider == config.ProviderCodex {
+		log.Println("gateway: using Codex CLI provider")
+		return codex.NewCLIProvider(cfg.Claude.Workspace)
+	}
+	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
+		// OAuth subscription token — must use claude CLI subprocess
+		log.Println("gateway: using Claude CLI provider (OAuth token detected)")
+		return claude.NewCLIProvider(cfg.Claude.Workspace)
+	}
+	// Direct API key (sk-ant-api03-...)
+	log.Println("gateway: using direct Anthropic API provider")
+	return anthropicClient.New(cfg.Claude.APIKey)
+}
+
 // --- chat command (direct, no gateway) ---
 
 func runChat(args []string) {
@@ -398,12 +407,7 @@ func runChat(args []string) {
 		log.Fatalf("config: %v", err)
 	}
 
-	var chatProvider agent.ModelProvider
-	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
-		chatProvider = claude.NewCLIProvider(cfg.Claude.Workspace)
-	} else {
-		chatProvider = anthropicClient.New(cfg.Claude.APIKey)
-	}
+	chatProvider := buildProvider(cfg)
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
 
 	modelID := resolver.Default()

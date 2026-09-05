@@ -1,3 +1,9 @@
+# Chat backend for this agent: "claude" (Claude Code CLI, default) or "codex"
+# (OpenAI Codex CLI). Each authenticates itself — claude via its OAuth login,
+# codex via `codex login`. Switching this requires a matching models.default:
+# codex only accepts models with api: codex-cli (e.g. gpt-6-astra).
+provider: "claude"
+
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
   timeout: 60      # polling timeout in seconds

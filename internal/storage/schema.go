@@ -2,7 +2,7 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // DDL statements executed in order for fresh installs.
 var ddl = []string{
@@ -23,7 +23,8 @@ var ddl = []string{
 		compact_summary   TEXT DEFAULT '',
 		label             TEXT DEFAULT '',
 		seq               INTEGER DEFAULT 0,
-		memory_flushed    INTEGER DEFAULT 0
+		memory_flushed    INTEGER DEFAULT 0,
+		provider          TEXT DEFAULT 'claude'
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_sessions_chat ON sessions(chat_id)`,
 
@@ -98,9 +99,27 @@ func (db *DB) migrate() error {
 		if err := db.migrateV3ToV4(); err != nil {
 			return fmt.Errorf("migrate v3→v4: %w", err)
 		}
-		return db.setVersion(4)
+		if err := db.setVersion(4); err != nil {
+			return err
+		}
+		ver = 4
+	}
+	if ver < 5 {
+		if err := db.migrateV4ToV5(); err != nil {
+			return fmt.Errorf("migrate v4→v5: %w", err)
+		}
+		return db.setVersion(5)
 	}
 	return nil
+}
+
+// migrateV4ToV5 adds the provider column. It records which CLI produced
+// claude_session_id, so switching an agent between the claude and codex
+// backends starts a fresh CLI session instead of resuming with the wrong one.
+// Existing rows were all produced by the claude CLI.
+func (db *DB) migrateV4ToV5() error {
+	_, err := db.conn.Exec(`ALTER TABLE sessions ADD COLUMN provider TEXT DEFAULT 'claude'`)
+	return err
 }
 
 // migrateV3ToV4 adds the users and web_sessions tables for dashboard auth.
