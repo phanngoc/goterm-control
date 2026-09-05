@@ -291,8 +291,23 @@ func buildArgs(model, sessionID string, isNew bool, systemPrompt string) []strin
 
 	if !isNew {
 		args = append(args, "--resume", sessionID)
-	} else if systemPrompt != "" {
-		// --append-system-prompt on first message only (openclaw pattern).
+	}
+
+	// Every turn, resumed ones included. --append-system-prompt applies to the
+	// invocation, not to the stored session: measured against the CLI, a
+	// session created with an appended prompt and then resumed WITHOUT the flag
+	// no longer follows it at all. Sending it only on the first message meant
+	// the agent had its operating instructions — workspace rules, the
+	// coordination commands, the browser guide — for exactly one message per
+	// session and ran bare from the second onwards.
+	//
+	// It does not accumulate: passing it again replaces the invocation's
+	// appended prompt rather than stacking, and the prefix is cached, so the
+	// repeat costs a cache read.
+	//
+	// (The codex path needs no equivalent: it folds the instructions into the
+	// opening message, so they live in the thread history and survive resume.)
+	if systemPrompt != "" {
 		args = append(args, "--append-system-prompt", systemPrompt)
 	}
 
