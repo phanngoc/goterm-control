@@ -316,8 +316,8 @@ submitted → working → in_review → completed
 
 | Giai đoạn | Nội dung | Điều kiện hoàn thành |
 |---|---|---|
-| **S0 — Hợp nhất đường thực thi** | Dashboard dùng `chat.Client` thay `agent.RunAgent` | Cùng một câu hỏi từ web và Telegram sinh ra trace cùng hình dạng (có tool span), web có memory |
-| **S1 — Conversation** | Bảng `conversations` + `channel_bindings`; `sessions.conversation_id`; migrate `chat_id` hiện có | Nhắn Telegram, mở web thấy đúng hội thoại đó và ngược lại |
+| ~~**S0 — Hợp nhất đường thực thi**~~ ✅ | Dashboard dùng `chat.Client` thay `agent.RunAgent` | **Xong (PR #75).** Gateway gọi `bot.Handler.RunTurn` qua `chat.TurnSink`; đo thật trên dashboard: `turn → codex → Bash`, có dòng `messages`, có `tool_call` trong transcript. Sửa kèm: Manager ghi session mới đồng bộ — trước đó tin đầu của chat mới rơi vào khe debounce 1s và bị FK từ chối |
+| ~~**S1 — Conversation**~~ ✅ | Bảng `conversations` + `channel_bindings`; migrate `chat_id` hiện có | **Xong (PR #76).** *Lệch so với bản thiết kế, có chủ ý*: **không** thêm `sessions.conversation_id` — khoá hội thoại chính là `sessions.chat_id` mà Manager đã dùng; `channel_bindings` ánh xạ `telegram:<id>` và `web:1` vào cùng khoá đó. Đổi ít hơn, không phải đụng Manager. Quy tắc single-user: đúng một chat Telegram → web gộp vào; nhiều hơn → web giữ riêng và log, người quyết định |
 | **S2 — Một nguồn lịch sử** | Cả hai kênh ghi `messages` + transcript; UI đọc `messages` | Bỏ được giới hạn cắt 40 message của đường web |
 | **S3 — Session workspace** | `~/.goterm/sessions/<id>/`, inject vào prompt, chuyển `inputs`/`outputs` lớn ra file | Agent đặt sản phẩm đúng chỗ; bảng `runs` ngừng phình |
 | **S4 — Nối task** | `tasks.session_id`, `sessions.task_id`; taskrunner dùng session thật | Từ admin page bấm task → xem được artifact và trace của nó |

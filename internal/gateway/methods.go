@@ -18,6 +18,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/trace"
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
@@ -49,6 +50,10 @@ type Deps struct {
 	// NotesFile is the markdown rendering of shared notes, rewritten whenever
 	// a note is added so agents can read it with their file tools.
 	NotesFile string
+
+	// Conversations maps channels to conversation keys. Nil falls back to the
+	// old fixed dashboard chat, so tests and minimal setups keep working.
+	Conversations *storage.ConversationStore
 
 	// Turn is the bot's turn engine. When set, dashboard messages run through
 	// it and therefore behave exactly like Telegram messages: the CLI owns the
@@ -330,23 +335,20 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			return
 		}
 
-		// Use session_id from client, or create a default
+		// With no session named, the message goes to the ACTIVE session of the
+		// conversation the dashboard is bound to — normally the very session
+		// Telegram is on, which is what makes the two channels one
+		// conversation. A named session is used as-is; one that resolves to
+		// nothing stays unresolved rather than being silently redirected into
+		// the default conversation, so the message lands in the transcript
+		// the caller asked for.
+		var sess *session.Session
 		sessionID := p.SessionID
 		if sessionID == "" {
-			sessionID = fmt.Sprintf("chat_%d", dashboardChatID)
-		}
-
-		// Resolve a real session so the dashboard's own conversation is a
-		// first-class session with turn and token counts. Without this it only
-		// ever existed as a transcript file, and sessions.list synthesised a
-		// stub for it that always read "0 turns · 0 tokens".
-		//
-		// Deliberately does NOT change which transcript is written: a session
-		// id that resolves to nothing stays unresolved rather than silently
-		// redirecting the user's message into the default conversation.
-		sess := deps.Sessions.GetByID(sessionID)
-		if sess == nil && sessionID == fmt.Sprintf("chat_%d", dashboardChatID) {
-			sess = deps.Sessions.Get(dashboardChatID) // creates it on first use
+			sess = deps.Sessions.Get(webConversation(deps))
+			sessionID = sess.ID
+		} else {
+			sess = deps.Sessions.GetByID(sessionID)
 		}
 
 		// One execution path for both channels. The turn engine persists the
@@ -641,7 +643,7 @@ func transcriptToMessages(events []transcript.Event) []agent.Message {
 }
 
 func handleCancel(deps Deps) (json.RawMessage, error) {
-	sess := deps.Sessions.Get(dashboardChatID)
+	sess := deps.Sessions.Get(webConversation(deps))
 	sess.Cancel()
 	return json.Marshal(map[string]string{"status": "cancelled"})
 }
@@ -692,8 +694,19 @@ func labelFromMessage(msg string) string {
 	return label
 }
 
-// dashboardChatID is a fixed chatID for dashboard sessions.
-const dashboardChatID int64 = 1
+// dashboardChatID is the conversation the dashboard falls back to when no
+// conversation store is wired (tests, or a gateway built without one). With a
+// store, webConversation resolves the web account's binding instead — which,
+// for a single user, is the Telegram conversation.
+const dashboardChatID = storage.DashboardConversationID
+
+// webConversation returns the conversation key the dashboard should use.
+func webConversation(deps Deps) int64 {
+	if deps.Conversations != nil {
+		return deps.Conversations.ResolveWeb()
+	}
+	return dashboardChatID
+}
 
 func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	var p SendParams
