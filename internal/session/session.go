@@ -13,6 +13,7 @@ type Session struct {
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 	ClaudeSessionID string    `json:"claude_session_id,omitempty"`
+	Provider        string    `json:"provider,omitempty"` // CLI that owns ClaudeSessionID ("claude", "codex")
 	MessageCount    int       `json:"message_count"`
 	InputTokens     int       `json:"input_tokens"`
 	OutputTokens    int       `json:"output_tokens"`
@@ -55,6 +56,7 @@ type SessionSnapshot struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	ClaudeSessionID string
+	Provider        string
 	MessageCount    int
 	InputTokens     int
 	OutputTokens    int
@@ -94,11 +96,32 @@ func (s *Session) GetSessionID() string {
 	return s.ClaudeSessionID
 }
 
-// SetSessionID stores the claude CLI session ID returned on first message.
+// SetSessionID stores the CLI session/thread ID returned on the first message.
 func (s *Session) SetSessionID(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ClaudeSessionID = id
+	s.UpdatedAt = time.Now()
+}
+
+// GetProvider returns the CLI that owns the stored session ID. Empty means the
+// session predates provider tracking — callers treat that as "claude".
+func (s *Session) GetProvider() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Provider == "" {
+		return "claude"
+	}
+	return s.Provider
+}
+
+// SetProvider records which CLI produced the stored session ID. A session
+// started by one CLI cannot be resumed by another, so the chat client compares
+// this against its own name and starts fresh on a mismatch.
+func (s *Session) SetProvider(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Provider = name
 	s.UpdatedAt = time.Now()
 }
 
@@ -147,6 +170,7 @@ func (s *Session) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ClaudeSessionID = ""
+	s.Provider = ""
 	s.MessageCount = 0
 	s.MemoryFlushed = false
 	s.lastContextTokens = 0
@@ -273,6 +297,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 		CreatedAt:       s.CreatedAt,
 		UpdatedAt:       s.UpdatedAt,
 		ClaudeSessionID: s.ClaudeSessionID,
+		Provider:        s.Provider,
 		MessageCount:    s.MessageCount,
 		InputTokens:     s.InputTokens,
 		OutputTokens:    s.OutputTokens,

@@ -10,6 +10,11 @@ import (
 )
 
 type Config struct {
+	// Provider selects the CLI backend that answers messages:
+	// "claude" (Claude Code CLI, default) or "codex" (OpenAI Codex CLI).
+	// Each has its own auth; see docs/design/shared-agent-memory.md §13 Q1.
+	Provider string `yaml:"provider"`
+
 	Telegram TelegramConfig `yaml:"telegram"`
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Models   ModelsConfig   `yaml:"models"`
@@ -129,6 +134,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Defaults
+	if cfg.Provider == "" {
+		cfg.Provider = ProviderClaude
+	}
 	if cfg.Telegram.Timeout == 0 {
 		cfg.Telegram.Timeout = 60
 	}
@@ -210,12 +218,37 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Supported provider keys.
+const (
+	ProviderClaude = "claude"
+	ProviderCodex  = "codex"
+)
+
 func (c *Config) Validate() error {
 	if c.Telegram.Token == "" {
 		return fmt.Errorf("telegram.token is required (set TELEGRAM_TOKEN env var or config)")
 	}
-	if c.Claude.APIKey == "" {
-		return fmt.Errorf("claude.api_key is required (set ANTHROPIC_API_KEY env var or config)")
+	switch c.Provider {
+	case ProviderClaude:
+		if c.Claude.APIKey == "" {
+			return fmt.Errorf("claude.api_key is required (set ANTHROPIC_API_KEY env var or config)")
+		}
+	case ProviderCodex:
+		// Codex authenticates itself via `codex login`; no key lives here.
+		// Guard the model though: NewResolver silently falls back to the first
+		// builtin (a claude model) when the configured id is unknown, and the
+		// codex CLI would then reject every turn with a 400.
+		want := c.Models.Default
+		if want == "" {
+			want = c.Claude.Model
+		}
+		m := models.NewResolver(want, c.Models.Custom).Lookup(want)
+		if m == nil || m.API != models.APICodexCLI {
+			return fmt.Errorf("provider %q needs a codex model, but models.default/claude.model is %q; "+
+				"use a model with api: codex-cli (e.g. gpt-6-astra)", ProviderCodex, want)
+		}
+	default:
+		return fmt.Errorf("provider must be %q or %q, got %q", ProviderClaude, ProviderCodex, c.Provider)
 	}
 	return nil
 }

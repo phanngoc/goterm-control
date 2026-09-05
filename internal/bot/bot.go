@@ -9,7 +9,9 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ngocp/goterm-control/internal/agent"
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/claude"
+	"github.com/ngocp/goterm-control/internal/codex"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
@@ -85,8 +87,19 @@ func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, e
 		log.Printf("bot: default model=%s (%s)", defaultModel.ID, defaultModel.Name)
 	}
 
-	claudeClient := claude.New(cfg.Claude.SystemPrompt, executor)
-	claudeClient.SetWorkspace(cfg.Claude.Workspace)
+	// Chat backend — one CLI subprocess family per agent, chosen by config.
+	// Both keep their own conversation state (claude session / codex thread);
+	// the session row records which one owns the stored id.
+	var llm chat.Client
+	if cfg.Provider == config.ProviderCodex {
+		codexClient := codex.New(cfg.Claude.SystemPrompt)
+		codexClient.SetWorkspace(cfg.Claude.Workspace)
+		llm = codexClient
+	} else {
+		claudeClient := claude.New(cfg.Claude.SystemPrompt, executor)
+		claudeClient.SetWorkspace(cfg.Claude.Workspace)
+		llm = claudeClient
+	}
 
 	// Message store (SQLite — conversation history)
 	messageStore := storage.NewMessageStore(db)
@@ -117,14 +130,22 @@ func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, e
 	// Uses the direct API when an API key is configured; otherwise falls back
 	// to the claude CLI (which the bot already requires for OAuth tokens).
 	var titleProvider agent.ModelProvider
-	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-api") {
-		titleProvider = anthropicClient.New(cfg.Claude.APIKey)
-	} else {
-		titleProvider = claude.NewCLIProvider(cfg.Claude.Workspace)
-	}
 	titleModel := resolver.Default()
-	if m := resolver.Lookup("haiku"); m != nil {
-		titleModel = m.ID
+	switch {
+	case cfg.Provider == config.ProviderCodex:
+		// Stay on the codex side: a claude model id would be rejected, and the
+		// agent may not have Anthropic credentials at all.
+		titleProvider = codex.NewCLIProvider(cfg.Claude.Workspace)
+	case strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-api"):
+		titleProvider = anthropicClient.New(cfg.Claude.APIKey)
+		if m := resolver.Lookup("haiku"); m != nil {
+			titleModel = m.ID
+		}
+	default:
+		titleProvider = claude.NewCLIProvider(cfg.Claude.Workspace)
+		if m := resolver.Lookup("haiku"); m != nil {
+			titleModel = m.ID
+		}
 	}
 	sessionTitler := titler.New(titleProvider, titleModel)
 
@@ -132,7 +153,7 @@ func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, e
 	handler := &Handler{
 		bot:              api,
 		sessions:         sessions,
-		claude:           claudeClient,
+		llm:              llm,
 		cfg:              cfg,
 		engine:           engine,
 		transcript:       transcriptWriter,

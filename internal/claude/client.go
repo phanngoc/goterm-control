@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -26,11 +27,8 @@ var envVarsToRemove = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"}
 const emptyMCPConfig = `{"mcpServers":{}}`
 
 // StreamCallbacks lets the bot layer react to Claude events.
-type StreamCallbacks struct {
-	OnText       func(chunk string)
-	OnToolCall   func(name string, inputJSON string)
-	OnToolResult func(name string, result tools.ToolResult)
-}
+// Aliased to the shared type so the bot can hold any chat.Client.
+type StreamCallbacks = chat.StreamCallbacks
 
 // Client wraps the claude CLI subprocess.
 type Client struct {
@@ -53,6 +51,12 @@ func New(systemPrompt string, executor *tools.Executor) *Client {
 func (c *Client) SetWorkspace(dir string) {
 	c.workspace = dir
 }
+
+// Name identifies this provider in session storage.
+func (c *Client) Name() string { return ProviderName }
+
+// ProviderName is the session-storage key for the Claude CLI provider.
+const ProviderName = "claude"
 
 // --- stream-json event types from claude CLI ---
 
@@ -220,7 +224,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 				}
 				// Screenshot detection: bash ran screencapture → send as photo.
 				if strings.Contains(p.command, "screencapture") {
-					if path := extractScreenshotPath(p.command); path != "" {
+					if path := chat.ExtractScreenshotPath(p.command); path != "" {
 						result.IsImage = true
 						result.ImagePath = path
 						result.Output = "screenshot at " + path
@@ -304,25 +308,6 @@ func filteredEnv(remove []string) []string {
 		}
 	}
 	return env
-}
-
-// extractScreenshotPath finds the .png/.jpg path in a screencapture command.
-// Handles quoted paths like screencapture -x "/tmp/foo.png" or /tmp/foo.png".
-func extractScreenshotPath(cmd string) string {
-	for _, p := range strings.Fields(cmd) {
-		if strings.HasPrefix(p, "-") {
-			continue
-		}
-		if p == "screencapture" {
-			continue
-		}
-		if strings.Contains(p, ".png") || strings.Contains(p, ".jpg") {
-			// Strip surrounding single/double quotes that Claude sometimes adds.
-			p = strings.Trim(p, `"'`)
-			return p
-		}
-	}
-	return ""
 }
 
 func formatInput(raw json.RawMessage) string {

@@ -4,9 +4,10 @@ package models
 type ModelAPI string
 
 const (
-	APIClaudeCLI    ModelAPI = "claude-cli"    // Claude Code CLI subprocess
-	APIAnthropic    ModelAPI = "anthropic"     // Anthropic Messages API (future)
-	APIOpenAI       ModelAPI = "openai"        // OpenAI-compatible completions (future)
+	APIClaudeCLI ModelAPI = "claude-cli" // Claude Code CLI subprocess
+	APICodexCLI  ModelAPI = "codex-cli"  // OpenAI Codex CLI subprocess
+	APIAnthropic ModelAPI = "anthropic"  // Anthropic Messages API (future)
+	APIOpenAI    ModelAPI = "openai"     // OpenAI-compatible completions (future)
 )
 
 // InputType describes what a model can accept.
@@ -91,6 +92,28 @@ func BuiltinModels() []Model {
 			Reasoning:     false,
 			Input:         []InputType{InputText, InputImage, InputDocument},
 			Cost:          ModelCost{Input: 0.8, Output: 4.0, CacheRead: 0.08, CacheWrite: 1.0},
+		},
+
+		// --- Codex CLI models (provider: codex) ---
+		// Verified against codex-cli 0.153.4 on a ChatGPT-account login
+		// (2026-09-05): gpt-6-astra is what the CLI selects by default and the
+		// only slug this auth mode accepts — gpt-5-codex and gpt-5.3-codex both
+		// return 400 "not supported when using Codex with a ChatGPT account".
+		// Context window is the CLI's own model_context_window for the turn.
+		//
+		// Cost stays zero on purpose: ChatGPT-subscription auth is not billed
+		// per token, so any figure here would be invented. Running codex on an
+		// API key instead? Add the model under models.custom with real pricing.
+		{
+			ID:            "gpt-6-astra",
+			Name:          "GPT-6 Astra (Codex)",
+			Provider:      "openai",
+			API:           APICodexCLI,
+			Aliases:       []string{"codex", "astra"},
+			ContextWindow: 258_400,
+			MaxTokens:     128_000,
+			Reasoning:     true,
+			Input:         []InputType{InputText, InputImage},
 		},
 	}
 }

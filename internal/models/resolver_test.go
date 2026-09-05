@@ -6,8 +6,8 @@ func TestResolverBuiltinModels(t *testing.T) {
 	r := NewResolver("claude-sonnet-4-6", nil)
 
 	all := r.List()
-	if len(all) != 4 {
-		t.Fatalf("expected 4 builtin models, got %d", len(all))
+	if len(all) != len(BuiltinModels()) {
+		t.Fatalf("expected %d builtin models, got %d", len(BuiltinModels()), len(all))
 	}
 
 	// Default resolution
@@ -107,9 +107,9 @@ func TestResolverCustomModel(t *testing.T) {
 
 	r := NewResolver("deepseek-r1", custom)
 
-	// Should have 5 models (4 builtin + 1 custom)
-	if len(r.List()) != 5 {
-		t.Fatalf("expected 5 models, got %d", len(r.List()))
+	// Should have every builtin plus the one custom model
+	if want := len(BuiltinModels()) + 1; len(r.List()) != want {
+		t.Fatalf("expected %d models, got %d", want, len(r.List()))
 	}
 
 	// Default should be custom model
