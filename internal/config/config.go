@@ -33,6 +33,7 @@ type Config struct {
 	Session  SessionConfig  `yaml:"session"`
 	Memory   MemoryConfig   `yaml:"memory"`
 	Gateway  GatewayConfig  `yaml:"gateway"`
+	Browser  BrowserConfig  `yaml:"browser"`
 }
 
 // AgentConfig names this agent. Two agents on one machine MUST NOT share an
@@ -72,6 +73,29 @@ type TasksConfig struct {
 }
 
 // GatewayConfig holds gateway HTTP server settings.
+// BrowserConfig groups browser control. Extension is the Browser Bridge: a
+// Chrome extension in the user's own browser that the agent drives through the
+// gateway (`bomclaw browser …`).
+type BrowserConfig struct {
+	Extension ExtensionConfig `yaml:"extension"`
+}
+
+// ExtensionConfig configures the /ext endpoint the Browser Bridge connects to.
+type ExtensionConfig struct {
+	Enabled            *bool    `yaml:"enabled"`              // default true
+	Token              string   `yaml:"token"`                // pairing secret; empty = generated into <data_dir>/browser-bridge.token
+	AllowEval          *bool    `yaml:"allow_eval"`           // default true; false removes `bomclaw browser eval`
+	CallTimeoutSeconds int      `yaml:"call_timeout_seconds"` // default 30
+	BlockedHosts       []string `yaml:"blocked_hosts"`        // sites the agent may never open; "*.example.com" allowed
+}
+
+// IsEnabled treats an absent flag as on: the endpoint only ever talks to an
+// extension holding the pairing token, so leaving it up costs nothing.
+func (e ExtensionConfig) IsEnabled() bool { return e.Enabled == nil || *e.Enabled }
+
+// EvalAllowed treats an absent flag as on, matching the managed Chrome tools.
+func (e ExtensionConfig) EvalAllowed() bool { return e.AllowEval == nil || *e.AllowEval }
+
 type GatewayConfig struct {
 	Auth AuthConfig `yaml:"auth"`
 }
@@ -178,6 +202,9 @@ func Load(path string) (*Config, error) {
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 		cfg.Claude.APIKey = key
 	}
+	if tok := os.Getenv("BOMCLAW_BROWSER_TOKEN"); tok != "" {
+		cfg.Browser.Extension.Token = tok
+	}
 
 	// Defaults
 	if cfg.Provider == "" {
@@ -261,6 +288,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Gateway.Auth.SessionTTLHours == 0 {
 		cfg.Gateway.Auth.SessionTTLHours = 168
+	}
+	if cfg.Browser.Extension.CallTimeoutSeconds == 0 {
+		cfg.Browser.Extension.CallTimeoutSeconds = 30
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {

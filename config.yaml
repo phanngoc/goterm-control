@@ -29,6 +29,19 @@ tasks:
   poll_interval_seconds: 60
   timeout_minutes: 15
 
+# Browser Bridge — the BomClaw Browser Bridge Chrome extension connects to this
+# gateway's /ext endpoint so the agent can drive the user's own, logged-in
+# browser through `bomclaw browser …`. Pair the extension with the token from
+# `bomclaw browser token`. See docs/browser-bridge.md.
+browser:
+  extension:
+    enabled: true
+    token: ""                   # empty = generated once into <data_dir>/browser-bridge.token
+                                # (env BOMCLAW_BROWSER_TOKEN overrides)
+    allow_eval: true            # false removes `bomclaw browser eval`
+    call_timeout_seconds: 30    # how long one action may take before it fails
+    blocked_hosts: []           # sites the agent may never open, e.g. ["*.bank.example"]
+
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
   timeout: 60      # polling timeout in seconds

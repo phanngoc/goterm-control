@@ -27,6 +27,7 @@ type Server struct {
 	upgrader      websocket.Upgrader
 	httpSrv       *http.Server
 	startedAt     time.Time
+	extra         map[string]http.HandlerFunc // routes added with Handle before Start
 	mu            sync.Mutex
 	// clients maps each open dashboard socket to its write mutex — gorilla
 	// forbids concurrent writes, and Broadcast writes from outside the
@@ -75,12 +76,25 @@ func (s *Server) Broadcast(v any) {
 	}
 }
 
+// Handle registers an additional HTTP route. It must be called before Start;
+// the pattern follows http.ServeMux rules and wins over the dashboard's "/"
+// catch-all by being longer.
+func (s *Server) Handle(pattern string, h http.HandlerFunc) {
+	if s.extra == nil {
+		s.extra = make(map[string]http.HandlerFunc)
+	}
+	s.extra[pattern] = h
+}
+
 // Start begins listening for WebSocket + HTTP connections.
 func (s *Server) Start(ctx context.Context) error {
 	s.startedAt = time.Now()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
+	for pattern, h := range s.extra {
+		mux.HandleFunc(pattern, h)
+	}
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)

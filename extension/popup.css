@@ -1,0 +1,36 @@
+:root { color-scheme: light dark; }
+body {
+  width: 320px;
+  margin: 0;
+  padding: 14px;
+  font: 13px/1.45 -apple-system, system-ui, sans-serif;
+}
+header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+h1 { font-size: 14px; margin: 0; font-weight: 600; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #b91c1c; flex: none; }
+.dot.on { background: #16a34a; }
+.dot.wait { background: #d97706; }
+.state { margin: 0 0 8px; color: #555; }
+.error { margin: 0 0 8px; color: #b91c1c; font-size: 12px; }
+label { display: block; margin: 8px 0 2px; font-size: 12px; color: #444; }
+input {
+  width: 100%; box-sizing: border-box; padding: 6px 8px; margin-top: 2px;
+  border: 1px solid #ccc; border-radius: 6px; font-size: 13px;
+}
+.row { display: flex; gap: 8px; margin-top: 12px; }
+button {
+  flex: 1; padding: 7px 10px; border: 0; border-radius: 6px;
+  font-size: 13px; font-weight: 500; cursor: pointer; background: #e5e7eb;
+}
+button.primary { background: #2563eb; color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+.hint { margin: 12px 0 0; font-size: 11px; color: #777; }
+code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
+@media (prefers-color-scheme: dark) {
+  body { background: #1e1e1e; color: #e5e5e5; }
+  .state { color: #aaa; }
+  label { color: #bbb; }
+  input { background: #2a2a2a; border-color: #444; color: #eee; }
+  button { background: #3a3a3a; color: #eee; }
+  button.primary { background: #2563eb; color: #fff; }
+}

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -155,53 +154,11 @@ func (c *Chrome) SnapshotDOM(ctx context.Context, selector string) (string, erro
 		return "", err
 	}
 
-	var snap struct {
-		Nodes []struct {
-			Ref   string `json:"ref"`
-			Depth int    `json:"depth"`
-			Tag   string `json:"tag"`
-			ID    string `json:"id,omitempty"`
-			Role  string `json:"role,omitempty"`
-			Name  string `json:"name,omitempty"`
-			Text  string `json:"text,omitempty"`
-			Href  string `json:"href,omitempty"`
-			Type  string `json:"type,omitempty"`
-			Value string `json:"value,omitempty"`
-		} `json:"nodes"`
-	}
-	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+	out, err := FormatSnapshotJSON([]byte(raw))
+	if err != nil {
 		return raw, nil // Return raw text if parse fails.
 	}
-
-	// Format as readable text tree.
-	var b strings.Builder
-	for _, n := range snap.Nodes {
-		indent := strings.Repeat("  ", n.Depth)
-		fmt.Fprintf(&b, "%s[%s] <%s>", indent, n.Ref, n.Tag)
-		if n.Role != "" {
-			fmt.Fprintf(&b, " role=%s", n.Role)
-		}
-		if n.Name != "" {
-			fmt.Fprintf(&b, " %q", n.Name)
-		}
-		if n.ID != "" {
-			fmt.Fprintf(&b, " #%s", n.ID)
-		}
-		if n.Type != "" {
-			fmt.Fprintf(&b, " type=%s", n.Type)
-		}
-		if n.Value != "" {
-			fmt.Fprintf(&b, " value=%q", n.Value)
-		}
-		if n.Href != "" {
-			fmt.Fprintf(&b, " href=%s", n.Href)
-		}
-		if n.Text != "" && len(n.Text) < 80 {
-			fmt.Fprintf(&b, " %q", n.Text)
-		}
-		b.WriteByte('\n')
-	}
-	return b.String(), nil
+	return out, nil
 }
 
 // refActionJS builds a JS expression that finds an element by DFS ref

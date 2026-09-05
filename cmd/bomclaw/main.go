@@ -23,6 +23,7 @@ import (
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/auth"
 	"github.com/ngocp/goterm-control/internal/bot"
+	"github.com/ngocp/goterm-control/internal/browserbridge"
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/codex"
@@ -117,6 +118,8 @@ func main() {
 		runModels(os.Args[2:])
 	case "chat":
 		runChat(os.Args[2:])
+	case "browser":
+		runBrowser(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -144,6 +147,7 @@ Commands:
   status             Show gateway status (via WebSocket)
   models             List available models
   chat               Interactive CLI chat with the agent (no gateway needed)
+  browser            Drive the user's browser via the Browser Bridge extension
   agents             List agents registered in the shared database
   task               Create, claim and finish work shared between agents
   note               Record and search what the agents have learned
@@ -283,6 +287,45 @@ func runGateway(args []string) {
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	startTime := time.Now()
 
+	// Browser Bridge — the /ext endpoint the Chrome extension connects to so
+	// the agent can drive the user's own browser. Built before the bot so the
+	// agent's system prompt can learn the `bomclaw browser` command surface,
+	// and so every CLI subprocess inherits the pairing token and gateway
+	// address. Appending the guide here reaches both channels: the bot copies
+	// cfg.Claude.SystemPrompt at construction, just below.
+	var browserHub *browserbridge.Hub
+	var browserAPI *gateway.BrowserAPI
+	if cfg.Browser.Extension.IsEnabled() {
+		tok, err := browserbridge.LoadOrCreateToken(cfg.Browser.Extension.Token, cfg.Session.DataDir)
+		if err != nil {
+			log.Printf("browser bridge: disabled — %v", err)
+		} else {
+			browserHub = browserbridge.New(browserbridge.Options{
+				Token:        tok.Value,
+				AgentID:      cfg.Agent.ID,
+				AgentName:    cfg.Agent.Name,
+				CallTimeout:  time.Duration(cfg.Browser.Extension.CallTimeoutSeconds) * time.Second,
+				AllowEval:    cfg.Browser.Extension.EvalAllowed(),
+				BlockedHosts: cfg.Browser.Extension.BlockedHosts,
+			})
+			extURL := fmt.Sprintf("ws://%s:%d/ext", *bind, *port)
+			browserAPI = &gateway.BrowserAPI{Hub: browserHub, Token: tok.Value, ExtURL: extURL}
+			// The agent's shell reaches the bridge through `bomclaw browser`,
+			// which posts to this gateway. Export the address so a second agent
+			// on another port talks to its own gateway, not agent 1's.
+			if err := os.Setenv("BOMCLAW_GATEWAY_ADDR", fmt.Sprintf("http://%s:%d", *bind, *port)); err != nil {
+				log.Printf("browser bridge: could not export BOMCLAW_GATEWAY_ADDR: %v", err)
+			}
+			// Teach the agent the command surface and the rules for acting in
+			// a browser logged in as the user.
+			cfg.Claude.SystemPrompt += browserbridge.AgentGuide()
+			if tok.Created {
+				log.Printf("browser bridge: generated a pairing token at %s (see `bomclaw browser token`)", tok.Path)
+			}
+			log.Printf("browser bridge: extension endpoint at %s (eval=%v)", extURL, cfg.Browser.Extension.EvalAllowed())
+		}
+	}
+
 	// Create the Telegram bot first so the gateway status RPC can report its
 	// live run state (menu bar tray polls /api/status).
 	var tgBot *bot.Bot
@@ -316,6 +359,7 @@ func runGateway(args []string) {
 		Sessions:      sessions,
 		Resolver:      resolver,
 		Provider:      provider,
+		Browser:       browserHub,
 		System:        cfg.Claude.SystemPrompt,
 		DataDir:       cfg.Session.DataDir,
 		Uptime:        func() time.Duration { return time.Since(startTime) },
@@ -353,6 +397,18 @@ func runGateway(args []string) {
 	}
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir(), authMgr)
+
+	if browserAPI != nil {
+		// /ext is the extension's socket: it authenticates with the pairing
+		// token in its hello frame, so it needs no login session (the tunnel
+		// never forwards it — the extension connects to loopback). The CLI
+		// routes sit behind the same rule as /api/status: a login session, or
+		// a direct loopback caller (the agent's own shell).
+		srv.Handle("/ext", browserHub.ServeHTTP)
+		srv.Handle("/api/browser/call", authMgr.RequireAuthExceptLocal(browserAPI.HandleCall))
+		srv.Handle("/api/browser/status", authMgr.RequireAuthExceptLocal(browserAPI.HandleStatus))
+		srv.Handle("/api/browser/token", authMgr.RequireAuthExceptLocal(browserAPI.HandleToken))
+	}
 
 	if tgBot != nil {
 		// Push conversation changes to open dashboards. A Telegram turn (or a

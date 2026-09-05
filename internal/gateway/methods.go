@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/browserbridge"
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -61,6 +62,10 @@ type Deps struct {
 	// trace has tool spans. Nil only when the Telegram bot failed to start —
 	// the handler then falls back to the standalone agent loop and says so.
 	Turn TurnRunner
+
+	// Browser relays actions to the user's own browser through the Browser
+	// Bridge extension. Nil when the bridge is disabled in config.
+	Browser *browserbridge.Hub
 }
 
 // TurnRunner is the slice of *bot.Handler the gateway needs. Declared here so
@@ -132,6 +137,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleSend(ctx, deps, params)
 		case "cancel":
 			return handleCancel(deps)
+		case "browser.call":
+			return handleBrowserCall(ctx, deps, params)
 
 		// --- admin / observability ---
 		case "admin.overview":
@@ -188,7 +195,28 @@ func handleStatus(deps Deps) (json.RawMessage, error) {
 	if deps.Runs != nil {
 		result.Runs = deps.Runs()
 	}
+	if deps.Browser != nil {
+		st := deps.Browser.Status()
+		result.Browser = &st
+	}
 	return json.Marshal(result)
+}
+
+// handleBrowserCall runs one action in the user's browser through the Browser
+// Bridge: params are {"action": "...", "params": {...}}, the same shape the
+// `bomclaw browser` CLI posts to /api/browser/call.
+func handleBrowserCall(ctx context.Context, deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Browser == nil {
+		return nil, fmt.Errorf("browser bridge is disabled (browser.extension.enabled)")
+	}
+	var p struct {
+		Action string          `json:"action"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	return deps.Browser.Call(ctx, p.Action, p.Params)
 }
 
 func handleModelsList(deps Deps) (json.RawMessage, error) {
