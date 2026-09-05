@@ -23,7 +23,11 @@ Full reference, wire protocol and security notes: [`docs/browser-bridge.md`](../
 3. Open `chrome://extensions`, enable **Developer mode**, click **Load
    unpacked**, and choose this directory.
 
-4. Click the extension icon, paste the endpoint and token, press **Connect**.
+4. Click the extension icon, paste the endpoint and token, press **Pair**.
+
+   Running more than one agent? Repeat with that agent's own port and token
+   (agent 2 is usually `ws://127.0.0.1:18790/ext`). The extension holds one
+   connection per agent, and each agent drives its own tab.
 
 5. From the agent's shell:
 

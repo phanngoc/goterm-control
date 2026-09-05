@@ -1,10 +1,12 @@
 // background.js — the BomClaw Browser Bridge service worker.
 //
-// It keeps one WebSocket open to the gateway's /ext endpoint, authenticates
-// with the pairing token, and executes the actions the agent sends. Actions
-// run against a dedicated "agent tab" (a separate window, so your own tabs are
-// left alone) unless you point the agent at one of your tabs with
-// `bomclaw browser tabs focus <id>`.
+// It keeps one WebSocket open PER PAIRED AGENT and executes the actions each
+// one sends. A machine commonly runs several agents (agent 1 on :18789,
+// agent 2 on :18790, …); a single connection would mean whichever agent you
+// paired last owned the browser and the others were permanently unable to use
+// it. Each agent therefore gets its own connection, its own reconnect loop,
+// and — importantly — its own tab, so two agents working at once do not
+// navigate each other's page out from under them.
 //
 // Wire protocol (see docs/browser-bridge.md):
 //   ext→gw {type:"hello",token,client,browser}
@@ -15,163 +17,238 @@
 
 importScripts("page.js");
 
-const CLIENT = "bomclaw-bridge/0.1.0";
+const CLIENT = "bomclaw-bridge/0.2.0";
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30000;
+const LOG_MAX = 40;
 
-let ws = null;
-let connected = false;      // welcome received
-let agentName = "";
-let reconnectDelay = RECONNECT_MIN;
-let reconnectTimer = null;
-let wantConnected = false;  // user asked to be connected
-let lastError = "";
-let agentTabId = null;      // the tab the agent drives by default
-let currentTabId = null;    // active target for snapshot/act (agent tab, or a focused user tab)
+// agents maps a stable key (the endpoint URL) to its live connection state.
+const agents = new Map();
+
+// activity is a rolling log across all agents, newest first. The popup shows
+// it because "connected" alone never explains what the agent actually did.
+let activity = [];
 
 // --- lifecycle ---
 
-chrome.runtime.onStartup.addListener(() => maybeAutoConnect());
-chrome.runtime.onInstalled.addListener(() => maybeAutoConnect());
+chrome.runtime.onStartup.addListener(() => restoreAgents());
+chrome.runtime.onInstalled.addListener(() => restoreAgents());
+restoreAgents();
 
-async function maybeAutoConnect() {
-  const cfg = await getConfig();
-  if (cfg.token && cfg.url && cfg.autoConnect !== false) connect();
+async function restoreAgents() {
+  const cfg = await storageGet(["agents", "url", "token", "autoConnect"]);
+  let list = Array.isArray(cfg.agents) ? cfg.agents : [];
+
+  // Migrate the single-agent shape this extension shipped with, so an upgrade
+  // does not silently unpair the browser.
+  if (list.length === 0 && cfg.url && cfg.token) {
+    list = [{ url: cfg.url, token: cfg.token, autoConnect: cfg.autoConnect !== false }];
+    await storageSet({ agents: list });
+  }
+  for (const a of list) {
+    upsertAgent(a.url, a.token, a.name);
+    if (a.autoConnect !== false) connect(a.url);
+  }
+  broadcastStatus();
 }
 
-async function getConfig() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["token", "url", "autoConnect"], (v) => resolve(v || {}));
-  });
+function storageGet(keys) {
+  return new Promise((resolve) => chrome.storage.local.get(keys, (v) => resolve(v || {})));
+}
+function storageSet(obj) {
+  return new Promise((resolve) => chrome.storage.local.set(obj, resolve));
+}
+
+async function persistAgents() {
+  const list = [...agents.values()].map((a) => ({
+    url: a.url, token: a.token, name: a.name, autoConnect: a.wantConnected,
+  }));
+  await storageSet({ agents: list });
+}
+
+// --- agent registry ---
+
+function upsertAgent(url, token, name) {
+  let a = agents.get(url);
+  if (!a) {
+    a = {
+      url, token, name: name || "",
+      ws: null, connected: false, wantConnected: false,
+      reconnectDelay: RECONNECT_MIN, reconnectTimer: null,
+      lastError: "", actions: 0, lastAction: "", lastActionAt: 0,
+      // Each agent drives its own tab so concurrent agents do not fight.
+      agentTabId: null, currentTabId: null,
+    };
+    agents.set(url, a);
+  } else {
+    a.token = token || a.token;
+    if (name) a.name = name;
+  }
+  return a;
+}
+
+function removeAgent(url) {
+  const a = agents.get(url);
+  if (!a) return;
+  a.wantConnected = false;
+  clearTimeout(a.reconnectTimer);
+  if (a.ws) { try { a.ws.close(1000, "unpaired"); } catch (e) {} }
+  agents.delete(url);
+  persistAgents();
+  broadcastStatus();
 }
 
 // --- connection ---
 
-function connect() {
-  wantConnected = true;
-  clearTimeout(reconnectTimer);
-  getConfig().then((cfg) => {
-    if (!cfg.token || !cfg.url) {
-      lastError = "Set the endpoint and token first.";
+function connect(url) {
+  const a = agents.get(url);
+  if (!a) return;
+  a.wantConnected = true;
+  clearTimeout(a.reconnectTimer);
+
+  if (!a.token || !a.url) {
+    a.lastError = "Set the endpoint and token first.";
+    broadcastStatus();
+    return;
+  }
+  try {
+    a.ws = new WebSocket(a.url);
+  } catch (e) {
+    scheduleReconnect(a, "bad endpoint: " + e.message);
+    return;
+  }
+  a.ws.onopen = () => {
+    a.lastError = "";
+    send(a, { type: "hello", token: a.token, client: CLIENT, browser: navigator.userAgent });
+  };
+  a.ws.onmessage = (ev) => onFrame(a, ev.data);
+  a.ws.onclose = (ev) => {
+    a.connected = false;
+    broadcastStatus();
+    if (ev.code === 4001) {
+      a.lastError = "The gateway rejected the pairing token. Copy a fresh one from `bomclaw browser token`.";
+      a.wantConnected = false; // a wrong token will not fix itself
+      persistAgents();
       broadcastStatus();
       return;
     }
-    try {
-      ws = new WebSocket(cfg.url);
-    } catch (e) {
-      scheduleReconnect("bad endpoint: " + e.message);
-      return;
-    }
-    ws.onopen = () => {
-      lastError = "";
-      ws.send(JSON.stringify({
-        type: "hello",
-        token: cfg.token,
-        client: CLIENT,
-        browser: navigator.userAgent,
-      }));
-    };
-    ws.onmessage = (ev) => onFrame(ev.data);
-    ws.onclose = (ev) => {
-      connected = false;
-      agentName = "";
-      broadcastStatus();
-      if (ev.code === 4001) {
-        lastError = "The gateway rejected the pairing token. Copy a fresh one from `bomclaw browser token`.";
-        wantConnected = false; // a wrong token will not fix itself
-        broadcastStatus();
-        return;
-      }
-      if (wantConnected) scheduleReconnect(ev.reason || ("closed (" + ev.code + ")"));
-    };
-    ws.onerror = () => { /* onclose carries the useful signal */ };
-  });
+    if (a.wantConnected) scheduleReconnect(a, ev.reason || ("closed (" + ev.code + ")"));
+  };
+  a.ws.onerror = () => { /* onclose carries the useful signal */ };
+  persistAgents();
 }
 
-function disconnect() {
-  wantConnected = false;
-  clearTimeout(reconnectTimer);
-  connected = false;
-  agentName = "";
-  if (ws) { try { ws.close(1000, "user disconnected"); } catch (e) {} ws = null; }
+function disconnect(url) {
+  const a = agents.get(url);
+  if (!a) return;
+  a.wantConnected = false;
+  clearTimeout(a.reconnectTimer);
+  a.connected = false;
+  if (a.ws) { try { a.ws.close(1000, "user disconnected"); } catch (e) {} a.ws = null; }
+  persistAgents();
   broadcastStatus();
 }
 
-function scheduleReconnect(reason) {
-  lastError = reason || "";
+function scheduleReconnect(a, reason) {
+  a.lastError = reason || "";
   broadcastStatus();
-  clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(connect, reconnectDelay);
-  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
+  clearTimeout(a.reconnectTimer);
+  a.reconnectTimer = setTimeout(() => connect(a.url), a.reconnectDelay);
+  a.reconnectDelay = Math.min(a.reconnectDelay * 2, RECONNECT_MAX);
 }
 
-function onFrame(data) {
+function onFrame(a, data) {
   let f;
   try { f = JSON.parse(data); } catch (e) { return; }
   switch (f.type) {
     case "welcome":
-      connected = true;
-      agentName = f.name || f.agent || "agent";
-      reconnectDelay = RECONNECT_MIN;
-      lastError = "";
+      a.connected = true;
+      a.name = f.name || f.agent || a.name || "agent";
+      a.agentId = f.agent || "";
+      a.reconnectDelay = RECONNECT_MIN;
+      a.lastError = "";
+      persistAgents();
       broadcastStatus();
       break;
     case "call":
-      handleCall(f);
+      handleCall(a, f);
       break;
     case "ping":
-      send({ type: "pong" });
+      send(a, { type: "pong" });
       break;
   }
 }
 
-function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
-  }
+function send(a, obj) {
+  if (a.ws && a.ws.readyState === WebSocket.OPEN) a.ws.send(JSON.stringify(obj));
 }
 
 // --- action dispatch ---
 
-async function handleCall(f) {
+async function handleCall(a, f) {
+  const started = Date.now();
   try {
-    const result = await runAction(f.action, f.params || {});
-    // An action can report a per-element failure without throwing.
+    const result = await runAction(a, f.action, f.params || {});
     if (result && result.error) {
-      send({ type: "result", id: f.id, ok: false, error: result.error });
+      note(a, f.action, f.params, result.error, started);
+      send(a, { type: "result", id: f.id, ok: false, error: result.error });
     } else {
-      send({ type: "result", id: f.id, ok: true, result: result });
+      note(a, f.action, f.params, "", started);
+      send(a, { type: "result", id: f.id, ok: true, result: result });
     }
   } catch (e) {
-    send({ type: "result", id: f.id, ok: false, error: String(e && e.message || e) });
+    const msg = String((e && e.message) || e);
+    note(a, f.action, f.params, msg, started);
+    send(a, { type: "result", id: f.id, ok: false, error: msg });
   }
 }
 
-async function runAction(action, p) {
+// note records one action for the popup. The detail is the single most useful
+// parameter — a URL or a ref — because "click" alone says nothing about what
+// the agent is doing to your browser.
+function note(a, action, params, error, started) {
+  a.actions++;
+  a.lastAction = action;
+  a.lastActionAt = Date.now();
+  const p = params || {};
+  const detail = p.url || p.ref || p.expression || p.text || p.action || "";
+  activity.unshift({
+    at: Date.now(),
+    ms: Date.now() - started,
+    agent: a.name || a.url,
+    action,
+    detail: String(detail).slice(0, 80),
+    error: error || "",
+  });
+  if (activity.length > LOG_MAX) activity.length = LOG_MAX;
+  broadcastStatus();
+}
+
+async function runAction(a, action, p) {
   switch (action) {
-    case "navigate": return navigate(p.url);
-    case "snapshot": return injectFn(await targetTab(), bcSnapshot, [p.selector || ""]);
-    case "click":    return injectFn(await targetTab(), bcClick, [p.ref]);
-    case "fill":     return injectFn(await targetTab(), bcFill, [p.ref, p.text || ""]);
-    case "type":     return injectFn(await targetTab(), bcType, [p.ref, p.text || ""]);
-    case "select":   return injectFn(await targetTab(), bcSelect, [p.ref, p.value || ""]);
-    case "scroll":   return injectFn(await targetTab(), bcScroll, [p.direction || "down", p.pixels || 0]);
-    case "text":     return injectFn(await targetTab(), bcText, [p.ref || "", p.property || "text"]);
-    case "back":     return goBack();
-    case "wait":     return waitFor(p);
-    case "screenshot": return screenshot();
-    case "eval":     return evalJS(p.expression || "");
-    case "tabs":     return tabsAction(p);
+    case "navigate": return navigate(a, p.url);
+    case "snapshot": return injectFn(a, await targetTab(a), bcSnapshot, [p.selector || ""]);
+    case "click":    return injectFn(a, await targetTab(a), bcClick, [p.ref]);
+    case "fill":     return injectFn(a, await targetTab(a), bcFill, [p.ref, p.text || ""]);
+    case "type":     return injectFn(a, await targetTab(a), bcType, [p.ref, p.text || ""]);
+    case "select":   return injectFn(a, await targetTab(a), bcSelect, [p.ref, p.value || ""]);
+    case "scroll":   return injectFn(a, await targetTab(a), bcScroll, [p.direction || "down", p.pixels || 0]);
+    case "text":     return injectFn(a, await targetTab(a), bcText, [p.ref || "", p.property || "text"]);
+    case "back":     return goBack(a);
+    case "wait":     return waitFor(a, p);
+    case "screenshot": return screenshot(a);
+    case "eval":     return evalJS(a, p.expression || "");
+    case "tabs":     return tabsAction(a, p);
     default: throw new Error("unknown action: " + action);
   }
 }
 
-// targetTab returns the tab the agent is currently acting on, creating the
-// agent tab if none exists yet.
-async function targetTab() {
-  if (currentTabId != null && await tabExists(currentTabId)) return currentTabId;
-  if (agentTabId != null && await tabExists(agentTabId)) { currentTabId = agentTabId; return agentTabId; }
-  const tab = await createAgentTab("about:blank");
+// targetTab returns the tab this agent is acting on, creating its own tab if
+// it has none. Per-agent, so two agents never steer the same page.
+async function targetTab(a) {
+  if (a.currentTabId != null && await tabExists(a.currentTabId)) return a.currentTabId;
+  if (a.agentTabId != null && await tabExists(a.agentTabId)) { a.currentTabId = a.agentTabId; return a.agentTabId; }
+  const tab = await createAgentTab(a, "about:blank");
   return tab.id;
 }
 
@@ -179,36 +256,36 @@ async function tabExists(id) {
   try { await chrome.tabs.get(id); return true; } catch (e) { return false; }
 }
 
-async function createAgentTab(url) {
+async function createAgentTab(a, url) {
   // A separate window keeps the agent's page out of the user's tab strip.
   const win = await chrome.windows.create({ url, focused: false });
   const tab = win.tabs[0];
-  agentTabId = tab.id;
-  currentTabId = tab.id;
+  a.agentTabId = tab.id;
+  a.currentTabId = tab.id;
   return tab;
 }
 
-async function navigate(url) {
+async function navigate(a, url) {
   if (!url) throw new Error("url is required");
-  let tabId = agentTabId;
+  let tabId = a.agentTabId;
   if (tabId == null || !(await tabExists(tabId))) {
-    const tab = await createAgentTab(url);
+    const tab = await createAgentTab(a, url);
     tabId = tab.id;
   } else {
     await chrome.tabs.update(tabId, { url });
   }
-  currentTabId = tabId;
+  a.currentTabId = tabId;
   await waitForLoad(tabId, 15000);
   return { message: "Navigated to " + url };
 }
 
-async function goBack() {
-  const tabId = await targetTab();
-  await injectFn(tabId, () => { history.back(); return true; }, []);
+async function goBack(a) {
+  const tabId = await targetTab(a);
+  await injectFn(a, tabId, () => { history.back(); return true; }, []);
   return { message: "Navigated back" };
 }
 
-async function waitFor(p) {
+async function waitFor(a, p) {
   const ms = p.ms || 0;
   if (ms > 0 && !p.ref && !p.text) {
     await sleep(ms);
@@ -216,28 +293,25 @@ async function waitFor(p) {
   }
   const timeout = ms > 0 ? ms : 10000;
   const deadline = Date.now() + timeout;
-  const tabId = await targetTab();
+  const tabId = await targetTab(a);
   while (Date.now() < deadline) {
-    const r = await injectFn(tabId, bcExists, [p.ref || "", p.text || ""]);
+    const r = await injectFn(a, tabId, bcExists, [p.ref || "", p.text || ""]);
     if (r && r.found) return { message: "Condition met" };
     await sleep(200);
   }
   throw new Error("timed out waiting for " + (p.ref || JSON.stringify(p.text)));
 }
 
-async function screenshot() {
-  const tabId = await targetTab();
+async function screenshot(a) {
+  const tabId = await targetTab(a);
   const tab = await chrome.tabs.get(tabId);
-  // captureVisibleTab needs the target window to be the one captured; it does
-  // not need focus stolen from the user, only the window id.
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-  const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
-  return { data: base64, format: "png" };
+  return { data: dataUrl.replace(/^data:image\/png;base64,/, ""), format: "png" };
 }
 
-async function evalJS(expression) {
+async function evalJS(a, expression) {
   if (!expression) throw new Error("expression is required");
-  const tabId = await targetTab();
+  const tabId = await targetTab(a);
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },
@@ -254,33 +328,39 @@ async function evalJS(expression) {
   }
 }
 
-// tabsAction lists/opens/focuses/closes tabs. list and focus/close work on the
-// user's own tabs by id; focus also makes that tab the agent's active target.
-async function tabsAction(p) {
+// tabsAction lists/opens/focuses/closes tabs. The listing marks which tab THIS
+// agent is driving, and which belong to another agent, so a two-agent setup is
+// legible instead of a flat list of everything open.
+async function tabsAction(a, p) {
   const action = p.action || "list";
   switch (action) {
     case "list": {
       const tabs = await chrome.tabs.query({});
+      const owners = new Map();
+      for (const other of agents.values()) {
+        if (other.agentTabId != null) owners.set(other.agentTabId, other.name || other.url);
+      }
       return {
         tabs: tabs.map((t) => ({
           id: String(t.id),
           title: t.title || "",
           url: t.url || "",
-          active: t.id === currentTabId,
+          active: t.id === a.currentTabId,
+          owner: owners.get(t.id) || "",
         })),
       };
     }
     case "open": {
       if (!p.url) throw new Error("url is required");
       const tab = await chrome.tabs.create({ url: p.url, active: false });
-      currentTabId = tab.id;
+      a.currentTabId = tab.id;
       await waitForLoad(tab.id, 15000);
       return { tabId: String(tab.id), message: "Opened tab " + tab.id };
     }
     case "focus": {
       const id = parseInt(p.tab_id, 10);
       if (!(await tabExists(id))) throw new Error("no tab with id " + p.tab_id);
-      currentTabId = id;
+      a.currentTabId = id;
       const t = await chrome.tabs.get(id);
       await chrome.tabs.update(id, { active: true });
       await chrome.windows.update(t.windowId, { focused: true });
@@ -289,8 +369,8 @@ async function tabsAction(p) {
     case "close": {
       const id = parseInt(p.tab_id, 10);
       await chrome.tabs.remove(id);
-      if (currentTabId === id) currentTabId = null;
-      if (agentTabId === id) agentTabId = null;
+      if (a.currentTabId === id) a.currentTabId = null;
+      if (a.agentTabId === id) a.agentTabId = null;
       return { message: "Closed tab " + id };
     }
     default:
@@ -302,7 +382,7 @@ async function tabsAction(p) {
 
 // injectFn runs a page.js function in the target tab's MAIN world and returns
 // its value. A ref/param is passed as args, never string-interpolated.
-async function injectFn(tabId, fn, args) {
+async function injectFn(a, tabId, fn, args) {
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },
@@ -334,14 +414,13 @@ async function injectionBlockReason(tabId, cause) {
       ") — load a page first with `bomclaw browser navigate <url>`, " +
       "or point the agent at one of the user's tabs with `bomclaw browser tabs focus <id>`";
   }
-  if (/^(chrome|chrome-untrusted|edge|brave|devtools|view-source|file|data):/i.test(url)) {
+  if (/^(chrome|chrome-untrusted|chrome-extension|edge|brave|devtools|view-source|file|data):/i.test(url)) {
     return "Chrome does not let extensions script " + url.split(":")[0] +
       ": pages — navigate to an http(s) page instead";
   }
   if (/^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)/i.test(url)) {
     return "Chrome blocks extensions from scripting the Web Store";
   }
-  // Not a URL restriction we recognise — pass Chrome's own words through.
   return String((cause && cause.message) || cause || "script injection failed");
 }
 
@@ -349,8 +428,6 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// waitForLoad resolves when the tab finishes loading, or after a timeout —
-// navigation should not hang an action forever on a slow page.
 function waitForLoad(tabId, timeout) {
   return new Promise((resolve) => {
     let done = false;
@@ -364,31 +441,62 @@ function waitForLoad(tabId, timeout) {
 
 // --- popup messaging ---
 
-function statusPayload() {
-  return { type: "status", connected, wantConnected, agentName, lastError };
+async function statusPayload() {
+  const list = [];
+  for (const a of agents.values()) {
+    let tab = null;
+    if (a.currentTabId != null) {
+      try {
+        const t = await chrome.tabs.get(a.currentTabId);
+        tab = { id: String(t.id), title: t.title || "", url: t.url || "" };
+      } catch (e) { /* the tab went away; report none */ }
+    }
+    list.push({
+      url: a.url,
+      name: a.name || "",
+      agentId: a.agentId || "",
+      connected: a.connected,
+      wantConnected: a.wantConnected,
+      lastError: a.lastError || "",
+      actions: a.actions,
+      lastAction: a.lastAction || "",
+      lastActionAt: a.lastActionAt || 0,
+      tab,
+    });
+  }
+  list.sort((x, y) => x.url.localeCompare(y.url));
+  return { type: "status", agents: list, activity };
 }
 
 function broadcastStatus() {
-  chrome.runtime.sendMessage(statusPayload()).catch(() => {});
+  statusPayload().then((p) => chrome.runtime.sendMessage(p).catch(() => {})).catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg && msg.type) {
     case "getStatus":
-      sendResponse(statusPayload());
-      return false;
+      statusPayload().then(sendResponse);
+      return true;
+    case "pair":
+      upsertAgent(msg.url, msg.token);
+      connect(msg.url);
+      statusPayload().then(sendResponse);
+      return true;
     case "connect":
-      chrome.storage.local.set({ token: msg.token, url: msg.url, autoConnect: true }, () => {
-        reconnectDelay = RECONNECT_MIN;
-        connect();
-        sendResponse(statusPayload());
-      });
+      connect(msg.url);
+      statusPayload().then(sendResponse);
       return true;
     case "disconnect":
-      chrome.storage.local.set({ autoConnect: false }, () => {
-        disconnect();
-        sendResponse(statusPayload());
-      });
+      disconnect(msg.url);
+      statusPayload().then(sendResponse);
+      return true;
+    case "forget":
+      removeAgent(msg.url);
+      statusPayload().then(sendResponse);
+      return true;
+    case "clearActivity":
+      activity = [];
+      statusPayload().then(sendResponse);
       return true;
   }
   return false;

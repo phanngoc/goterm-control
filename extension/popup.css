@@ -1,36 +1,66 @@
 :root { color-scheme: light dark; }
 body {
-  width: 320px;
-  margin: 0;
-  padding: 14px;
+  width: 360px; margin: 0; padding: 12px;
   font: 13px/1.45 -apple-system, system-ui, sans-serif;
 }
-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+header { margin-bottom: 10px; }
 h1 { font-size: 14px; margin: 0; font-weight: 600; }
+h2 { font-size: 11px; margin: 0; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #777; }
+
+/* agent cards */
+.agent { border: 1px solid #d8d8d8; border-radius: 8px; padding: 8px 9px; margin-bottom: 8px; }
+.agent-top { display: flex; align-items: center; gap: 7px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #b91c1c; flex: none; }
 .dot.on { background: #16a34a; }
 .dot.wait { background: #d97706; }
-.state { margin: 0 0 8px; color: #555; }
-.error { margin: 0 0 8px; color: #b91c1c; font-size: 12px; }
+.agent-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-meta { color: #777; font-size: 11px; margin-top: 3px; word-break: break-all; }
+.agent-tab { font-size: 11px; margin-top: 4px; padding: 4px 6px; background: rgba(127,127,127,.12); border-radius: 5px; }
+.agent-tab .t { font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-tab .u { color: #777; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-actions { display: flex; gap: 6px; margin-top: 7px; }
+.error { color: #b91c1c; font-size: 11px; margin: 5px 0 0; }
+.empty { color: #777; font-size: 12px; margin: 0 0 10px; }
+
+/* forms + buttons */
 label { display: block; margin: 8px 0 2px; font-size: 12px; color: #444; }
 input {
   width: 100%; box-sizing: border-box; padding: 6px 8px; margin-top: 2px;
   border: 1px solid #ccc; border-radius: 6px; font-size: 13px;
 }
-.row { display: flex; gap: 8px; margin-top: 12px; }
 button {
-  flex: 1; padding: 7px 10px; border: 0; border-radius: 6px;
-  font-size: 13px; font-weight: 500; cursor: pointer; background: #e5e7eb;
+  padding: 5px 10px; border: 0; border-radius: 6px;
+  font-size: 12px; font-weight: 500; cursor: pointer; background: #e5e7eb; color: #222;
 }
-button.primary { background: #2563eb; color: #fff; }
-button:disabled { opacity: .5; cursor: default; }
-.hint { margin: 12px 0 0; font-size: 11px; color: #777; }
+button.primary { background: #2563eb; color: #fff; width: 100%; margin-top: 10px; padding: 7px; }
+button.link { background: none; color: #777; padding: 0; font-weight: 400; font-size: 11px; }
+details { border-top: 1px solid #e2e2e2; padding-top: 8px; }
+summary { cursor: pointer; font-size: 12px; color: #555; }
+.hint { margin: 8px 0 0; font-size: 11px; color: #777; }
 code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
+
+/* activity */
+#activity-box { border-top: 1px solid #e2e2e2; margin-top: 10px; padding-top: 8px; }
+.act-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+#activity { list-style: none; margin: 0; padding: 0; max-height: 190px; overflow-y: auto; }
+#activity li { font-size: 11px; padding: 3px 0; border-bottom: 1px solid rgba(127,127,127,.14); display: flex; gap: 6px; }
+#activity li:last-child { border-bottom: 0; }
+.act-time { color: #999; flex: none; font-variant-numeric: tabular-nums; }
+.act-body { flex: 1; overflow: hidden; }
+.act-action { font-weight: 600; }
+.act-agent { color: #777; }
+.act-detail { color: #555; word-break: break-all; }
+.act-err { color: #b91c1c; }
+.act-ok { color: #16a34a; }
+
 @media (prefers-color-scheme: dark) {
   body { background: #1e1e1e; color: #e5e5e5; }
-  .state { color: #aaa; }
+  h2, .agent-meta, .agent-tab .u, .hint, summary, .act-agent, .empty { color: #999; }
+  .agent { border-color: #3a3a3a; }
   label { color: #bbb; }
   input { background: #2a2a2a; border-color: #444; color: #eee; }
   button { background: #3a3a3a; color: #eee; }
   button.primary { background: #2563eb; color: #fff; }
+  details, #activity-box { border-color: #3a3a3a; }
+  .act-detail { color: #bbb; }
 }

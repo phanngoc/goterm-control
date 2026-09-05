@@ -32,9 +32,29 @@ bomclaw browser click n7
 ```
 
 The extension dials **out** to the gateway on loopback; the gateway never
-connects to the browser. One browser at a time — a newer connection replaces
+connects to the browser. One browser per gateway — a newer connection replaces
 an older one, so reloading the extension never leaves a stale socket holding
 the slot.
+
+## Several agents, one browser
+
+A machine commonly runs more than one agent (agent 1 on `:18789`, agent 2 on
+`:18790`). Each has its own gateway, its own pairing token, and its own
+`/ext` endpoint, and the extension holds **a separate connection to each**.
+Pair them all from the popup: "Pair another agent", one token each.
+
+Every agent drives **its own tab**, opened in its own window. Two agents
+working at the same time therefore never navigate each other's page out from
+under them. `bomclaw browser tabs` marks the tab the calling agent acts on with
+`*`, and labels tabs belonging to another agent with that agent's name — so
+`tabs focus <id>` onto a peer's tab is a deliberate choice rather than an
+accident.
+
+The popup shows, per agent: connection state, how many actions it has run, its
+last action and when, and the page it is currently on. Below that is a rolling
+log of what every agent did — action, target, duration, and any error. With one
+agent that is a convenience; with two it is the only way to tell which of them
+just navigated your browser.
 
 ## Setup
 
@@ -57,7 +77,8 @@ mode**, click **Load unpacked**, and pick the `extension/` directory of this
 repo.
 
 **4. Pair it.** Click the extension's toolbar icon, paste the endpoint and
-token, press **Connect**. The dot turns green and names your agent.
+token, press **Pair**. The dot turns green and names your agent. Repeat for a
+second agent with its own port and token.
 
 **5. Check it from the agent's side.**
 
@@ -71,7 +92,7 @@ bomclaw browser status
 |---|---|
 | `bomclaw browser status` | Is a browser connected? |
 | `bomclaw browser token` | The pairing token and endpoint for the extension |
-| `bomclaw browser tabs` | List open tabs (`id`, title, url) |
+| `bomclaw browser tabs` | List open tabs (`id`, title, url); `*` marks this agent's tab, `[name]` marks a peer's |
 | `bomclaw browser tabs open <url>` | Open a new tab |
 | `bomclaw browser tabs focus <id>` | Act on one of **your** tabs from now on |
 | `bomclaw browser tabs close <id>` | Close a tab |
