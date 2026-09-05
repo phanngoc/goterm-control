@@ -38,6 +38,10 @@ type Bot struct {
 	typing    *TypingIndicator
 }
 
+// Handler exposes the turn engine so the gateway can run dashboard messages
+// through the same path as Telegram messages (see Handler.RunTurn).
+func (b *Bot) Handler() *Handler { return b.handler }
+
 // New creates and initialises the bot. db and sessions are shared with the
 // gateway so label renames and turn counters are visible to the dashboard
 // immediately (two managers on one SQLite file would clobber each other).

@@ -313,6 +313,9 @@ func runGateway(args []string) {
 		NotesFile:    cfg.Coord.NotesFile,
 	}
 	if tgBot != nil {
+		// Dashboard messages run through the bot's turn engine, so both
+		// channels share one execution path: CLI tool loop, memory, trace.
+		deps.Turn = tgBot.Handler()
 		deps.Runs = func() []gateway.RunInfo {
 			var out []gateway.RunInfo
 			for _, s := range tgBot.Sessions().List() {

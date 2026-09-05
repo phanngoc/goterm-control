@@ -70,14 +70,29 @@ func NewManager(store SessionPersister) *Manager {
 
 // Get returns the active session for a chat, creating a new ChatState if needed.
 // This is the hot path — all existing callers continue to work unchanged.
+//
+// A session created here is written to the store BEFORE it is returned. Other
+// tables reference sessions by foreign key, and the first message of a new chat
+// arrives well inside the one-second save debounce — under the debounce alone
+// that message was rejected with "FOREIGN KEY constraint failed" and silently
+// lost. SaveNow runs after the lock is released: it takes the read lock itself.
 func (m *Manager) Get(chatID int64) *Session {
+	s, created := m.getOrCreate(chatID)
+	if created {
+		m.SaveNow()
+	}
+	return s
+}
+
+// getOrCreate does Get's locked work and reports whether it created a session.
+func (m *Manager) getOrCreate(chatID int64) (*Session, bool) {
 	m.mu.RLock()
 	cs, ok := m.chats[chatID]
 	m.mu.RUnlock()
 
 	if ok {
 		if s, exists := cs.Sessions[cs.ActiveSessionID]; exists {
-			return s
+			return s, false
 		}
 	}
 
@@ -86,14 +101,14 @@ func (m *Manager) Get(chatID int64) *Session {
 	// Double-check after acquiring write lock
 	if cs, ok = m.chats[chatID]; ok {
 		if s, exists := cs.Sessions[cs.ActiveSessionID]; exists {
-			return s
+			return s, false
 		}
 		// ChatState exists but ActiveSessionID is stale — recover by picking
 		// the most recently updated session instead of wiping all sessions.
 		if len(cs.Sessions) > 0 {
 			cs.ActiveSessionID = pickMostRecentSession(cs.Sessions)
 			m.scheduleSave()
-			return cs.Sessions[cs.ActiveSessionID]
+			return cs.Sessions[cs.ActiveSessionID], false
 		}
 		// No sessions left in this ChatState — create a new one in place.
 		s := New(chatID)
@@ -102,8 +117,7 @@ func (m *Manager) Get(chatID int64) *Session {
 		if cs.NextSeq < 1 {
 			cs.NextSeq = 1
 		}
-		m.scheduleSave()
-		return s
+		return s, true
 	}
 
 	// Brand new chat — create ChatState with first session.
@@ -113,8 +127,7 @@ func (m *Manager) Get(chatID int64) *Session {
 		NextSeq:         1,
 		Sessions:        map[string]*Session{s.ID: s},
 	}
-	m.scheduleSave()
-	return s
+	return s, true
 }
 
 // pickMostRecentSession returns the ID of the most recently updated session.
@@ -164,7 +177,19 @@ func (m *Manager) ListForChat(chatID int64) []*Session {
 
 // NewSession creates a new session for a chat and makes it active.
 // Returns error if the session limit is exceeded.
+//
+// Like Get, the new session is persisted before it is returned, for the same
+// foreign-key reason — see Get.
 func (m *Manager) NewSession(chatID int64) (*Session, error) {
+	s, err := m.newSession(chatID)
+	if err == nil {
+		m.SaveNow()
+	}
+	return s, err
+}
+
+// newSession does NewSession's locked work.
+func (m *Manager) newSession(chatID int64) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -177,7 +202,6 @@ func (m *Manager) NewSession(chatID int64) (*Session, error) {
 			NextSeq:         1,
 			Sessions:        map[string]*Session{s.ID: s},
 		}
-		m.scheduleSave()
 		return s, nil
 	}
 
@@ -199,7 +223,6 @@ func (m *Manager) NewSession(chatID int64) (*Session, error) {
 	cs.Sessions[s.ID] = s
 	cs.ActiveSessionID = s.ID
 	cs.NextSeq = seq + 1
-	m.scheduleSave()
 	return s, nil
 }
 
