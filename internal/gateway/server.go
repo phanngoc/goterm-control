@@ -28,7 +28,10 @@ type Server struct {
 	httpSrv       *http.Server
 	startedAt     time.Time
 	mu            sync.Mutex
-	clients       map[*websocket.Conn]bool
+	// clients maps each open dashboard socket to its write mutex — gorilla
+	// forbids concurrent writes, and Broadcast writes from outside the
+	// connection's own goroutine.
+	clients map[*websocket.Conn]*sync.Mutex
 }
 
 // MethodHandler processes RPC method calls.
@@ -46,7 +49,29 @@ func NewServer(addr string, handler MethodHandler, streamHandler StreamSendHandl
 			// blocks cross-site WebSocket hijacking from arbitrary origins.
 			CheckOrigin: authMgr.CheckOrigin,
 		},
-		clients: make(map[*websocket.Conn]bool),
+		clients: make(map[*websocket.Conn]*sync.Mutex),
+	}
+}
+
+// Broadcast sends one frame to every connected dashboard client.
+//
+// A conversation can move on a channel the browser is not part of — a Telegram
+// turn, a task an agent claimed — and nothing else would tell an open dashboard
+// showing that session to refresh. A client whose write fails is left to its
+// own read loop to notice and drop; a slow or dead socket must not stall the
+// others, so each write holds only that client's mutex.
+func (s *Server) Broadcast(v any) {
+	s.mu.Lock()
+	targets := make(map[*websocket.Conn]*sync.Mutex, len(s.clients))
+	for c, mu := range s.clients {
+		targets[c] = mu
+	}
+	s.mu.Unlock()
+
+	for c, mu := range targets {
+		mu.Lock()
+		_ = c.WriteJSON(v)
+		mu.Unlock()
 	}
 }
 
@@ -133,8 +158,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Write mutex — gorilla websocket doesn't allow concurrent writes. Shared
+	// with Broadcast through the clients map.
+	writeMu := &sync.Mutex{}
+
 	s.mu.Lock()
-	s.clients[conn] = true
+	s.clients[conn] = writeMu
 	s.mu.Unlock()
 
 	defer func() {
@@ -146,8 +175,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("gateway: client connected from %s", r.RemoteAddr)
 
-	// Write mutex — gorilla websocket doesn't allow concurrent writes
-	var writeMu sync.Mutex
 	writeJSON := func(v any) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()

@@ -68,6 +68,19 @@ interface Store {
   // Status
   status: any
   setStatus: (s: any) => void
+
+  // Activity on a session from another channel — a Telegram turn, a claimed
+  // task. Set by the gateway hook when the server pushes session.turn;
+  // consumed by App to refresh the open chat the moment it happens instead of
+  // waiting for a reload.
+  externalTurn: ExternalTurn | null
+  setExternalTurn: (t: ExternalTurn | null) => void
+}
+
+export type ExternalTurn = {
+  sessionId: string
+  phase: 'started' | 'finished'
+  at: number
 }
 
 export const useStore = create<Store>((set) => ({
@@ -98,4 +111,7 @@ export const useStore = create<Store>((set) => ({
 
   status: null,
   setStatus: (status) => set({ status }),
+
+  externalTurn: null,
+  setExternalTurn: (externalTurn) => set({ externalTurn }),
 }))
