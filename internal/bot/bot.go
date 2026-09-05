@@ -12,6 +12,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/codex"
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
@@ -19,6 +20,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
+	"github.com/ngocp/goterm-control/internal/trace"
 	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/transcript"
@@ -39,7 +41,7 @@ type Bot struct {
 // New creates and initialises the bot. db and sessions are shared with the
 // gateway so label renames and turn counters are visible to the dashboard
 // immediately (two managers on one SQLite file would clobber each other).
-func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, error) {
+func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *session.Manager) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
 		return nil, err
@@ -86,6 +88,10 @@ func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, e
 	if defaultModel != nil {
 		log.Printf("bot: default model=%s (%s)", defaultModel.ID, defaultModel.Name)
 	}
+
+	// Trace recorder — writes the run tree to the shared coordination database.
+	// Nil coordDB (coord disabled) yields a nil recorder, which is a no-op.
+	rec := trace.New(coordDB, cfg.Agent.ID)
 
 	// Chat backend — one CLI subprocess family per agent, chosen by config.
 	// Both keep their own conversation state (claude session / codex thread);
@@ -161,6 +167,8 @@ func New(cfg *config.Config, db *storage.DB, sessions *session.Manager) (*Bot, e
 		resolver:         resolver,
 		memory:           memManager,
 		titler:           sessionTitler,
+		trace:            rec,
+		agentID:          cfg.Agent.ID,
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
 		typing:           typing,

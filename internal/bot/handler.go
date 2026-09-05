@@ -13,6 +13,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ngocp/goterm-control/internal/agent"
 	"github.com/ngocp/goterm-control/internal/chat"
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
@@ -21,6 +22,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
+	"github.com/ngocp/goterm-control/internal/trace"
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
 
@@ -45,6 +47,8 @@ type Handler struct {
 	typing     *TypingIndicator
 	memory     *memory.Manager // markdown persistent memory (nil-safe)
 	titler     *titler.Titler  // async session auto-naming (nil-safe)
+	trace      *trace.Recorder // run/trace recorder (nil-safe)
+	agentID    string          // identity in the shared coordination database
 
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
@@ -62,6 +66,8 @@ func NewHandler(
 	resolver *models.Resolver,
 	queue *msgqueue.Queue,
 	mem *memory.Manager,
+	rec *trace.Recorder,
+	agentID string,
 ) *Handler {
 	return &Handler{
 		bot:              bot,
@@ -74,6 +80,8 @@ func NewHandler(
 		resolver:         resolver,
 		queue:            queue,
 		memory:           mem,
+		trace:            rec,
+		agentID:          agentID,
 		approvalRequests: make(map[string]chan bool),
 	}
 }
@@ -571,6 +579,17 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 
 	streamer := NewStreamer(h.bot, chatID, placeholderMsgID)
 
+	// Open the trace for this turn. Every model call and every tool the model
+	// runs hangs off this root, so the admin page can replay the turn as a
+	// waterfall. Recording is nil-safe and never fails the turn.
+	turnSpan := h.trace.StartTrace("turn", coord.RunTypeChain, trace.Meta{
+		SessionID: sess.ID,
+		ChatID:    chatID,
+		Model:     modelID,
+		Provider:  h.llm.Name(),
+	})
+	turnSpan.SetInputs(userText)
+
 	// Collect transcript events
 	var events []transcript.Event
 	var eventsMu sync.Mutex
@@ -606,6 +625,25 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 	var turnText strings.Builder
 	var textMu sync.Mutex
 
+	// Close the turn's trace on every exit path, including the early returns
+	// for cancellation and timeout.
+	defer func() {
+		var turnErr error
+		switch result.Status {
+		case execution.RunFailed:
+			turnErr = result.Error
+			if turnErr == nil {
+				turnErr = fmt.Errorf("run failed")
+			}
+		case execution.RunCanceled:
+			turnErr = fmt.Errorf("canceled or timed out")
+		}
+		textMu.Lock()
+		out := assistantText.String()
+		textMu.Unlock()
+		turnSpan.End(out, turnErr)
+	}()
+
 	// Snapshot the in-progress reply every 10s so a dashboard reload mid-run
 	// shows how far the bot has gotten (and a crash keeps the last prefix).
 	stopPartial := h.startPartialSaver(sess.ID, chatID, func() string {
@@ -614,6 +652,42 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		return assistantText.String()
 	})
 	defer stopPartial()
+
+	// llmSpan is the span for the model call currently in flight; tool spans
+	// hang off it. It is replaced on each auto-continue iteration, so both it
+	// and the open tool spans live behind one mutex.
+	var spanMu sync.Mutex
+	var llmSpan *trace.Span
+	openTools := map[string][]*trace.Span{}
+
+	// pushTool/popTool pair a tool call with its result. The callbacks carry
+	// only the tool name, not the CLI's own call id, so pairing is FIFO per
+	// name — correct for these CLIs, which run tools one at a time.
+	pushTool := func(name, inputJSON string) {
+		spanMu.Lock()
+		defer spanMu.Unlock()
+		sp := llmSpan.Child(name, coord.RunTypeTool)
+		if sp == nil {
+			return
+		}
+		sp.SetInputs(inputJSON)
+		openTools[name] = append(openTools[name], sp)
+	}
+	popTool := func(name string, res tools.ToolResult) {
+		spanMu.Lock()
+		defer spanMu.Unlock()
+		queue := openTools[name]
+		if len(queue) == 0 {
+			return // a result with no matching call: nothing to close
+		}
+		sp := queue[0]
+		openTools[name] = queue[1:]
+		var err error
+		if res.IsError {
+			err = fmt.Errorf("%s failed", name)
+		}
+		sp.End(res.Output, err)
+	}
 
 	// latestTodos holds the most recent TodoWrite snapshot from the model.
 	// Updated under textMu since OnToolCall and the loop body that reads it
@@ -632,6 +706,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		},
 		OnToolCall: func(name string, inputJSON string) {
 			addEvent(transcript.Event{Type: transcript.EventToolCall, ToolName: name, ToolInput: inputJSON})
+			pushTool(name, inputJSON)
 			label := toolLabel(name, inputJSON)
 			// Compact tool progress with short snippet: Bash(cd stock_d) → Read(main.go)
 			streamer.NoteTool(label)
@@ -649,6 +724,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		OnToolResult: func(name string, toolResult tools.ToolResult) {
 			// Log to transcript only — tool results not shown to user
 			addEvent(transcript.Event{Type: transcript.EventToolResult, ToolName: name, Content: toolResult.Output, IsError: toolResult.IsError})
+			popTool(name, toolResult)
 
 			// Exception: screenshots still sent as photos
 			if toolResult.IsImage {
@@ -675,7 +751,24 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		turnText.Reset()
 		textMu.Unlock()
 
-		if err := h.llm.SendMessage(ctx, sess, modelID, currentText, currentMemory, cb); err != nil {
+		spanMu.Lock()
+		llmSpan = turnSpan.Child(h.llm.Name(), coord.RunTypeLLM)
+		call := llmSpan
+		spanMu.Unlock()
+		call.SetInputs(currentText)
+		// The CLI clients report usage by adding to the session counters, so
+		// this call's own usage is the delta across SendMessage.
+		inBefore, outBefore := sess.Tokens()
+
+		sendErr := h.llm.SendMessage(ctx, sess, modelID, currentText, currentMemory, cb)
+
+		textMu.Lock()
+		reply := turnText.String()
+		textMu.Unlock()
+		inAfter, outAfter := sess.Tokens()
+		call.EndWithTokens(reply, sendErr, inAfter-inBefore, outAfter-outBefore)
+
+		if err := sendErr; err != nil {
 			if ctx.Err() != nil {
 				if ctx.Err() == context.DeadlineExceeded {
 					streamer.Write("\n\n⏰ Task timed out.")

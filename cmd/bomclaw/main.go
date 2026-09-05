@@ -26,6 +26,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/channel"
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/codex"
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/config"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/daemon"
@@ -100,6 +101,14 @@ func main() {
 		runSend(os.Args[2:])
 	case "status":
 		runStatus(os.Args[2:])
+	case "task":
+		runTask(os.Args[2:])
+	case "inbox":
+		runInbox(os.Args[2:])
+	case "msg":
+		runMsg(os.Args[2:])
+	case "agents":
+		runAgents(os.Args[2:])
 	case "models":
 		runModels(os.Args[2:])
 	case "chat":
@@ -131,6 +140,10 @@ Commands:
   status             Show gateway status (via WebSocket)
   models             List available models
   chat               Interactive CLI chat with the agent (no gateway needed)
+  agents             List agents registered in the shared database
+  task               Create, claim and finish work shared between agents
+  inbox              Read messages other agents sent to this one
+  msg                Send a message to another agent
   passwd             Set the dashboard password (creates the account if none)
   help               Show this help`)
 }
@@ -202,6 +215,23 @@ func runGateway(args []string) {
 	// Session manager (SQLite-backed)
 	sessions := session.NewManager(storage.NewSessionStore(db))
 
+	// Shared coordination database — traces, tasks and inter-agent messages,
+	// written by every agent on this machine into one file. A failure here is
+	// not fatal: the agent still answers, it just becomes invisible to the
+	// admin page and cannot hand work to its peer.
+	var coordDB *coord.DB
+	if cfg.Coord.IsEnabled() {
+		coordDB, err = coord.Open(cfg.Coord.Path)
+		if err != nil {
+			log.Printf("coord: disabled — %v", err)
+			coordDB = nil
+		} else {
+			defer coordDB.Close()
+			log.Printf("coord: shared database at %s (agent=%s)", coordDB.Path(), cfg.Agent.ID)
+			startCoordUpkeep(ctx, coordDB, cfg, *bind, *port, resolver.Default())
+		}
+	}
+
 	// Dashboard auth (username/password). When enabled, /ws and /api/* need
 	// a login session — required before exposing the gateway via a tunnel.
 	authMgr := auth.NewManager(auth.Config{
@@ -225,7 +255,7 @@ func runGateway(args []string) {
 	if cfg.Telegram.Token != "" {
 		// Share db + session manager with the gateway so session renames and
 		// turn counters show up in the dashboard without a reload.
-		tgBot, err = bot.New(cfg, db, sessions)
+		tgBot, err = bot.New(cfg, db, coordDB, sessions)
 		if err != nil {
 			log.Printf("gateway: telegram bot init failed: %v", err)
 			tgBot = nil
@@ -239,6 +269,8 @@ func runGateway(args []string) {
 		System:   cfg.Claude.SystemPrompt,
 		DataDir:  cfg.Session.DataDir,
 		Uptime:   func() time.Duration { return time.Since(startTime) },
+		Coord:    coordDB,
+		AgentID:  cfg.Agent.ID,
 	}
 	if tgBot != nil {
 		deps.Runs = func() []gateway.RunInfo {
@@ -371,6 +403,69 @@ func runModels(_ []string) {
 	resolver := models.NewResolver("claude-sonnet-4-6", nil)
 	for _, m := range resolver.List() {
 		fmt.Println(models.FormatModelInfo(&m, m.ID == resolver.Default()))
+	}
+}
+
+// heartbeatInterval must be well under coord.StaleAfter so a healthy agent is
+// never briefly shown as offline.
+const heartbeatInterval = 30 * time.Second
+
+// startCoordUpkeep registers this agent in the shared database and keeps it
+// current: a heartbeat so peers and the admin page can tell it is alive, and a
+// daily purge so trace rows do not grow without bound.
+func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bind string, port int, model string) {
+	wsAddr := cfg.Agent.WSAddr
+	if wsAddr == "" {
+		wsAddr = fmt.Sprintf("ws://%s:%d/ws", bind, port)
+	}
+	if err := cdb.RegisterAgent(coord.Agent{
+		ID:          cfg.Agent.ID,
+		DisplayName: cfg.Agent.Name,
+		Provider:    cfg.Provider,
+		Model:       model,
+		WSAddr:      wsAddr,
+		Workspace:   cfg.Claude.Workspace,
+	}); err != nil {
+		log.Printf("coord: register agent: %v", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := cdb.Heartbeat(cfg.Agent.ID); err != nil {
+					log.Printf("coord: heartbeat: %v", err)
+				}
+			}
+		}
+	}()
+
+	if days := cfg.Coord.TraceRetentionDays; days > 0 {
+		go func() {
+			purge := func() {
+				n, err := cdb.PurgeRunsBefore(time.Now().AddDate(0, 0, -days))
+				if err != nil {
+					log.Printf("coord: purge traces: %v", err)
+				} else if n > 0 {
+					log.Printf("coord: purged %d trace rows older than %d days", n, days)
+				}
+			}
+			purge()
+			ticker := time.NewTicker(6 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					purge()
+				}
+			}
+		}()
 	}
 }
 
