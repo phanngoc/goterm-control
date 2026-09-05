@@ -24,7 +24,9 @@ func TestResolverLookupByAlias(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"opus", "claude-opus-4-8"},
+		{"opus", "claude-opus-5"},
+		{"o5", "claude-opus-5"},
+		{"opus-5", "claude-opus-5"},
 		{"o4", "claude-opus-4-8"},
 		{"opus-4-8", "claude-opus-4-8"},
 		{"opus-4-6", "claude-opus-4-6"},
@@ -68,13 +70,13 @@ func TestResolverOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.ID != "claude-opus-4-8" {
+	if m.ID != "claude-opus-5" {
 		t.Errorf("expected opus, got %s", m.ID)
 	}
 
 	// Resolve should return override
 	m = r.Resolve(chatID)
-	if m.ID != "claude-opus-4-8" {
+	if m.ID != "claude-opus-5" {
 		t.Errorf("expected opus override, got %s", m.ID)
 	}
 
@@ -133,7 +135,7 @@ func TestResolverUnknownDefault(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected fallback to first model")
 	}
-	if m.ID != "claude-opus-4-8" {
+	if m.ID != "claude-opus-5" {
 		t.Errorf("expected opus as fallback, got %s", m.ID)
 	}
 }

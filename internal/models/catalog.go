@@ -45,12 +45,31 @@ type ModelCost struct {
 // These are hardcoded so the bot works with zero config beyond an API key.
 func BuiltinModels() []Model {
 	return []Model{
+		// First entry doubles as the resolver's fallback when a configured
+		// default is unknown, so the newest Opus goes first.
+		//
+		// ContextWindow/MaxTokens are carried over from Opus 4.8 and only drive
+		// the /models display and the standalone `chat` command — they are not
+		// verified for Opus 5. Cost is left zero on purpose: the bot reaches
+		// this model through the Claude CLI's subscription login, which is not
+		// billed per token, so any figure here would be invented.
+		{
+			ID:            "claude-opus-5",
+			Name:          "Claude Opus 5",
+			Provider:      "anthropic",
+			API:           APIClaudeCLI,
+			Aliases:       []string{"opus", "o5", "opus-5"},
+			ContextWindow: 1_000_000,
+			MaxTokens:     32_000,
+			Reasoning:     true,
+			Input:         []InputType{InputText, InputImage, InputDocument},
+		},
 		{
 			ID:            "claude-opus-4-8",
 			Name:          "Claude Opus 4.8",
 			Provider:      "anthropic",
 			API:           APIClaudeCLI,
-			Aliases:       []string{"opus", "o4", "opus-4-8"},
+			Aliases:       []string{"o4", "opus-4-8"},
 			ContextWindow: 1_000_000,
 			MaxTokens:     32_000,
 			Reasoning:     true,
