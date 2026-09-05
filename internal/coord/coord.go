@@ -25,7 +25,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // DB is the shared coordination database.
 type DB struct {
@@ -167,6 +167,40 @@ var ddl = []string{
 	) STRICT`,
 	`CREATE INDEX IF NOT EXISTS idx_msgs_unread ON agent_messages(to_agent, read_at, created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_msgs_recent ON agent_messages(created_at DESC)`,
+
+	// --- what the agents know ----------------------------------------------
+	// Append-only: a correction is a NEW row that the old one points at via
+	// superseded_by. Two agents editing one note in place would silently
+	// overwrite each other, and the history would be gone either way.
+	`CREATE TABLE IF NOT EXISTS shared_notes (
+		id            TEXT PRIMARY KEY,
+		author        TEXT NOT NULL,
+		scope         TEXT NOT NULL DEFAULT 'shared',  -- 'shared' or an agent id
+		kind          TEXT NOT NULL,                   -- fact | decision | result | gotcha
+		title         TEXT NOT NULL,
+		body          TEXT NOT NULL DEFAULT '',
+		tags          TEXT NOT NULL DEFAULT '',        -- comma separated
+		superseded_by TEXT NOT NULL DEFAULT '',        -- '' means this is current
+		created_at    TEXT NOT NULL
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_notes_live ON shared_notes(scope, superseded_by, created_at DESC)`,
+
+	`CREATE VIRTUAL TABLE IF NOT EXISTS shared_notes_fts USING fts5(
+		title, body, content='shared_notes', content_rowid='rowid'
+	)`,
+	// External-content FTS5 does not track its source table on its own.
+	`CREATE TRIGGER IF NOT EXISTS shared_notes_ai AFTER INSERT ON shared_notes BEGIN
+		INSERT INTO shared_notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS shared_notes_ad AFTER DELETE ON shared_notes BEGIN
+		INSERT INTO shared_notes_fts(shared_notes_fts, rowid, title, body)
+		VALUES ('delete', old.rowid, old.title, old.body);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS shared_notes_au AFTER UPDATE ON shared_notes BEGIN
+		INSERT INTO shared_notes_fts(shared_notes_fts, rowid, title, body)
+		VALUES ('delete', old.rowid, old.title, old.body);
+		INSERT INTO shared_notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+	END`,
 }
 
 func (db *DB) migrate() error {

@@ -38,6 +38,14 @@ type Deps struct {
 	AgentID      string
 	ProviderName string          // "claude" | "codex", for trace metadata
 	Trace        *trace.Recorder // nil-safe: nil disables tracing on this path
+
+	// PokeTasks asks the local task runner to check the queue immediately.
+	// Nil when this agent does not claim tasks.
+	PokeTasks func()
+
+	// NotesFile is the markdown rendering of shared notes, rewritten whenever
+	// a note is added so agents can read it with their file tools.
+	NotesFile string
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -80,6 +88,15 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleMessagesList(deps, params)
 		case "messages.send":
 			return handleMessageSend(deps, params)
+		case "notes.list":
+			return handleNotesList(deps, params)
+		case "notes.add":
+			return handleNoteAdd(deps, params)
+		case "tasks.poke":
+			if deps.PokeTasks != nil {
+				deps.PokeTasks()
+			}
+			return pokeResult, nil
 		default:
 			return nil, fmt.Errorf("unknown method: %s", method)
 		}

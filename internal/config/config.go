@@ -22,6 +22,9 @@ type Config struct {
 	// Coord configures the database shared by every agent on this machine.
 	Coord CoordConfig `yaml:"coord"`
 
+	// Tasks controls whether this agent picks up work its peers queued.
+	Tasks TasksConfig `yaml:"tasks"`
+
 	Telegram TelegramConfig `yaml:"telegram"`
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Models   ModelsConfig   `yaml:"models"`
@@ -50,11 +53,23 @@ type CoordConfig struct {
 	// `enabled: false` still turns it off — a plain bool cannot tell those apart.
 	Enabled            *bool  `yaml:"enabled"`
 	Path               string `yaml:"path"`                 // default ~/.goterm-shared/data/coord.db
+	NotesFile          string `yaml:"notes_file"`           // default ~/goterm-shared/NOTES.md
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
 }
 
 // IsEnabled reports whether the shared coordination database should be opened.
 func (c CoordConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// TasksConfig controls the shared task queue from this agent's side.
+//
+// AutoClaim defaults to OFF and should stay off unless the agent is meant to
+// act unattended: a claimed task is executed with the same machine access the
+// chat backend has, and nobody is watching when it runs.
+type TasksConfig struct {
+	AutoClaim           bool `yaml:"auto_claim"`
+	PollIntervalSeconds int  `yaml:"poll_interval_seconds"` // default 60
+	TimeoutMinutes      int  `yaml:"timeout_minutes"`       // default 15
+}
 
 // GatewayConfig holds gateway HTTP server settings.
 type GatewayConfig struct {
@@ -178,8 +193,18 @@ func Load(path string) (*Config, error) {
 		home, _ := os.UserHomeDir()
 		cfg.Coord.Path = home + cfg.Coord.Path[1:]
 	}
+	if strings.HasPrefix(cfg.Coord.NotesFile, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Coord.NotesFile = home + cfg.Coord.NotesFile[1:]
+	}
 	if cfg.Coord.TraceRetentionDays == 0 {
 		cfg.Coord.TraceRetentionDays = 7
+	}
+	if cfg.Tasks.PollIntervalSeconds == 0 {
+		cfg.Tasks.PollIntervalSeconds = 60
+	}
+	if cfg.Tasks.TimeoutMinutes == 0 {
+		cfg.Tasks.TimeoutMinutes = 15
 	}
 	if cfg.Telegram.Timeout == 0 {
 		cfg.Telegram.Timeout = 60

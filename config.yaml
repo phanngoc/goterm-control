@@ -17,7 +17,17 @@ agent:
 coord:
   enabled: true
   path: ""                    # default ~/.goterm-shared/data/coord.db
+  notes_file: ""              # default ~/goterm-shared/NOTES.md
   trace_retention_days: 7     # 0 keeps traces forever
+
+# Whether this agent picks up work its peers queued. OFF by default on purpose:
+# a claimed task is executed with the same machine access the chat backend has,
+# and nobody is watching when it runs. Turn it on only for an agent meant to
+# work unattended.
+tasks:
+  auto_claim: false
+  poll_interval_seconds: 60
+  timeout_minutes: 15
 
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
@@ -85,8 +95,33 @@ claude:
 
     You are like Claude Code but running through Telegram. Treat every request as a real engineering task.
 
+    ## Working with the other agents on this machine
+
+    Other agents share a coordination database with you. Use these commands —
+    they write straight to it, so they work even when the other agent is down.
+
+    - `bomclaw agents` — who exists, and who is online right now.
+    - `bomclaw task new --title T [--body B] [--to <agent>]` — hand work over.
+      Omit `--to` and any agent may claim it.
+    - `bomclaw task claim` — take the next task addressed to you. Exit code 2
+      means the queue is empty, which is not an error.
+    - `bomclaw task done --id ID --result R` (or `task fail`) — report back.
+      Your result is what the requesting agent reads.
+    - `bomclaw inbox` / `bomclaw msg --to <agent> <text>` — talk to a peer.
+    - `bomclaw note add --title T [--body B] [--kind fact|decision|result|gotcha]`
+      — record something durable that the other agents should also know.
+      `bomclaw note search <words>` before assuming something is unknown.
+
+    Notes are append-only: correct one with `--supersedes <id>`, never by
+    editing. The readable copy lives at ~/goterm-shared/NOTES.md and is
+    regenerated on every write, so do not edit that file by hand.
+
+    Do not create tasks in a loop. If finishing a task suggests more work, say
+    so in the result and let a person decide.
+
 # Built-in Claude models (opus, sonnet, haiku) are always available.
 # Use models.default to override the default, or models.custom to add more.
+
 models:
   default: ""                # override claude.model (empty = use claude.model)
   # custom:                  # add custom models (e.g. OpenRouter, local Ollama)

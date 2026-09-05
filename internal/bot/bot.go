@@ -41,6 +41,23 @@ type Bot struct {
 // New creates and initialises the bot. db and sessions are shared with the
 // gateway so label renames and turn counters are visible to the dashboard
 // immediately (two managers on one SQLite file would clobber each other).
+// NewChatClient builds the CLI chat backend named by cfg.Provider. Both keep
+// their own conversation state (claude session / codex thread); the session row
+// records which one owns the stored id.
+//
+// Exported because the task runner needs its own client: it executes queued
+// work in isolated sessions, alongside whatever the bot is chatting about.
+func NewChatClient(cfg *config.Config, executor *tools.Executor) chat.Client {
+	if cfg.Provider == config.ProviderCodex {
+		c := codex.New(cfg.Claude.SystemPrompt)
+		c.SetWorkspace(cfg.Claude.Workspace)
+		return c
+	}
+	c := claude.New(cfg.Claude.SystemPrompt, executor)
+	c.SetWorkspace(cfg.Claude.Workspace)
+	return c
+}
+
 func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *session.Manager) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
@@ -93,19 +110,7 @@ func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *sessio
 	// Nil coordDB (coord disabled) yields a nil recorder, which is a no-op.
 	rec := trace.New(coordDB, cfg.Agent.ID)
 
-	// Chat backend — one CLI subprocess family per agent, chosen by config.
-	// Both keep their own conversation state (claude session / codex thread);
-	// the session row records which one owns the stored id.
-	var llm chat.Client
-	if cfg.Provider == config.ProviderCodex {
-		codexClient := codex.New(cfg.Claude.SystemPrompt)
-		codexClient.SetWorkspace(cfg.Claude.Workspace)
-		llm = codexClient
-	} else {
-		claudeClient := claude.New(cfg.Claude.SystemPrompt, executor)
-		claudeClient.SetWorkspace(cfg.Claude.Workspace)
-		llm = claudeClient
-	}
+	llm := NewChatClient(cfg, executor)
 
 	// Message store (SQLite — conversation history)
 	messageStore := storage.NewMessageStore(db)

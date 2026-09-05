@@ -113,3 +113,15 @@ export interface Message {
   read_at?: string
   created_at: string
 }
+
+export interface Note {
+  id: string
+  author: string
+  scope: string
+  kind: string
+  title: string
+  body?: string
+  tags?: string
+  superseded_by?: string
+  created_at: string
+}
