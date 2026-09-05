@@ -157,6 +157,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Session.DataDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Session.DataDir = home + "/.goterm/data"
+	} else if strings.HasPrefix(cfg.Session.DataDir, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Session.DataDir = home + cfg.Session.DataDir[1:]
 	}
 	if cfg.Session.Reset.DailyAt == "" {
 		cfg.Session.Reset.DailyAt = "04:00"
