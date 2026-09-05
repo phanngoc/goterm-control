@@ -15,6 +15,20 @@ logged-in sessions — through the ` + "`bomclaw browser`" + ` command. Each com
 prints its result. Exit code 3 means no browser is connected: tell the user to
 open the extension popup and check that this agent shows "connected".
 
+**This is the only browser that is logged in as the user, so it is the one to
+reach for whenever their own account or session matters.** Use it when the
+request involves "my" anything — my browser, my tabs, my feed, my orders, my
+inbox, my dashboard — or names a site that will not show its content to a
+signed-out visitor (x.com, Facebook, Gmail, LinkedIn, a bank, an admin panel).
+
+Do NOT use any other browser for those. The ` + "`browser_*`" + ` tools and any
+headless-browser tooling start signed out of everything: on such a site they
+land on a login wall and you will report the page as inaccessible or
+anonymous-blocked, which tells the user the task is impossible when in fact it
+was the wrong browser. If a page turns out to need a login, that is the signal
+to switch to ` + "`bomclaw browser`" + `, not to give up. Reserve the other browsers
+for public pages where no account is involved.
+
 - ` + "`bomclaw browser status`" + ` — is a browser connected?
 - ` + "`bomclaw browser tabs`" + ` — list open tabs (id, title, url).
   ` + "`tabs open URL`" + `, ` + "`tabs focus ID`" + ` (work in one of the user's own tabs), ` + "`tabs close ID`" + `.

@@ -405,10 +405,15 @@ func (h *Handler) handleRemember(chatID int64, arg string) {
 // willFlush reports whether a memory flush would actually run for this chat,
 // so callers can show a "saving..." notice before a blocking flush.
 func (h *Handler) willFlush(chatID int64) bool {
-	if !h.memory.Enabled() {
+	return h.shouldFlush(h.sessions.Get(chatID))
+}
+
+// shouldFlush reports whether sess has anything worth writing to memory.
+// A session the CLI never saw, or one with no turns, has nothing to say.
+func (h *Handler) shouldFlush(sess *session.Session) bool {
+	if !h.memory.Enabled() || sess == nil {
 		return false
 	}
-	sess := h.sessions.Get(chatID)
 	return sess.GetSessionID() != "" && sess.GetMessageCount() > 0
 }
 
@@ -431,11 +436,15 @@ func (h *Handler) flushMemory(chatID int64, reason string) {
 // flushMemoryWithModel is flushMemory with an explicit model — used by
 // /model, where the flush must resume the old session with its old model.
 func (h *Handler) flushMemoryWithModel(chatID int64, reason, modelID string) {
-	if !h.memory.Enabled() {
-		return
-	}
-	sess := h.sessions.Get(chatID)
-	if sess.GetSessionID() == "" || sess.GetMessageCount() == 0 {
+	h.flushSession(chatID, h.sessions.Get(chatID), reason, modelID)
+}
+
+// flushSession is flushMemoryWithModel against an explicit session rather than
+// whichever one is active. /new needs that: it switches the chat to a fresh
+// session first and flushes the one it retired afterwards, so the flush has to
+// name its subject instead of asking the manager for it.
+func (h *Handler) flushSession(chatID int64, sess *session.Session, reason, modelID string) {
+	if !h.shouldFlush(sess) {
 		return
 	}
 
@@ -1052,15 +1061,27 @@ func (h *Handler) showSessionList(chatID int64) {
 }
 
 func (h *Handler) handleNewSession(chatID int64) {
-	// Flush the outgoing session's memory before switching to a fresh one.
-	if h.willFlush(chatID) {
+	// Switch first, flush second. The flush replays the outgoing session
+	// through the CLI and routinely takes half a minute; while it ran, the
+	// chat's active session was still the old one, so a message sent in that
+	// window was filed against the session the user had just retired — and
+	// the fresh session stayed empty, on Telegram and in the dashboard alike.
+	// Naming the outgoing session here lets the flush still run against it.
+	outgoing := h.sessions.Get(chatID)
+	modelID := h.currentModelID(chatID)
+	flushing := h.shouldFlush(outgoing)
+	if flushing {
 		h.sendText(chatID, "💾 Saving memory...")
 	}
-	h.flushMemory(chatID, "new-session")
+
 	sess, err := h.sessions.NewSession(chatID)
 	if err != nil {
 		h.sendText(chatID, fmt.Sprintf("❌ %v", err))
 		return
+	}
+
+	if flushing {
+		h.flushSession(chatID, outgoing, "new-session", modelID)
 	}
 	h.sendText(chatID, fmt.Sprintf("✨ New session created (Session %d). Send a message to start.", sess.Seq))
 }
