@@ -233,6 +233,20 @@ func runGateway(args []string) {
 	// Session manager (SQLite-backed)
 	sessions := session.NewManager(storage.NewSessionStore(db))
 
+	// Channel → conversation bindings. Every Telegram chat the manager knows
+	// binds to itself so the bindings table is a complete picture; the web
+	// account then joins the Telegram conversation when there is exactly one.
+	conversations := storage.NewConversationStore(db)
+	seen := map[int64]bool{}
+	var chatIDs []int64
+	for _, s := range sessions.List() {
+		if !seen[s.ChatID] {
+			seen[s.ChatID] = true
+			chatIDs = append(chatIDs, s.ChatID)
+		}
+	}
+	conversations.EnsureTelegramBindings(chatIDs)
+
 	// Shared coordination database — traces, tasks and inter-agent messages,
 	// written by every agent on this machine into one file. A failure here is
 	// not fatal: the agent still answers, it just becomes invisible to the
@@ -299,18 +313,19 @@ func runGateway(args []string) {
 	}
 
 	deps := gateway.Deps{
-		Sessions:     sessions,
-		Resolver:     resolver,
-		Provider:     provider,
-		System:       cfg.Claude.SystemPrompt,
-		DataDir:      cfg.Session.DataDir,
-		Uptime:       func() time.Duration { return time.Since(startTime) },
-		Coord:        coordDB,
-		AgentID:      cfg.Agent.ID,
-		ProviderName: cfg.Provider,
-		Trace:        gwTrace,
-		PokeTasks:    runner.Poke,
-		NotesFile:    cfg.Coord.NotesFile,
+		Sessions:      sessions,
+		Resolver:      resolver,
+		Provider:      provider,
+		System:        cfg.Claude.SystemPrompt,
+		DataDir:       cfg.Session.DataDir,
+		Uptime:        func() time.Duration { return time.Since(startTime) },
+		Coord:         coordDB,
+		AgentID:       cfg.Agent.ID,
+		ProviderName:  cfg.Provider,
+		Trace:         gwTrace,
+		PokeTasks:     runner.Poke,
+		NotesFile:     cfg.Coord.NotesFile,
+		Conversations: conversations,
 	}
 	if tgBot != nil {
 		// Dashboard messages run through the bot's turn engine, so both

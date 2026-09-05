@@ -1,11 +1,37 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
+	"log"
+	"time"
+)
 
-const schemaVersion = 5
+const schemaVersion = 6
+
+// conversationDDL is shared by fresh installs (via ddl) and the v5→v6
+// migration, so the two can never drift apart.
+var conversationDDL = []string{
+	// A conversation is keyed by the same integer the session manager uses for
+	// a chat (sessions.chat_id). Two channels bound to one key share the active
+	// session, the history and the execution lane — that is the whole
+	// mechanism behind "the dashboard shows the Telegram conversation".
+	`CREATE TABLE IF NOT EXISTS conversations (
+		id         INTEGER PRIMARY KEY,
+		title      TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS channel_bindings (
+		channel         TEXT NOT NULL,   -- 'telegram' | 'web'
+		external_id     TEXT NOT NULL,   -- telegram chat id, or the web account id
+		conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+		created_at      TEXT NOT NULL,
+		PRIMARY KEY (channel, external_id)
+	)`,
+}
 
 // DDL statements executed in order for fresh installs.
-var ddl = []string{
+var ddl = append([]string{
 	`CREATE TABLE IF NOT EXISTS meta (
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
@@ -60,7 +86,7 @@ var ddl = []string{
 		expires_at TEXT NOT NULL,
 		created_at TEXT NOT NULL
 	)`,
-}
+}, conversationDDL...)
 
 // migrate creates tables and imports legacy data if needed.
 func (db *DB) migrate() error {
@@ -108,9 +134,103 @@ func (db *DB) migrate() error {
 		if err := db.migrateV4ToV5(); err != nil {
 			return fmt.Errorf("migrate v4→v5: %w", err)
 		}
-		return db.setVersion(5)
+		if err := db.setVersion(5); err != nil {
+			return err
+		}
+		ver = 5
+	}
+	if ver < 6 {
+		if err := db.migrateV5ToV6(); err != nil {
+			return fmt.Errorf("migrate v5→v6: %w", err)
+		}
+		return db.setVersion(6)
 	}
 	return nil
+}
+
+// migrateV5ToV6 introduces conversations and channel bindings, and folds the
+// dashboard's private chat into the Telegram conversation.
+//
+// Until now the dashboard talked to a hardcoded chat (id 1) and Telegram to its
+// own chat id, so the same person had two unrelated histories. Every existing
+// chat becomes a conversation; every non-dashboard chat is a Telegram chat and
+// binds to itself. Then the single-user rule: with exactly one Telegram
+// conversation, the dashboard chat is merged into it — its sessions move over,
+// its chat_state goes, and the Telegram side's active session stays active so
+// a live conversation is not yanked onto the dashboard's last session. With
+// zero or several Telegram conversations the dashboard keeps its own; picking
+// one of several people's chats for it is a decision, not a migration.
+func (db *DB) migrateV5ToV6() error {
+	for _, stmt := range conversationDDL {
+		if _, err := db.conn.Exec(stmt); err != nil {
+			return err
+		}
+	}
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT DISTINCT chat_id FROM sessions
+		UNION SELECT chat_id FROM chat_state ORDER BY 1`)
+	if err != nil {
+		return fmt.Errorf("list chats: %w", err)
+	}
+	var chats []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		chats = append(chats, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	hasDashboard := false
+	var telegram []int64
+	for _, id := range chats {
+		if _, err := tx.Exec(`INSERT INTO conversations (id, title, created_at, updated_at)
+			VALUES (?, '', ?, ?) ON CONFLICT(id) DO NOTHING`, id, now, now); err != nil {
+			return fmt.Errorf("conversation %d: %w", id, err)
+		}
+		if id == DashboardConversationID {
+			hasDashboard = true
+			continue
+		}
+		telegram = append(telegram, id)
+		if _, err := tx.Exec(`INSERT INTO channel_bindings (channel, external_id, conversation_id, created_at)
+			VALUES (?, ?, ?, ?) ON CONFLICT(channel, external_id) DO NOTHING`,
+			ChannelTelegram, fmt.Sprint(id), id, now); err != nil {
+			return fmt.Errorf("bind telegram %d: %w", id, err)
+		}
+	}
+
+	if hasDashboard {
+		webTarget := DashboardConversationID
+		if len(telegram) == 1 {
+			webTarget = telegram[0]
+			if err := mergeChats(tx, DashboardConversationID, webTarget); err != nil {
+				return err
+			}
+			log.Printf("storage: merged the dashboard chat into Telegram conversation %d", webTarget)
+		} else if len(telegram) > 1 {
+			log.Printf("storage: %d Telegram conversations — dashboard keeps its own chat; bind web:%s to one explicitly to merge",
+				len(telegram), WebAccountID)
+		}
+		if _, err := tx.Exec(`INSERT INTO channel_bindings (channel, external_id, conversation_id, created_at)
+			VALUES (?, ?, ?, ?) ON CONFLICT(channel, external_id) DO NOTHING`,
+			ChannelWeb, WebAccountID, webTarget, now); err != nil {
+			return fmt.Errorf("bind web: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // migrateV4ToV5 adds the provider column. It records which CLI produced
