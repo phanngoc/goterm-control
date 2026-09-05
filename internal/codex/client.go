@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -109,6 +110,31 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		}
 	}()
 
+	// Every exit path must reap the child. Returning on a stream error without
+	// waiting leaves a zombie codex process behind and the stderr goroutine
+	// blocked on a pipe that never closes — one per failed turn, which on a
+	// long-running gateway accumulates until something else breaks.
+	var (
+		waitOnce sync.Once
+		waitErr  error
+	)
+	reap := func() error {
+		waitOnce.Do(func() {
+			waitErr = cmd.Wait()
+			<-stderrDone
+		})
+		return waitErr
+	}
+	// kill first so Wait cannot block on a subprocess still producing output.
+	abort := func(err error) error {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = reap()
+		return err
+	}
+	defer reap()
+
 	// command_execution items arrive as started → completed; keep the command
 	// text so the completion can be reported (and screenshots detected).
 	pending := map[string]string{}
@@ -177,33 +203,33 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 			if ev.Error != nil && ev.Error.Message != "" {
 				msg = ev.Error.Message
 			}
-			return fmt.Errorf("codex error: %s", msg)
+			return abort(fmt.Errorf("codex error: %s", msg))
 
 		case "error":
 			if ev.Message != "" {
-				return fmt.Errorf("codex error: %s", ev.Message)
+				return abort(fmt.Errorf("codex error: %s", ev.Message))
 			}
-			return fmt.Errorf("codex error: unspecified stream error")
+			return abort(fmt.Errorf("codex error: unspecified stream error"))
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan: %w", err)
+		return abort(fmt.Errorf("scan: %w", err))
 	}
 
-	waitErr := cmd.Wait()
-	<-stderrDone
+	err = reap()
 
 	// A non-zero exit with no turn.completed means codex died before doing any
 	// work (bad auth, unknown model). Surface the stderr tail — without it the
-	// user only sees "exit status 1".
-	if waitErr != nil && !sawTurn {
+	// user only sees "exit status 1" — but keep the exit status wrapped so
+	// callers can still inspect it.
+	if err != nil && !sawTurn {
 		if lastErrLine != "" {
-			return fmt.Errorf("codex error: %s", lastErrLine)
+			return fmt.Errorf("codex error: %s (%w)", lastErrLine, err)
 		}
-		return fmt.Errorf("codex: %w", waitErr)
+		return fmt.Errorf("codex: %w", err)
 	}
-	return waitErr
+	return err
 }
 
 // handleCompletedItem maps one finished codex item onto the bot callbacks.
