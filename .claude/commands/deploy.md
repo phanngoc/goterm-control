@@ -38,6 +38,11 @@ artifacts into `~/.bomclaw/` and restart.
    cp config.yaml ~/.bomclaw/config.yaml
    cp .env ~/.bomclaw/.env
    rm -rf ~/.bomclaw/dashboard/dist && cp -R dashboard/dist ~/.bomclaw/dashboard/dist
+   # Agents call `bomclaw task/note/msg` from their own shell, and the launchd
+   # PATH does not include ~/.bomclaw. The symlink target is stable, so this
+   # only has to be created once — but check it, a wiped ~/.local/bin breaks
+   # every coordination command the agents run.
+   ln -sf ~/.bomclaw/bomclaw ~/.local/bin/bomclaw
    ```
 
 4. **Stop** the gateway and kill stale processes (orphaned `claude --resume`
@@ -90,6 +95,10 @@ Report:
 - Service label: `com.bomclaw.gateway` (plist: `~/Library/LaunchAgents/com.bomclaw.gateway.plist`)
 - Runtime layout: `~/.bomclaw/{bomclaw,config.yaml,.env,dashboard/dist}`
 - Data/logs stay in `~/.goterm/`; workspace in `~/goterm-workspace` — all outside TCC paths
+- Second agent: label `com.bomclaw2.gateway`, config `~/.bomclaw2/`, data `~/.goterm2/`,
+  port 18790 — **shares the same binary**, so every deploy restarts both
+- Coordination (traces, tasks, notes, messages) is shared at `~/.goterm-shared/data/coord.db`;
+  `agent.id` must differ per gateway or they overwrite each other's registration
 - NEVER point the LaunchAgent at a binary/config inside `~/Documents` — TCC
   blocks launchd reads there (Apple-signed tools get EPERM; ad-hoc binaries
   hang in dyld with zero logs)
