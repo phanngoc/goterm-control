@@ -15,6 +15,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/trace"
 	"github.com/ngocp/goterm-control/internal/transcript"
 )
 
@@ -33,8 +34,10 @@ type Deps struct {
 	// Coord is the shared coordination database (traces, tasks, inter-agent
 	// messages). Nil when coordination is disabled — every admin.* method
 	// then reports that rather than failing obscurely.
-	Coord   *coord.DB
-	AgentID string
+	Coord        *coord.DB
+	AgentID      string
+	ProviderName string          // "claude" | "codex", for trace metadata
+	Trace        *trace.Recorder // nil-safe: nil disables tracing on this path
 }
 
 // NewMethodHandler creates a MethodHandler that routes to the appropriate handler.
@@ -498,6 +501,22 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 		maxTokens = m.MaxTokens
 	}
 
+	// Trace this command the same way a Telegram turn is traced, so the admin
+	// page shows one timeline whether the instruction came from the dashboard,
+	// the CLI, or a peer agent.
+	span := deps.Trace.StartTrace("gateway.send", coord.RunTypeChain, trace.Meta{
+		SessionID: sessionID,
+		Model:     modelID,
+		Provider:  deps.ProviderName,
+	})
+	span.SetInputs(p.Message)
+
+	// Tool calls and results arrive as separate callbacks carrying only the
+	// tool name, so pair them FIFO per name — the loop runs tools in order.
+	var toolMu sync.Mutex
+	openTools := map[string][]*trace.Span{}
+	var current *trace.Span
+
 	result, err := agent.RunAgent(ctx, agent.RunParams{
 		Provider:     deps.Provider,
 		ToolExecutor: deps.ToolExecutor,
@@ -506,10 +525,51 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 		UserMessage:  p.Message,
 		Tools:        deps.Tools,
 		MaxTokens:    maxTokens,
+
+		OnIteration: func(iteration int) func(string, *agent.Usage, error) {
+			toolMu.Lock()
+			current = span.Child(fmt.Sprintf("%s #%d", deps.ProviderName, iteration+1), coord.RunTypeLLM)
+			call := current
+			toolMu.Unlock()
+			return func(text string, u *agent.Usage, err error) {
+				in, out := 0, 0
+				if u != nil {
+					in, out = u.InputTokens, u.OutputTokens
+				}
+				call.EndWithTokens(text, err, in, out)
+			}
+		},
+		OnToolCall: func(name, input string) {
+			toolMu.Lock()
+			defer toolMu.Unlock()
+			sp := current.Child(name, coord.RunTypeTool)
+			if sp == nil {
+				return
+			}
+			sp.SetInputs(input)
+			openTools[name] = append(openTools[name], sp)
+		},
+		OnToolResult: func(name, content string, isErr bool) {
+			toolMu.Lock()
+			defer toolMu.Unlock()
+			q := openTools[name]
+			if len(q) == 0 {
+				return
+			}
+			sp := q[0]
+			openTools[name] = q[1:]
+			var toolErr error
+			if isErr {
+				toolErr = fmt.Errorf("%s failed", name)
+			}
+			sp.End(content, toolErr)
+		},
 	})
 	if err != nil {
+		span.End("", err)
 		return nil, err
 	}
+	span.EndWithTokens(result.Text, nil, result.Usage.InputTokens, result.Usage.OutputTokens)
 
 	// Persist transcript
 	tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))

@@ -35,6 +35,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/tools"
+	"github.com/ngocp/goterm-control/internal/trace"
 )
 
 // loadEnv reads KEY=VALUE pairs from a .env file into the process environment.
@@ -202,6 +203,11 @@ func runGateway(args []string) {
 	// Create model provider: codex CLI, claude CLI (OAuth), or direct API key.
 	provider := buildProvider(cfg)
 
+	// Recorder for the gateway's own command path (dashboard, `bomclaw send`,
+	// a peer agent). The bot keeps its own for the Telegram path; both write
+	// to the same shared database.
+	var gwTrace *trace.Recorder
+
 	// Model resolver
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
 
@@ -229,6 +235,8 @@ func runGateway(args []string) {
 			defer coordDB.Close()
 			log.Printf("coord: shared database at %s (agent=%s)", coordDB.Path(), cfg.Agent.ID)
 			startCoordUpkeep(ctx, coordDB, cfg, *bind, *port, resolver.Default())
+			gwTrace = trace.New(coordDB, cfg.Agent.ID)
+			defer gwTrace.Close()
 		}
 	}
 
@@ -263,14 +271,16 @@ func runGateway(args []string) {
 	}
 
 	deps := gateway.Deps{
-		Sessions: sessions,
-		Resolver: resolver,
-		Provider: provider,
-		System:   cfg.Claude.SystemPrompt,
-		DataDir:  cfg.Session.DataDir,
-		Uptime:   func() time.Duration { return time.Since(startTime) },
-		Coord:    coordDB,
-		AgentID:  cfg.Agent.ID,
+		Sessions:     sessions,
+		Resolver:     resolver,
+		Provider:     provider,
+		System:       cfg.Claude.SystemPrompt,
+		DataDir:      cfg.Session.DataDir,
+		Uptime:       func() time.Duration { return time.Since(startTime) },
+		Coord:        coordDB,
+		AgentID:      cfg.Agent.ID,
+		ProviderName: cfg.Provider,
+		Trace:        gwTrace,
 	}
 	if tgBot != nil {
 		deps.Runs = func() []gateway.RunInfo {
@@ -587,7 +597,7 @@ func runChat(args []string) {
 		ctxEngine.SetMessages(result.Messages)
 
 		fmt.Println() // newline after streaming
-		return nil     // already printed via OnText
+		return nil    // already printed via OnText
 	})
 }
 
@@ -957,7 +967,7 @@ func findToolSchema(name string) map[string]any {
 		"open_app": {"type": "object", "properties": map[string]any{
 			"name": map[string]any{"type": "string", "description": "App name or path"},
 		}, "required": []string{"name"}},
-		"get_system_info":  {"type": "object", "properties": map[string]any{}},
+		"get_system_info": {"type": "object", "properties": map[string]any{}},
 		"list_processes": {"type": "object", "properties": map[string]any{
 			"filter":  map[string]any{"type": "string", "description": "Filter by name"},
 			"sort_by": map[string]any{"type": "string", "description": "Sort by: cpu, memory, pid"},

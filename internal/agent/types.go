@@ -98,6 +98,15 @@ type RunParams struct {
 	OnText       OnTextFunc
 	OnToolCall   OnToolCallFunc
 	OnToolResult OnToolResultFunc
+
+	// OnIteration is called just before each model call with the 0-based
+	// iteration number. The function it returns is called once that call
+	// finishes, with whatever the model produced. Either may be nil.
+	//
+	// This exists so a caller can span each model call separately: the loop
+	// makes one call per tool round trip, and a single span over the whole
+	// run would hide where the time actually went.
+	OnIteration func(iteration int) func(text string, usage *Usage, err error)
 }
 
 // RunResult is returned after the agent loop completes.
