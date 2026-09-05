@@ -204,6 +204,14 @@ func runGateway(args []string) {
 		cancel()
 	}()
 
+	// Every CLI subprocess this gateway spawns inherits this, so when the agent
+	// runs `bomclaw task`/`note`/`msg` from its shell it is identified as
+	// itself. Without it the CLI fell back to a default and agent 2's work was
+	// silently attributed to agent 1.
+	if err := os.Setenv("BOMCLAW_AGENT_ID", cfg.Agent.ID); err != nil {
+		log.Printf("gateway: could not export BOMCLAW_AGENT_ID: %v", err)
+	}
+
 	// Create model provider: codex CLI, claude CLI (OAuth), or direct API key.
 	provider := buildProvider(cfg)
 

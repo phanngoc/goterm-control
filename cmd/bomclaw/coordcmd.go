@@ -30,14 +30,28 @@ func openCoord(dbPath string) *coord.DB {
 	return db
 }
 
-// agentFlag registers the identity flag. An agent running in its own workspace
-// gets this from BOMCLAW_AGENT_ID, set by whoever launched it.
+// agentFlag registers the identity flag. The gateway exports BOMCLAW_AGENT_ID
+// into every CLI subprocess it spawns, so an agent's own shell commands are
+// attributed correctly.
+//
+// There is deliberately NO fallback default. A wrong-but-plausible id is worse
+// than no id: it silently files one agent's tasks, notes and messages under
+// another agent's name, and nothing about the output looks wrong.
 func agentFlag(fs *flag.FlagSet) *string {
-	def := os.Getenv("BOMCLAW_AGENT_ID")
-	if def == "" {
-		def = "bomclaw"
+	return fs.String("agent", os.Getenv("BOMCLAW_AGENT_ID"),
+		"This agent's id (default $BOMCLAW_AGENT_ID)")
+}
+
+// requireAgent exits with a clear message when identity is unknown, rather than
+// writing rows under a guessed name.
+func requireAgent(id string) string {
+	if strings.TrimSpace(id) == "" {
+		fmt.Fprintln(os.Stderr,
+			"error: this agent's id is unknown.\n"+
+				"Pass --agent <id>, or set BOMCLAW_AGENT_ID (the gateway exports it automatically).")
+		os.Exit(1)
 	}
-	return fs.String("agent", def, "This agent's id (default $BOMCLAW_AGENT_ID)")
+	return id
 }
 
 func dbFlag(fs *flag.FlagSet) *string {
@@ -67,7 +81,7 @@ func runTask(args []string) {
 		defer db.Close()
 
 		task, err := db.CreateTask(coord.NewTask{
-			CreatedBy: *agent, AssignedTo: *to, Title: *title, Body: *body,
+			CreatedBy: requireAgent(*agent), AssignedTo: *to, Title: *title, Body: *body,
 			Priority: *priority, Depth: *depth, ContextID: *context,
 		})
 		if err != nil {
@@ -88,7 +102,7 @@ func runTask(args []string) {
 		db := openCoord(*dbPath)
 		defer db.Close()
 
-		task, err := db.ClaimTask(*agent)
+		task, err := db.ClaimTask(requireAgent(*agent))
 		if errors.Is(err, coord.ErrNoTask) {
 			fmt.Fprintln(os.Stderr, "no claimable task")
 			os.Exit(2) // distinct from a real failure so scripts can branch
@@ -130,7 +144,7 @@ func runTask(args []string) {
 			}
 			*attempts = t.Attempts
 		}
-		if err := db.FinishTask(*id, *agent, state, *result, *attempts); err != nil {
+		if err := db.FinishTask(*id, requireAgent(*agent), state, *result, *attempts); err != nil {
 			fmt.Fprintf(os.Stderr, "task %s: %v\n", sub, err)
 			os.Exit(1)
 		}
@@ -254,7 +268,7 @@ func runNote(args []string) {
 			scope = *agent
 		}
 		note, err := db.AddNote(coord.NewNote{
-			Author: *agent, Scope: scope, Kind: *kind, Title: *title,
+			Author: requireAgent(*agent), Scope: scope, Kind: *kind, Title: *title,
 			Body: *body, Tags: *tags, Supersedes: *supersedes,
 		})
 		if err != nil {
@@ -374,7 +388,7 @@ func runInbox(args []string) {
 	if *all {
 		msgs, err = db.RecentMessages(*limit)
 	} else {
-		msgs, err = db.Inbox(*agent, *unread, *limit)
+		msgs, err = db.Inbox(requireAgent(*agent), *unread, *limit)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "inbox: %v\n", err)
@@ -425,7 +439,7 @@ func runMsg(args []string) {
 	db := openCoord(*dbPath)
 	defer db.Close()
 
-	m, err := db.SendMessage(*agent, *to, *taskID, body)
+	m, err := db.SendMessage(requireAgent(*agent), *to, *taskID, body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "msg: %v\n", err)
 		os.Exit(1)
