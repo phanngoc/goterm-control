@@ -86,6 +86,15 @@ func NewMethodHandler(deps Deps) MethodHandler {
 	}
 }
 
+// providerLabel names the model backend in a span; falls back to something
+// readable when the gateway was built without a provider name.
+func providerLabel(deps Deps) string {
+	if deps.ProviderName != "" {
+		return deps.ProviderName
+	}
+	return "model"
+}
+
 func handleStatus(deps Deps) (json.RawMessage, error) {
 	sessions := deps.Sessions.List()
 	result := StatusResult{
@@ -343,6 +352,22 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 		stopPartial := sync.OnceFunc(func() { close(partialDone) })
 		defer stopPartial()
 
+		// Trace this command. This is the path the dashboard chat box, the
+		// `bomclaw send` CLI and a peer agent all take, so it is the one the
+		// admin page most needs to explain.
+		span := deps.Trace.StartTrace("gateway.send", coord.RunTypeChain, trace.Meta{
+			SessionID: sessionID,
+			Model:     modelID,
+			Provider:  deps.ProviderName,
+		})
+		span.SetInputs(p.Message)
+
+		// Tool callbacks carry only the tool name, so pair call with result
+		// FIFO per name — the agent loop executes tools in order.
+		var spanMu sync.Mutex
+		var llmSpan *trace.Span
+		openTools := map[string][]*trace.Span{}
+
 		result, err := agent.RunAgent(agentCtx, agent.RunParams{
 			Provider:     deps.Provider,
 			ToolExecutor: deps.ToolExecutor,
@@ -358,9 +383,46 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 				streamMu.Unlock()
 				emit(StreamEvent{Type: "stream", Event: "text", Data: text})
 			},
+			OnIteration: func(iteration int) func(string, *agent.Usage, error) {
+				spanMu.Lock()
+				llmSpan = span.Child(fmt.Sprintf("%s #%d", providerLabel(deps), iteration+1), coord.RunTypeLLM)
+				call := llmSpan
+				spanMu.Unlock()
+				return func(text string, u *agent.Usage, err error) {
+					in, out := 0, 0
+					if u != nil {
+						in, out = u.InputTokens, u.OutputTokens
+					}
+					call.EndWithTokens(text, err, in, out)
+				}
+			},
 			OnToolCall: func(name, input string) {
 				summary := toolSummary(name, input)
 				emit(StreamEvent{Type: "stream", Event: "tool", Data: summary})
+
+				spanMu.Lock()
+				defer spanMu.Unlock()
+				sp := llmSpan.Child(name, coord.RunTypeTool)
+				if sp == nil {
+					return
+				}
+				sp.SetInputs(input)
+				openTools[name] = append(openTools[name], sp)
+			},
+			OnToolResult: func(name, content string, isErr bool) {
+				spanMu.Lock()
+				defer spanMu.Unlock()
+				q := openTools[name]
+				if len(q) == 0 {
+					return
+				}
+				sp := q[0]
+				openTools[name] = q[1:]
+				var toolErr error
+				if isErr {
+					toolErr = fmt.Errorf("%s failed", name)
+				}
+				sp.End(content, toolErr)
 			},
 		})
 
@@ -388,6 +450,11 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			}
 			emit(StreamEvent{Type: "stream", Event: "error", Data: errMsg})
 		}
+
+		// The root carries no tokens of its own: each model call already
+		// recorded its usage, and a trace's totals are the sum over its tree,
+		// so counting them again here would double every number on screen.
+		span.End(responseText, err)
 
 		finalResult, _ := json.Marshal(map[string]any{
 			"text":       responseText,
@@ -569,7 +636,9 @@ func handleSend(ctx context.Context, deps Deps, params json.RawMessage) (json.Ra
 		span.End("", err)
 		return nil, err
 	}
-	span.EndWithTokens(result.Text, nil, result.Usage.InputTokens, result.Usage.OutputTokens)
+	// No tokens on the root — the per-call children already carry them and the
+	// trace rollup sums the whole tree.
+	span.End(result.Text, nil)
 
 	// Persist transcript
 	tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
