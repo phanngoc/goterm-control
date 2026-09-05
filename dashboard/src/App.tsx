@@ -18,6 +18,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   const activeSessionId = useStore(s => s.activeSessionId)
   const setActiveSessionId = useStore(s => s.setActiveSessionId)
   const setMessages = useStore(s => s.setMessages)
+  const sessions = useStore(s => s.sessions)
 
   // Sync URL ↔ state: read on load, write on change
   useEffect(() => {
@@ -28,6 +29,8 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         setActiveSessionId(id)
         setTab('chat')
       }
+    } else if (path === '/chat') {
+      setTab('chat')
     } else if (path === '/status') {
       setTab('status')
     } else if (path === '/admin') {
@@ -37,8 +40,11 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
 
   // Update URL when session/tab changes
   useEffect(() => {
-    if (tab === 'chat' && activeSessionId && activeSessionId !== 'new') {
-      history.replaceState(null, '', `/chat/${activeSessionId}`)
+    if (tab === 'chat') {
+      // A chat with no session picked still needs its own URL — without this
+      // branch the address bar kept showing the tab you arrived from.
+      const path = activeSessionId && activeSessionId !== 'new' ? `/chat/${activeSessionId}` : '/chat'
+      history.replaceState(null, '', path)
     } else if (tab === 'status') {
       history.replaceState(null, '', '/status')
     } else if (tab === 'admin') {
@@ -84,6 +90,21 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   useEffect(() => {
     if (activeSessionId) setTab('chat')
   }, [activeSessionId, setTab])
+
+  // Opening Chat with nothing selected used to show an empty conversation even
+  // when one was in progress — the history was only reachable by going through
+  // Sessions first. Land on the most recent session instead; "+ New Chat" is
+  // how you deliberately start a blank one.
+  useEffect(() => {
+    if (tab !== 'chat' || activeSessionId || sessions.length === 0) return
+    const newest = sessions[0]
+    setActiveSessionId(newest.id)
+    call('transcript.get', { session_id: newest.id })
+      .then((events: any) => {
+        if (Array.isArray(events) && events.length > 0) setMessages(eventsToMessages(events))
+      })
+      .catch(() => {})
+  }, [tab, activeSessionId, sessions, setActiveSessionId, setMessages, call])
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">

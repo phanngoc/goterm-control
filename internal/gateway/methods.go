@@ -277,6 +277,19 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			sessionID = fmt.Sprintf("chat_%d", dashboardChatID)
 		}
 
+		// Resolve a real session so the dashboard's own conversation is a
+		// first-class session with turn and token counts. Without this it only
+		// ever existed as a transcript file, and sessions.list synthesised a
+		// stub for it that always read "0 turns · 0 tokens".
+		//
+		// Deliberately does NOT change which transcript is written: a session
+		// id that resolves to nothing stays unresolved rather than silently
+		// redirecting the user's message into the default conversation.
+		sess := deps.Sessions.GetByID(sessionID)
+		if sess == nil && sessionID == fmt.Sprintf("chat_%d", dashboardChatID) {
+			sess = deps.Sessions.Get(dashboardChatID) // creates it on first use
+		}
+
 		tw := transcript.NewWriter(filepath.Join(deps.DataDir, "transcripts"))
 
 		// Persist user message IMMEDIATELY so it survives reload
@@ -460,6 +473,19 @@ func NewStreamSendHandler(deps Deps) StreamSendHandler {
 			})
 		}
 
+		// Record the turn against the session, the same way the Telegram path
+		// does, so the session list reflects what actually happened here.
+		if sess != nil {
+			sess.IncrementMessages()
+			if result != nil {
+				sess.AddTokens(result.Usage.InputTokens, result.Usage.OutputTokens)
+			}
+			if sess.GetLabel() == "" {
+				sess.SetLabel(labelFromMessage(p.Message))
+			}
+			deps.Sessions.MarkDirty()
+		}
+
 		if err != nil {
 			errMsg := err.Error()
 			if agentCtx.Err() != nil {
@@ -554,6 +580,20 @@ func extractSnippet(name, input string) string {
 }
 
 // --- Send (non-streaming fallback, for CLI) ---
+
+// labelFromMessage names a session after its opening message, so the sessions
+// list shows something readable instead of a bare id.
+func labelFromMessage(msg string) string {
+	const max = 40
+	label := strings.TrimSpace(strings.ReplaceAll(msg, "\n", " "))
+	if label == "" {
+		return ""
+	}
+	if r := []rune(label); len(r) > max {
+		return string(r[:max-1]) + "…"
+	}
+	return label
+}
 
 // dashboardChatID is a fixed chatID for dashboard sessions.
 const dashboardChatID int64 = 1
