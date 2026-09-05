@@ -2,6 +2,7 @@ package claude
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -32,12 +33,42 @@ func TestBuildArgsIsolationSurvivesResume(t *testing.T) {
 	if !slices.Contains(resumed, "--resume") {
 		t.Error("--resume missing on a resumed turn")
 	}
-	if slices.Contains(resumed, "--append-system-prompt") {
-		t.Error("resumed turns must not re-send the system prompt (the CLI already has it)")
+}
+
+// The system prompt must go on EVERY turn. --append-system-prompt applies to
+// the invocation, not the stored session: a session created with it and then
+// resumed without it stops following the prompt entirely (measured against the
+// CLI). Sending it only on the first message gave the agent its operating
+// instructions for exactly one message per session.
+func TestBuildArgsResendsSystemPromptOnResume(t *testing.T) {
+	resumed := buildArgs("m", "sess-1", false, "you are a test")
+
+	i := slices.Index(resumed, "--append-system-prompt")
+	if i < 0 {
+		t.Fatal("a resumed turn must carry the system prompt — the CLI does not remember it")
+	}
+	if resumed[i+1] != "you are a test" {
+		t.Errorf("resumed prompt = %q, want the system prompt", resumed[i+1])
+	}
+	if !slices.Contains(resumed, "--resume") {
+		t.Error("--resume missing")
+	}
+	// Once, not twice: a stacked flag would double the prefix every turn.
+	if n := strings.Count(strings.Join(resumed, " "), "--append-system-prompt"); n != 1 {
+		t.Errorf("--append-system-prompt appears %d times, want exactly 1", n)
 	}
 }
 
-func TestBuildArgsSystemPromptOnFirstTurnOnly(t *testing.T) {
+func TestBuildArgsOmitsEmptySystemPrompt(t *testing.T) {
+	for _, isNew := range []bool{true, false} {
+		args := buildArgs("m", "s", isNew, "")
+		if slices.Contains(args, "--append-system-prompt") {
+			t.Errorf("isNew=%v: an empty prompt must not be passed as a flag", isNew)
+		}
+	}
+}
+
+func TestBuildArgsFirstTurnCarriesPromptAndDoesNotResume(t *testing.T) {
 	first := buildArgs("m", "s", true, "you are a test")
 	i := slices.Index(first, "--append-system-prompt")
 	if i < 0 || first[i+1] != "you are a test" {

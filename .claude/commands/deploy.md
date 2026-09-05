@@ -45,13 +45,20 @@ artifacts into `~/.bomclaw/` and restart.
    ln -sf ~/.bomclaw/bomclaw ~/.local/bin/bomclaw
    ```
 
-4. **Stop** the gateway and kill stale processes (orphaned `claude --resume`
-   subprocesses hold Telegram's getUpdates poll and cause Conflict errors):
+4. **Stop** the gateway and kill stale processes (orphaned `claude -p --resume`
+   subprocesses hold Telegram's getUpdates poll and cause Conflict errors).
+
+   The pattern MUST be `claude -p .*--resume`, not `claude.*--resume`. The
+   broad one also matches your own interactive Claude Code sessions — which
+   resume too — and has killed one mid-deploy. The gateway always spawns with
+   `-p` immediately after the binary (`internal/claude/client.go` `buildArgs`),
+   and interactive Claude Code never does, so `-p` is what separates them.
+   Check before you kill: `pgrep -lf "claude -p .*--resume"`.
    ```bash
    launchctl stop com.bomclaw.gateway
    sleep 1
    pkill -f "bomclaw gateway" 2>/dev/null || true
-   pkill -f "claude.*--resume" 2>/dev/null || true
+   pkill -f "claude -p .*--resume" 2>/dev/null || true
    sleep 1
    ```
 
