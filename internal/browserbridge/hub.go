@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,14 +74,29 @@ type Options struct {
 	Logf         func(format string, args ...any)
 }
 
-// Status describes the connected browser, for `bomclaw browser status` and
-// the dashboard.
+// Status describes the connected browser, for `bomclaw browser status`, the
+// dashboard and the extension popup. It names the agent as well as the
+// browser: with several agents on one machine, "connected" alone does not say
+// whose browser this is, and that is the first thing anyone debugging a
+// two-agent setup needs to know.
 type Status struct {
-	Connected   bool   `json:"connected"`
+	Connected bool   `json:"connected"`
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentName string `json:"agent_name,omitempty"`
+
 	Client      string `json:"client,omitempty"`
 	Browser     string `json:"browser,omitempty"`
+	BrowserName string `json:"browser_name,omitempty"` // "Chrome 149 on macOS", from the UA
 	ConnectedAt string `json:"connected_at,omitempty"`
 	LastSeen    string `json:"last_seen,omitempty"`
+
+	// What this browser has actually been asked to do. Without it the popup
+	// can only say "connected", which looks identical whether the agent is
+	// working or has never touched the browser at all.
+	Actions      int    `json:"actions"`
+	LastAction   string `json:"last_action,omitempty"`
+	LastActionAt string `json:"last_action_at,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
 }
 
 type frame struct {
@@ -246,15 +262,29 @@ func (h *Hub) Connected() bool { return h.current() != nil }
 func (h *Hub) Status() Status {
 	c := h.current()
 	if c == nil {
-		return Status{}
+		// Still name the agent: a disconnected bridge is the common case
+		// while pairing, and "which agent am I looking at" is exactly the
+		// question then.
+		return Status{AgentID: h.opts.AgentID, AgentName: h.opts.AgentName}
 	}
-	return Status{
+	act := c.activity()
+	st := Status{
 		Connected:   true,
+		AgentID:     h.opts.AgentID,
+		AgentName:   h.opts.AgentName,
 		Client:      c.client,
 		Browser:     c.browser,
+		BrowserName: describeUA(c.browser),
 		ConnectedAt: c.connectedAt.Format(time.RFC3339),
 		LastSeen:    c.lastSeen().Format(time.RFC3339),
+		Actions:     act.count,
+		LastAction:  act.name,
+		LastError:   act.err,
 	}
+	if !act.at.IsZero() {
+		st.LastActionAt = act.at.Format(time.RFC3339)
+	}
+	return st
 }
 
 func (h *Hub) current() *conn {
@@ -296,16 +326,64 @@ func (h *Hub) Call(ctx context.Context, action string, params json.RawMessage) (
 	select {
 	case f := <-ch:
 		if !f.OK {
+			c.record(action, f.Error)
 			return nil, &ActionError{Action: action, Message: f.Error}
 		}
+		c.record(action, "")
 		return f.Result, nil
 	case <-c.closed:
 		return nil, ErrDisconnected
 	case <-timer.C:
-		return nil, fmt.Errorf("%s: the browser did not answer within %s", action, wait)
+		err := fmt.Errorf("%s: the browser did not answer within %s", action, wait)
+		c.record(action, err.Error())
+		return nil, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// describeUA reduces a user-agent string to something a person can read at a
+// glance in the popup or the dashboard. Unrecognised agents keep their raw
+// string rather than being guessed at.
+func describeUA(ua string) string {
+	if ua == "" {
+		return ""
+	}
+	var browser string
+	switch {
+	case strings.Contains(ua, "Edg/"):
+		browser = "Edge " + uaVersion(ua, "Edg/")
+	case strings.Contains(ua, "OPR/"):
+		browser = "Opera " + uaVersion(ua, "OPR/")
+	case strings.Contains(ua, "Chrome/"):
+		browser = "Chrome " + uaVersion(ua, "Chrome/")
+	case strings.Contains(ua, "Firefox/"):
+		browser = "Firefox " + uaVersion(ua, "Firefox/")
+	default:
+		return shorten(ua, 40)
+	}
+	switch {
+	case strings.Contains(ua, "Mac OS X"), strings.Contains(ua, "Macintosh"):
+		return browser + " on macOS"
+	case strings.Contains(ua, "Windows"):
+		return browser + " on Windows"
+	case strings.Contains(ua, "Linux"), strings.Contains(ua, "X11"):
+		return browser + " on Linux"
+	}
+	return browser
+}
+
+// uaVersion pulls the major version that follows a token like "Chrome/".
+func uaVersion(ua, token string) string {
+	i := strings.Index(ua, token)
+	if i < 0 {
+		return ""
+	}
+	rest := ua[i+len(token):]
+	if dot := strings.IndexAny(rest, ".; )"); dot >= 0 {
+		return rest[:dot]
+	}
+	return rest
 }
 
 func (h *Hub) authorize(action string, params json.RawMessage) error {
@@ -362,6 +440,12 @@ type conn struct {
 	pendMu  sync.Mutex
 	pending map[string]chan frame
 
+	actMu   sync.Mutex
+	actName string
+	actAt   time.Time
+	actErr  string
+	actN    int
+
 	closed    chan struct{}
 	closeOnce sync.Once
 }
@@ -387,6 +471,30 @@ func (c *conn) describe() string {
 		return c.client
 	}
 	return c.client + " (" + shorten(c.browser, 60) + ")"
+}
+
+// record notes what the browser was last asked to do, so the popup and the
+// dashboard can show activity rather than a bare "connected".
+func (c *conn) record(action, errMsg string) {
+	c.actMu.Lock()
+	defer c.actMu.Unlock()
+	c.actName = action
+	c.actAt = time.Now()
+	c.actErr = errMsg
+	c.actN++
+}
+
+type activitySnapshot struct {
+	name  string
+	at    time.Time
+	err   string
+	count int
+}
+
+func (c *conn) activity() activitySnapshot {
+	c.actMu.Lock()
+	defer c.actMu.Unlock()
+	return activitySnapshot{name: c.actName, at: c.actAt, err: c.actErr, count: c.actN}
 }
 
 func (c *conn) touch()              { c.seen.Store(time.Now().UnixNano()) }

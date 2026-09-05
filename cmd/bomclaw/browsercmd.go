@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/browser"
@@ -83,7 +84,7 @@ func runBrowser(args []string) {
 
 	switch sub {
 	case "status":
-		printJSONField(httpGet(addr+"/api/browser/status"), "")
+		printBrowserStatus(httpGet(addr + "/api/browser/status"))
 
 	case "token":
 		raw := httpGet(addr + "/api/browser/token")
@@ -207,6 +208,7 @@ func runBrowserTabs(addr string, rest []string) {
 				Title  string `json:"title"`
 				URL    string `json:"url"`
 				Active bool   `json:"active"`
+				Owner  string `json:"owner"`
 			} `json:"tabs"`
 		}
 		if err := json.Unmarshal(res, &out); err != nil {
@@ -217,13 +219,23 @@ func runBrowserTabs(addr string, rest []string) {
 			fmt.Println("no open tabs")
 			return
 		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "\tID\tTITLE\tURL")
 		for _, t := range out.Tabs {
 			marker := " "
 			if t.Active {
-				marker = "*"
+				marker = "*" // the tab THIS agent acts on
 			}
-			fmt.Printf("%s %s  %s  %s\n", marker, t.ID, truncate(t.Title, 40), t.URL)
+			title := truncate(t.Title, 40)
+			// A tab another agent is driving is worth flagging: focusing it
+			// would put two agents on one page.
+			if t.Owner != "" && !t.Active {
+				title += " [" + t.Owner + "]"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", marker, t.ID, title, t.URL)
 		}
+		w.Flush()
+		fmt.Println("\n* = the tab this agent acts on. `tabs focus <id>` to switch.")
 	case "open":
 		params["url"] = firstArg(rest[1:], "tabs open <url>")
 		printMessage(browserCall(addr, "tabs", params))
@@ -264,6 +276,60 @@ func twoArgs(args []string, usage string) (string, string) {
 	}
 	// Everything after the ref joins into the text, so an unquoted value works.
 	return args[0], strings.Join(args[1:], " ")
+}
+
+// printBrowserStatus renders the bridge status as a few readable lines. The
+// raw JSON was fine for one agent; with several on a machine the useful
+// questions are which agent this is, whether its browser is attached, and
+// whether it has actually done anything.
+func printBrowserStatus(raw json.RawMessage) {
+	var st struct {
+		Connected    bool   `json:"connected"`
+		AgentID      string `json:"agent_id"`
+		AgentName    string `json:"agent_name"`
+		BrowserName  string `json:"browser_name"`
+		Browser      string `json:"browser"`
+		Client       string `json:"client"`
+		ConnectedAt  string `json:"connected_at"`
+		Actions      int    `json:"actions"`
+		LastAction   string `json:"last_action"`
+		LastActionAt string `json:"last_action_at"`
+		LastError    string `json:"last_error"`
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		fmt.Println(strings.TrimSpace(string(raw)))
+		return
+	}
+
+	agent := orAny(st.AgentName, st.AgentID)
+	if agent == "" {
+		agent = "this agent"
+	}
+	if !st.Connected {
+		fmt.Printf("%s: no browser connected\n\n"+
+			"Pair the BomClaw Browser Bridge extension with the token from\n"+
+			"`bomclaw browser token`, then check the extension popup.\n", agent)
+		return
+	}
+
+	browser := orAny(st.BrowserName, st.Browser)
+	fmt.Printf("%s: connected to %s\n", agent, browser)
+	if st.ConnectedAt != "" {
+		if t, err := time.Parse(time.RFC3339, st.ConnectedAt); err == nil {
+			fmt.Printf("  since    %s\n", t.Local().Format("15:04:05"))
+		}
+	}
+	fmt.Printf("  actions  %d\n", st.Actions)
+	if st.LastAction != "" {
+		line := "  last     " + st.LastAction
+		if t, err := time.Parse(time.RFC3339, st.LastActionAt); err == nil {
+			line += " at " + t.Local().Format("15:04:05")
+		}
+		fmt.Println(line)
+	}
+	if st.LastError != "" {
+		fmt.Printf("  error    %s\n", st.LastError)
+	}
 }
 
 // printMessage prints the {"message":…} an action returns, falling back to the

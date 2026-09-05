@@ -308,3 +308,90 @@ func TestHubAnswersExtensionPings(t *testing.T) {
 		t.Fatalf("expected pong, got %+v (err %v)", f, err)
 	}
 }
+
+// Status has to answer "whose browser is this, and has it done anything?".
+// With two agents on one machine a bare "connected" is ambiguous, and it looks
+// identical whether the agent is working or has never touched the browser.
+func TestStatusNamesTheAgentAndItsActivity(t *testing.T) {
+	hub, wsURL := newTestHub(t, nil)
+
+	// Disconnected: the agent is still named, because "which agent am I
+	// pairing with" is exactly the question at that moment.
+	if st := hub.Status(); st.Connected || st.AgentID != "a1" || st.AgentName != "Agent One" {
+		t.Fatalf("disconnected status should still name the agent, got %+v", st)
+	}
+
+	ws := fakeExtension(t, wsURL, testToken)
+	expectWelcome(t, ws)
+	waitConnected(t, hub)
+
+	if st := hub.Status(); st.Actions != 0 || st.LastAction != "" {
+		t.Fatalf("a fresh connection has run nothing, got %+v", st)
+	}
+
+	go func() {
+		f, err := readFrame(t, ws)
+		if err != nil {
+			return
+		}
+		_ = ws.WriteJSON(frame{Type: "result", ID: f.ID, OK: true, Result: json.RawMessage(`{"nodes":[]}`)})
+	}()
+	if _, err := hub.Call(context.Background(), "snapshot", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	st := hub.Status()
+	if st.Actions != 1 || st.LastAction != "snapshot" || st.LastActionAt == "" {
+		t.Errorf("a successful action should be recorded, got %+v", st)
+	}
+	if st.LastError != "" {
+		t.Errorf("a successful action must not leave an error, got %q", st.LastError)
+	}
+	if st.AgentID != "a1" || st.BrowserName != "TestBrowser/1" {
+		t.Errorf("status should carry agent + browser identity, got %+v", st)
+	}
+}
+
+// A failed action is still activity, and the reason is what the operator needs.
+func TestStatusRecordsTheLastFailure(t *testing.T) {
+	hub, wsURL := newTestHub(t, nil)
+	ws := fakeExtension(t, wsURL, testToken)
+	expectWelcome(t, ws)
+	waitConnected(t, hub)
+
+	go func() {
+		f, err := readFrame(t, ws)
+		if err != nil {
+			return
+		}
+		_ = ws.WriteJSON(frame{Type: "result", ID: f.ID, OK: false, Error: "element n9 not found"})
+	}()
+	_, _ = hub.Call(context.Background(), "click", json.RawMessage(`{"ref":"n9"}`))
+
+	st := hub.Status()
+	if st.Actions != 1 || st.LastAction != "click" {
+		t.Errorf("a failed action still counts, got %+v", st)
+	}
+	if !strings.Contains(st.LastError, "n9 not found") {
+		t.Errorf("status should carry the failure reason, got %q", st.LastError)
+	}
+}
+
+func TestDescribeUA(t *testing.T) {
+	cases := []struct{ ua, want string }{
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36", "Chrome 149 on macOS"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0", "Edge 141 on Windows"},
+		{"Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/133.0", "Firefox 133 on Linux"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := describeUA(c.ua); got != c.want {
+			t.Errorf("describeUA(%.40q) = %q, want %q", c.ua, got, c.want)
+		}
+	}
+	// An agent string nothing matches keeps its own words rather than being
+	// guessed at.
+	if got := describeUA("SomeBot/2.0"); got != "SomeBot/2.0" {
+		t.Errorf("unknown UA should pass through, got %q", got)
+	}
+}
