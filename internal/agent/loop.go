@@ -38,6 +38,18 @@ func RunAgent(ctx context.Context, params RunParams) (*RunResult, error) {
 			}, ctx.Err()
 		}
 
+		// Span this model call, if the caller is tracing.
+		var endIteration func(string, *Usage, error)
+		if params.OnIteration != nil {
+			endIteration = params.OnIteration(iteration)
+		}
+		finish := func(text string, u *Usage, err error) {
+			if endIteration != nil {
+				endIteration(text, u, err)
+				endIteration = nil // a retry opens its own span
+			}
+		}
+
 		// Stream model response
 		events, err := params.Provider.Stream(ctx, StreamParams{
 			Model:        params.ModelID,
@@ -47,6 +59,7 @@ func RunAgent(ctx context.Context, params RunParams) (*RunResult, error) {
 			MaxTokens:    params.MaxTokens,
 		})
 		if err != nil {
+			finish("", nil, err)
 			if isContextOverflow(err) {
 				log.Printf("agent: context overflow at iteration %d, trimming history", iteration)
 				messages = trimOldMessages(messages, len(messages)/2)
@@ -91,12 +104,14 @@ func RunAgent(ctx context.Context, params RunParams) (*RunResult, error) {
 				usage = ev.Usage
 				stopReason = ev.StopReason
 			case "error":
+				finish(textBuf.String(), usage, ev.Error)
 				return nil, ev.Error
 			}
 		}
 
 		responseText := textBuf.String()
 		lastText = responseText
+		finish(responseText, usage, nil)
 
 		// Accumulate usage
 		if usage != nil {
