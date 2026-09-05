@@ -57,6 +57,18 @@ export function useGateway() {
           return
         }
 
+        // Server-initiated events (no request id): a session moved on another
+        // channel. Hand it to the store; App decides whether it is on screen.
+        if (msg.type === 'event') {
+          if (msg.event === 'session.turn') {
+            try {
+              const d = JSON.parse(msg.data)
+              useStore.getState().setExternalTurn({ sessionId: d.session_id, phase: d.phase, at: Date.now() })
+            } catch {}
+          }
+          return
+        }
+
         // Handle normal RPC responses
         const p = pending.current.get(msg.id)
         if (p) {

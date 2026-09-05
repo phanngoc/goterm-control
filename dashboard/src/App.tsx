@@ -19,6 +19,29 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   const setActiveSessionId = useStore(s => s.setActiveSessionId)
   const setMessages = useStore(s => s.setMessages)
   const sessions = useStore(s => s.sessions)
+  const externalTurn = useStore(s => s.externalTurn)
+  const sending = useStore(s => s.sending)
+
+  // Another channel wrote to a session — Telegram, or an agent that claimed a
+  // task. Refresh the list (labels, counts), and if that session is the one on
+  // screen and we are not mid-send ourselves, reload its transcript so the web
+  // shows what Telegram shows, the moment it happens. While the other side is
+  // still working ("started" with no "finished" yet) poll every 5s so its
+  // partial snapshots appear too; "finished" cancels the poll and reloads once.
+  useEffect(() => {
+    if (!externalTurn) return
+    call('sessions.list').then((s: any) => setSessions(s || [])).catch(() => {})
+    if (externalTurn.sessionId !== activeSessionId || sending) return
+
+    const reload = () =>
+      call('transcript.get', { session_id: externalTurn.sessionId })
+        .then((events: any) => { if (Array.isArray(events)) setMessages(eventsToMessages(events)) })
+        .catch(() => {})
+    reload()
+    if (externalTurn.phase !== 'started') return
+    const t = setInterval(reload, 5000)
+    return () => clearInterval(t)
+  }, [externalTurn, activeSessionId, sending, call, setSessions, setMessages])
 
   // Sync URL ↔ state: read on load, write on change
   useEffect(() => {

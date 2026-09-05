@@ -50,6 +50,11 @@ type Handler struct {
 	trace      *trace.Recorder // run/trace recorder (nil-safe)
 	agentID    string          // identity in the shared coordination database
 
+	// onTurn, when set, is told when any turn on any channel starts and ends.
+	// The gateway uses it to push a refresh to open dashboards; without it a
+	// browser showing the shared session never learns Telegram moved it.
+	onTurn func(TurnEvent)
+
 	// approvalRequests maps callbackData → channel to signal approval/cancel
 	approvalMu       sync.Mutex
 	approvalRequests map[string]chan bool
@@ -601,6 +606,28 @@ func (h *Handler) NewSessionContext(sess *session.Session) string {
 	return h.memory.BuildContext(time.Now()) + h.buildHistoryContext(sess.ID, 8)
 }
 
+// TurnEvent announces that a session's conversation moved. "started" fires once
+// the user's message is persisted, so a reader can already show it; "finished"
+// fires once the reply, transcript and counters are written — on every exit
+// path, including cancellation and timeout.
+type TurnEvent struct {
+	SessionID string
+	ChatID    int64
+	Phase     string // "started" | "finished"
+}
+
+// SetTurnListener registers the single listener for turn events. Delivery is
+// asynchronous: the listener does network writes and must never slow a turn.
+func (h *Handler) SetTurnListener(fn func(TurnEvent)) { h.onTurn = fn }
+
+func (h *Handler) notifyTurn(sess *session.Session, chatID int64, phase string) {
+	if h.onTurn == nil {
+		return
+	}
+	ev := TurnEvent{SessionID: sess.ID, ChatID: chatID, Phase: phase}
+	go h.onTurn(ev)
+}
+
 // runClaude executes a single Claude CLI call with streaming, transcript recording, and memory extraction.
 func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID int64, modelID, userText, memoryContext string, streamer TurnSink) (*execution.RunResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -651,6 +678,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			log.Printf("handler: message store user error: %v", err)
 		}
 	}
+	h.notifyTurn(sess, chatID, "started")
 
 	// assistantText accumulates ALL turns (for storage); turnText resets per
 	// iteration so the auto-continue heuristic only inspects the latest turn.
@@ -675,6 +703,9 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		out := assistantText.String()
 		textMu.Unlock()
 		turnSpan.End(out, turnErr)
+		// Last, so a listener that reloads on "finished" sees the transcript
+		// flush and label refresh already done on the normal path.
+		h.notifyTurn(sess, chatID, "finished")
 	}()
 
 	// Snapshot the in-progress reply every 10s so a dashboard reload mid-run

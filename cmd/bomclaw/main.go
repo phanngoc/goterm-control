@@ -354,6 +354,18 @@ func runGateway(args []string) {
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir(), authMgr)
 
+	if tgBot != nil {
+		// Push conversation changes to open dashboards. A Telegram turn (or a
+		// claimed task) writes the session both channels now share, and nothing
+		// else would tell a browser showing that session to refresh.
+		tgBot.Handler().SetTurnListener(func(ev bot.TurnEvent) {
+			data, _ := json.Marshal(map[string]any{
+				"session_id": ev.SessionID, "chat_id": ev.ChatID, "phase": ev.Phase,
+			})
+			srv.Broadcast(gateway.StreamEvent{Type: "event", Event: "session.turn", Data: string(data)})
+		})
+	}
+
 	// Start Telegram bot polling in background
 	if tgBot != nil {
 		go func() {
