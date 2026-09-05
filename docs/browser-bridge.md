@@ -198,6 +198,12 @@ Result shapes by action: `{"message":…}` for actions that just report
 - **`eval` needs a permissive CSP.** Pages with a strict Content-Security-Policy
   refuse injected script; prefer `snapshot` and `text`.
 - **`screenshot` captures the visible viewport**, not the full page.
+- **Some pages cannot be scripted at all.** Chrome refuses injection on its own
+  pages (`chrome://`, `view-source:`, `file:`), on the Web Store, and on a
+  blank tab. The agent's tab starts blank, so a `snapshot` before the first
+  `navigate` hits this; the bridge reports which of those it is rather than
+  passing on Chrome's "Extension manifest must request permission" wording,
+  which reads as a broken install.
 - **Chrome and Chromium-family browsers only.** The manifest is MV3; Firefox
   would need its own packaging.
 

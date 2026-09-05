@@ -238,16 +238,20 @@ async function screenshot() {
 async function evalJS(expression) {
   if (!expression) throw new Error("expression is required");
   const tabId = await targetTab();
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: (expr) => {
-      try { return { result: String(eval(expr)) }; }
-      catch (e) { return { error: String(e && e.message || e) }; }
-    },
-    args: [expression],
-  });
-  return res.result;
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: (expr) => {
+        try { return { result: String(eval(expr)) }; }
+        catch (e) { return { error: String(e && e.message || e) }; }
+      },
+      args: [expression],
+    });
+    return res.result;
+  } catch (e) {
+    throw new Error(await injectionBlockReason(tabId, e));
+  }
 }
 
 // tabsAction lists/opens/focuses/closes tabs. list and focus/close work on the
@@ -299,13 +303,46 @@ async function tabsAction(p) {
 // injectFn runs a page.js function in the target tab's MAIN world and returns
 // its value. A ref/param is passed as args, never string-interpolated.
 async function injectFn(tabId, fn, args) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: fn,
-    args: args,
-  });
-  return res && res.result;
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: fn,
+      args: args,
+    });
+    return res && res.result;
+  } catch (e) {
+    throw new Error(await injectionBlockReason(tabId, e));
+  }
+}
+
+// injectionBlockReason turns Chrome's refusal to inject into something the
+// agent can act on. Chrome reports every one of these as "Cannot access
+// contents of url … Extension manifest must request permission to access this
+// host", which reads as a broken install — and the commonest cause is simply
+// that the agent's tab is still the empty one it was opened with, where the
+// fix is to navigate somewhere rather than to touch the manifest.
+async function injectionBlockReason(tabId, cause) {
+  let url = "";
+  try {
+    url = (await chrome.tabs.get(tabId)).url || "";
+  } catch (e) {
+    return "the tab is gone — open one with `bomclaw browser navigate <url>`";
+  }
+  if (!url || url === "about:blank" || url.startsWith("about:")) {
+    return "the agent's tab is empty (" + (url || "no page") +
+      ") — load a page first with `bomclaw browser navigate <url>`, " +
+      "or point the agent at one of the user's tabs with `bomclaw browser tabs focus <id>`";
+  }
+  if (/^(chrome|chrome-untrusted|edge|brave|devtools|view-source|file|data):/i.test(url)) {
+    return "Chrome does not let extensions script " + url.split(":")[0] +
+      ": pages — navigate to an http(s) page instead";
+  }
+  if (/^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)/i.test(url)) {
+    return "Chrome blocks extensions from scripting the Web Store";
+  }
+  // Not a URL restriction we recognise — pass Chrome's own words through.
+  return String((cause && cause.message) || cause || "script injection failed");
 }
 
 function sleep(ms) {
