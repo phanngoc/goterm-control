@@ -34,6 +34,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
+	"github.com/ngocp/goterm-control/internal/taskrunner"
 	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/trace"
 )
@@ -104,6 +105,8 @@ func main() {
 		runStatus(os.Args[2:])
 	case "task":
 		runTask(os.Args[2:])
+	case "note":
+		runNote(os.Args[2:])
 	case "inbox":
 		runInbox(os.Args[2:])
 	case "msg":
@@ -143,6 +146,7 @@ Commands:
   chat               Interactive CLI chat with the agent (no gateway needed)
   agents             List agents registered in the shared database
   task               Create, claim and finish work shared between agents
+  note               Record and search what the agents have learned
   inbox              Read messages other agents sent to this one
   msg                Send a message to another agent
   passwd             Set the dashboard password (creates the account if none)
@@ -270,6 +274,22 @@ func runGateway(args []string) {
 		}
 	}
 
+	// Task runner — claims work a peer queued and executes it with the same
+	// backend that answers chat. Off unless the config asks for it: a claimed
+	// task runs with full machine access and nobody is watching.
+	var runner *taskrunner.Runner
+	if coordDB != nil && cfg.Tasks.AutoClaim {
+		runner = taskrunner.New(coordDB, bot.NewChatClient(cfg, nil), gwTrace, taskrunner.Config{
+			AgentID:  cfg.Agent.ID,
+			Model:    resolver.Default(),
+			Interval: time.Duration(cfg.Tasks.PollIntervalSeconds) * time.Second,
+			Timeout:  time.Duration(cfg.Tasks.TimeoutMinutes) * time.Minute,
+		})
+		runner.Start(ctx)
+	} else if coordDB != nil {
+		log.Printf("taskrunner: disabled (tasks.auto_claim=false) — queued work waits for `bomclaw task claim`")
+	}
+
 	deps := gateway.Deps{
 		Sessions:     sessions,
 		Resolver:     resolver,
@@ -281,6 +301,8 @@ func runGateway(args []string) {
 		AgentID:      cfg.Agent.ID,
 		ProviderName: cfg.Provider,
 		Trace:        gwTrace,
+		PokeTasks:    runner.Poke,
+		NotesFile:    cfg.Coord.NotesFile,
 	}
 	if tgBot != nil {
 		deps.Runs = func() []gateway.RunInfo {

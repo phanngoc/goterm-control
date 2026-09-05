@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/gateway"
 )
 
 // The task/inbox commands are the surface an agent uses to hand work to its
@@ -73,6 +74,9 @@ func runTask(args []string) {
 			fmt.Fprintf(os.Stderr, "task new: %v\n", err)
 			os.Exit(1)
 		}
+		// Ring the agent that can take it. Failure is fine — its poll finds
+		// the task anyway; this only removes the wait.
+		gateway.NotifyTaskCreated(db, task)
 		fmt.Println(task.ID)
 
 	case "claim":
@@ -219,6 +223,135 @@ func taskUsage() {
   list   [--state S] [--mine] [--limit N]                   see the queue
   show   --id ID                                            one task with its history
 
+Every command accepts --agent (default $BOMCLAW_AGENT_ID) and --db.`)
+}
+
+func runNote(args []string) {
+	if len(args) == 0 {
+		noteUsage()
+		os.Exit(1)
+	}
+	sub, rest := args[0], args[1:]
+
+	switch sub {
+	case "add":
+		fs := flag.NewFlagSet("note add", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		notesFile := fs.String("file", coord.DefaultNotesFile(), "Markdown file to regenerate")
+		title := fs.String("title", "", "One line summary (required)")
+		body := fs.String("body", "", "The detail")
+		kind := fs.String("kind", coord.KindFact, "fact | decision | result | gotcha")
+		tags := fs.String("tags", "", "Comma separated")
+		private := fs.Bool("private", false, "Visible only to this agent")
+		supersedes := fs.String("supersedes", "", "Id of the note this corrects")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+
+		scope := ""
+		if *private {
+			scope = *agent
+		}
+		note, err := db.AddNote(coord.NewNote{
+			Author: *agent, Scope: scope, Kind: *kind, Title: *title,
+			Body: *body, Tags: *tags, Supersedes: *supersedes,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note add: %v\n", err)
+			os.Exit(1)
+		}
+		if err := db.WriteNotesFile(*notesFile); err != nil {
+			// The note is safely stored; only the readable copy failed.
+			fmt.Fprintf(os.Stderr, "note add: saved, but could not rewrite %s: %v\n", *notesFile, err)
+		}
+		fmt.Println(note.ID)
+
+	case "search":
+		fs := flag.NewFlagSet("note search", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		limit := fs.Int("limit", 20, "Max rows")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+
+		notes, err := db.SearchNotes(strings.Join(fs.Args(), " "), *agent, *limit)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note search: %v\n", err)
+			os.Exit(1)
+		}
+		printNotes(notes)
+
+	case "list":
+		fs := flag.NewFlagSet("note list", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		kind := fs.String("kind", "", "Filter by kind")
+		all := fs.Bool("all", false, "Include superseded notes")
+		limit := fs.Int("limit", 50, "Max rows")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+
+		notes, err := db.ListNotes(coord.NoteFilter{
+			Scope: *agent, Kind: *kind, IncludeReplaced: *all, Limit: *limit,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note list: %v\n", err)
+			os.Exit(1)
+		}
+		printNotes(notes)
+
+	case "render":
+		fs := flag.NewFlagSet("note render", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		notesFile := fs.String("file", coord.DefaultNotesFile(), "Markdown file to write")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+
+		if err := db.WriteNotesFile(*notesFile); err != nil {
+			fmt.Fprintf(os.Stderr, "note render: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(*notesFile)
+
+	default:
+		noteUsage()
+		os.Exit(1)
+	}
+}
+
+func printNotes(notes []coord.Note) {
+	if len(notes) == 0 {
+		fmt.Println("no notes")
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tKIND\tSCOPE\tAUTHOR\tAGE\tTITLE")
+	for _, n := range notes {
+		title := n.Title
+		if n.SupersededBy != "" {
+			title = "(replaced) " + title
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			n.ID, n.Kind, n.Scope, n.Author, age(n.CreatedAt), truncate(title, 60))
+	}
+	w.Flush()
+}
+
+func noteUsage() {
+	fmt.Fprintln(os.Stderr, `Usage: bomclaw note <command>
+
+  add    --title T [--body B] [--kind fact|decision|result|gotcha]
+         [--tags a,b] [--private] [--supersedes ID]     record what you learned
+  search <words>                                        full-text search
+  list   [--kind K] [--all]                             browse
+  render [--file PATH]                                  regenerate the markdown file
+
+Notes are append-only: correct one with --supersedes, never by editing.
 Every command accepts --agent (default $BOMCLAW_AGENT_ID) and --db.`)
 }
 

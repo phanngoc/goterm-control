@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -177,6 +178,9 @@ func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error
 	if err != nil {
 		return nil, err
 	}
+	// Ring whoever can take it so the work starts now rather than at the next
+	// poll. Best effort: the queue is the source of truth.
+	go NotifyTaskCreated(deps.Coord, task)
 	return json.Marshal(task)
 }
 
@@ -192,6 +196,74 @@ func handleTaskCancel(deps Deps, params json.RawMessage) (json.RawMessage, error
 		return nil, err
 	}
 	return json.Marshal(map[string]bool{"canceled": true})
+}
+
+// --- shared notes ----------------------------------------------------------
+
+type notesListParams struct {
+	Search          string `json:"search,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	IncludeReplaced bool   `json:"include_replaced,omitempty"`
+	Limit           int    `json:"limit,omitempty"`
+}
+
+func handleNotesList(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p notesListParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+	}
+	var (
+		notes []coord.Note
+		err   error
+	)
+	if p.Search != "" {
+		notes, err = deps.Coord.SearchNotes(p.Search, deps.AgentID, p.Limit)
+	} else {
+		notes, err = deps.Coord.ListNotes(coord.NoteFilter{
+			Scope: deps.AgentID, Kind: p.Kind,
+			IncludeReplaced: p.IncludeReplaced, Limit: p.Limit,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(notes)
+}
+
+type noteAddParams struct {
+	Title      string `json:"title"`
+	Body       string `json:"body,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	Tags       string `json:"tags,omitempty"`
+	Supersedes string `json:"supersedes,omitempty"`
+}
+
+func handleNoteAdd(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p noteAddParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	note, err := deps.Coord.AddNote(coord.NewNote{
+		Author: deps.AgentID, Kind: p.Kind, Title: p.Title,
+		Body: p.Body, Tags: p.Tags, Supersedes: p.Supersedes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Keep the markdown copy agents read in step with the database. The note
+	// is already committed, so a render failure is reported, not fatal.
+	if err := deps.Coord.WriteNotesFile(deps.NotesFile); err != nil {
+		log.Printf("gateway: note saved but NOTES.md not rewritten: %v", err)
+	}
+	return json.Marshal(note)
 }
 
 // --- inter-agent messages --------------------------------------------------
