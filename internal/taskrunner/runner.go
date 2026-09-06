@@ -178,7 +178,9 @@ func (r *Runner) sweep() {
 	} else if len(ids) > 0 {
 		log.Printf("taskrunner: opened %d task(s) whose assignee is gone: %v", len(ids), ids)
 	}
-	if ids, err := r.db.ReapOrphanRuns(); err != nil {
+	// Nothing live can be older than one run cap plus one lease; anything
+	// still "running" past that has no process behind it.
+	if ids, err := r.db.ReapOrphanRuns(r.cfg.Timeout + coord.DefaultLease); err != nil {
 		log.Printf("taskrunner: reap orphan runs: %v", err)
 	} else if len(ids) > 0 {
 		log.Printf("taskrunner: closed %d orphan run(s) as lost: %v", len(ids), ids)

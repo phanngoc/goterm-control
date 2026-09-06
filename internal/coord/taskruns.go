@@ -109,9 +109,11 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 		}
 		return nil, fmt.Errorf("finish run: load run: %w", err)
 	}
-	if run.Liveness != RunRunning {
+	if run.Liveness != RunRunning && run.Liveness != RunLost {
 		return nil, fmt.Errorf("coord: run %s already ended as %s", runID, run.Liveness)
 	}
+	// RunLost is a sweep's guess that nobody would report in; the runner
+	// reporting in is the fact, and replaces it.
 
 	t, err := scanTask(tx.QueryRow(`SELECT `+taskCols+` FROM tasks WHERE id = ?`, run.TaskID))
 	if err != nil {
@@ -273,24 +275,33 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 	return t, nil
 }
 
-// ReapOrphanRuns closes runs still marked running whose claim is over: the
-// task has moved on (finished, requeued, reclaimed by someone else) or has been
-// unheld for longer than a lease, so no process can still be inside that run.
-// A gateway crash mid-run leaves exactly this behind; so did a FinishRun that
-// failed on a busy database. Marked lost, not failed — the outcome is unknown,
-// and the task's own state already says what happened to the work.
-func (db *DB) ReapOrphanRuns() ([]string, error) {
+// ReapOrphanRuns closes runs still marked running that no process can still be
+// inside: the claim is over (task finished, requeued, reclaimed by someone
+// else) AND the run started longer ago than olderThan. A gateway crash mid-run
+// leaves exactly this behind; so did a FinishRun that failed on a busy
+// database. Marked lost, not failed — the outcome is unknown, and the task's
+// own state already says what happened to the work.
+//
+// The age bound is not optional. The sweep runs in every gateway against the
+// shared table, and a peer cannot tell whether MY run is still in flight: the
+// agent typing `bomclaw task done` moves the task to completed while its CLI
+// is still shutting down, and for those few seconds "task moved on, run still
+// running" is the normal shape of a live run — a peer's sweep closed one as
+// lost in exactly that window. Callers pass the run cap plus a lease: nothing
+// live can be older than that.
+func (db *DB) ReapOrphanRuns(olderThan time.Duration) ([]string, error) {
 	now := time.Now()
 	rows, err := db.conn.Query(`UPDATE task_runs SET liveness = ?, ended_at = ?,
 			note = 'run never closed; task moved on without it'
 		WHERE liveness = ?
+		  AND started_at < ?
 		  AND task_id IN (
 		    SELECT t.id FROM tasks t WHERE t.id = task_runs.task_id
 		      AND NOT (t.state = ? AND t.claimed_by = task_runs.agent_id
 		               AND t.attempts = task_runs.attempt AND t.lease_until > ?)
 		  )
 		RETURNING id`,
-		RunLost, ts(now), RunRunning, TaskWorking, ts(now))
+		RunLost, ts(now), RunRunning, ts(now.Add(-olderThan)), TaskWorking, ts(now))
 	if err != nil {
 		return nil, fmt.Errorf("reap orphan runs: %w", err)
 	}
