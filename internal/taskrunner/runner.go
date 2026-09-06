@@ -178,6 +178,43 @@ func (r *Runner) sweep() {
 	} else if len(ids) > 0 {
 		log.Printf("taskrunner: opened %d task(s) whose assignee is gone: %v", len(ids), ids)
 	}
+	if ids, err := r.db.ReapOrphanRuns(); err != nil {
+		log.Printf("taskrunner: reap orphan runs: %v", err)
+	} else if len(ids) > 0 {
+		log.Printf("taskrunner: closed %d orphan run(s) as lost: %v", len(ids), ids)
+	}
+}
+
+// withRetry runs a ledger write that must not be dropped on a transient
+// database error. The shared file has several writers; even with immediate
+// transactions a busy timeout can still fire under load, and losing the close
+// of a run leaves it "running" forever. Semantic outcomes (lease lost, task
+// finished, not found) are returned at once — retrying them is meaningless.
+func withRetry(what string, fn func() error) error {
+	delay := 100 * time.Millisecond
+	var err error
+	for i := 0; i < 6; i++ {
+		err = fn()
+		if err == nil || !isTransient(err) {
+			return err
+		}
+		log.Printf("taskrunner: %s: %v — retrying in %s", what, err, delay)
+		time.Sleep(delay)
+		if delay < 2*time.Second {
+			delay *= 2
+		}
+	}
+	return err
+}
+
+func isTransient(err error) bool {
+	switch {
+	case errors.Is(err, coord.ErrLostLease), errors.Is(err, coord.ErrTaskFinished), errors.Is(err, coord.ErrNotFound):
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "SQLITE_LOCKED")
 }
 
 // claimAndRun takes one task and executes it. It reports whether it found work,
@@ -239,8 +276,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		}
 	}
 
-	run, err := r.db.StartRun(task.ID, r.cfg.AgentID, task.Attempts, span.TraceID())
-	if err != nil {
+	var run *coord.TaskRun
+	if err := withRetry("start run "+task.ID, func() (e error) {
+		run, e = r.db.StartRun(task.ID, r.cfg.AgentID, task.Attempts, span.TraceID())
+		return e
+	}); err != nil {
 		log.Printf("taskrunner: start run for %s: %v", task.ID, err)
 		return
 	}
@@ -297,7 +337,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	}
 	span.End(outcome.Result, spanErr)
 
-	final, finishErr := r.db.FinishRun(run.ID, outcome)
+	var final *coord.Task
+	finishErr := withRetry("finish run "+run.ID, func() (e error) {
+		final, e = r.db.FinishRun(run.ID, outcome)
+		return e
+	})
 	switch {
 	case errors.Is(finishErr, coord.ErrLostLease):
 		// Another agent took over and already answered; discarding this
