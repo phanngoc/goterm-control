@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // DB is the shared coordination database.
 type DB struct {
@@ -99,7 +99,8 @@ var ddl = []string{
 		ws_addr      TEXT NOT NULL DEFAULT '',  -- how a peer reaches it
 		workspace    TEXT NOT NULL DEFAULT '',
 		started_at   TEXT NOT NULL,
-		last_seen_at TEXT NOT NULL              -- heartbeat; stale ⇒ presumed dead
+		last_seen_at TEXT NOT NULL,             -- heartbeat; stale ⇒ presumed dead
+		scratch      TEXT NOT NULL DEFAULT ''   -- v4: what the agent's heartbeat should look at
 	) STRICT`,
 
 	// --- traces (LangSmith run tree) ----------------------------------------
@@ -181,6 +182,51 @@ var ddl = []string{
 	) STRICT`,
 	`CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at)`,
 
+	// --- schedules: automations decide WHEN, tasks record WHAT happened -----
+	// A schedule never runs a model itself. When it is due, an `agent` payload
+	// materialises one ordinary task row (kind='scheduled') that goes through
+	// claim/lease/fencing like any other; a `command` payload runs a shell
+	// command inside the gateway. next_run_at is the only "clock": firing is
+	// a compare-and-set on it, so two gateways that both see a due schedule
+	// produce exactly one run without a lock or a leader.
+	`CREATE TABLE IF NOT EXISTS schedules (
+		id                   TEXT PRIMARY KEY,          -- 'sch_' || uuid
+		name                 TEXT NOT NULL UNIQUE,
+		created_by           TEXT NOT NULL,
+		owner_agent          TEXT NOT NULL DEFAULT '',  -- '' = any gateway may fire it
+		kind                 TEXT NOT NULL,             -- at | every | cron
+		spec                 TEXT NOT NULL,             -- RFC3339 | duration | 5-field cron
+		tz                   TEXT NOT NULL,             -- IANA zone, always explicit
+		payload_kind         TEXT NOT NULL,             -- agent | command
+		payload              TEXT NOT NULL,             -- JSON
+		enabled              INTEGER NOT NULL DEFAULT 1,
+		system               INTEGER NOT NULL DEFAULT 0, -- 1 = owned by the gateway (heartbeat)
+		skip_missed          INTEGER NOT NULL DEFAULT 0, -- 1 = re-arm after downtime instead of catching up
+		next_run_at          TEXT NOT NULL,
+		last_run_at          TEXT NOT NULL DEFAULT '',
+		last_status          TEXT NOT NULL DEFAULT '',  -- ok | failed | skipped
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		created_at           TEXT NOT NULL,
+		updated_at           TEXT NOT NULL
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at)`,
+
+	// One row per firing. For an agent payload the row is 'pending' until the
+	// task it created reaches a terminal state; whichever gateway notices
+	// settles it (again by compare-and-set on status).
+	`CREATE TABLE IF NOT EXISTS schedule_runs (
+		id          TEXT PRIMARY KEY,               -- 'sr_' || uuid
+		schedule_id TEXT NOT NULL,
+		task_id     TEXT NOT NULL DEFAULT '',       -- when payload_kind = agent
+		started_at  TEXT NOT NULL,
+		ended_at    TEXT NOT NULL DEFAULT '',
+		status      TEXT NOT NULL,                  -- pending | ok | failed | skipped
+		exit_code   INTEGER NOT NULL DEFAULT 0,
+		output      TEXT NOT NULL DEFAULT ''        -- command output, cut to 8KB
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_schedule_runs ON schedule_runs(schedule_id, started_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_schedule_runs_pending ON schedule_runs(status, task_id)`,
+
 	`CREATE TABLE IF NOT EXISTS task_events (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
 		task_id    TEXT NOT NULL,
@@ -256,6 +302,11 @@ var v3Columns = []struct{ name, decl string }{
 	{"fail_reason", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v4Columns: the heartbeat scratchpad on agents. Same guard as v3Columns.
+var v4Columns = []struct{ table, name, decl string }{
+	{"agents", "scratch", "TEXT NOT NULL DEFAULT ''"},
+}
+
 // v3Indexes reference columns that v3Columns adds, so on a database created by
 // the previous version they can only be built after those columns exist — a
 // fresh database gets them from the CREATE TABLE and the ALTERs are no-ops,
@@ -272,6 +323,11 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v3Columns {
 		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v4Columns {
+		if err := db.ensureColumn(c.table, c.name, c.decl); err != nil {
 			return err
 		}
 	}
@@ -318,10 +374,19 @@ func firstLine(s string) string {
 	return s
 }
 
-// ts formats a timestamp the way every column in this schema stores it.
-// RFC3339 with nanoseconds sorts lexicographically, which the dotted_order
-// scheme and every "ORDER BY started_at" depend on.
-func ts(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+// ts formats a timestamp the way every column in this schema stores it. The
+// dotted_order scheme, every "ORDER BY started_at", every "lease_until <= now"
+// and the scheduler's "next_run_at <= now" compare these as strings, so the
+// format must sort like the instants do.
+//
+// time.RFC3339Nano does NOT: it trims trailing zeros from the fraction, so
+// "…00.1Z" sorts after "…00.10000001Z" ('Z' > '0') although it is earlier.
+// That made a task finished at .1 look unclaimable at .10000001 — a flake in
+// tests, a 10-minute lease wait in production. Nine fixed digits keep the
+// string order equal to the time order; parseTS still reads either form.
+func ts(t time.Time) string { return t.UTC().Format(tsLayout) }
+
+const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 // parseTS is the inverse of ts, tolerant of the plain RFC3339 rows that
 // hand-written or older data may contain.

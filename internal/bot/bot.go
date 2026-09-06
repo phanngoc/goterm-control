@@ -44,6 +44,27 @@ type Bot struct {
 // through the same path as Telegram messages (see Handler.RunTurn).
 func (b *Bot) Handler() *Handler { return b.handler }
 
+// Notify sends a message the gateway composed on its own initiative — a
+// schedule's result, a failure alert — to the people the config trusts. There
+// is no conversation to answer into, so the recipients are
+// security.allowed_user_ids (a private Telegram chat id equals the user id),
+// not whoever wrote last. With no allow-list there is nobody to tell; the line
+// goes to the log instead of to every stranger who ever messaged the bot.
+func (b *Bot) Notify(text string) {
+	if b == nil || b.handler == nil {
+		log.Printf("notify (no bot): %s", text)
+		return
+	}
+	ids := b.cfg.Security.AllowedUserIDs
+	if len(ids) == 0 {
+		log.Printf("notify (no allowed_user_ids to deliver to): %s", text)
+		return
+	}
+	for _, id := range ids {
+		b.handler.sendText(id, text)
+	}
+}
+
 // New creates and initialises the bot. db and sessions are shared with the
 // gateway so label renames and turn counters are visible to the dashboard
 // immediately (two managers on one SQLite file would clobber each other).
