@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ngocp/goterm-control/internal/chat"
+	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -34,6 +36,7 @@ type StreamCallbacks = chat.StreamCallbacks
 type Client struct {
 	systemPrompt string
 	workspace    string // working directory for the CLI subprocess
+	pool         *credentials.Pool
 }
 
 // New creates a Claude client backed by the claude CLI subprocess.
@@ -44,6 +47,48 @@ func New(systemPrompt string, executor *tools.Executor) *Client {
 	log.Printf("claude: subprocess client initialized")
 	return &Client{
 		systemPrompt: systemPrompt,
+	}
+}
+
+// SetPool attaches the credential pool this client rotates sessions across.
+// Nil, or an empty pool, keeps the previous behaviour exactly: run on whatever
+// credentials the process already has.
+func (c *Client) SetPool(p *credentials.Pool) { c.pool = p }
+
+// account resolves which credential this session runs under, pinning one on
+// the first turn. The pin is permanent for the session because the CLI stores
+// the conversation inside the account's own config directory — resuming it
+// from a different account would silently start a new one.
+func (c *Client) account(sess *session.Session) (credentials.Account, error) {
+	if c.pool.Empty() {
+		return credentials.Account{}, nil
+	}
+	pinned := sess.GetAccount()
+	acct, err := c.pool.Pick(pinned)
+	if err != nil {
+		return credentials.Account{}, err
+	}
+	if pinned == "" && acct.Name != "" {
+		sess.SetAccount(acct.Name)
+		c.pool.MarkStarted(acct.Name)
+		log.Printf("claude: session %s pinned to account %s", sess.ID, acct.Name)
+	}
+	return acct, nil
+}
+
+// recordOutcome feeds the pool this turn's result. Cancellation is the user
+// stopping the agent, not the account failing, so it is not held against it.
+func (c *Client) recordOutcome(acct credentials.Account, err error) {
+	if c.pool.Empty() || acct.Name == "" {
+		return
+	}
+	switch {
+	case err == nil:
+		c.pool.MarkSuccess(acct.Name)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		// not the account's fault
+	default:
+		c.pool.MarkFailure(acct.Name, err)
 	}
 }
 
@@ -102,7 +147,7 @@ type pendingCall struct {
 // modelID is the resolved model to use for this call.
 // memoryContext is appended to the system prompt (new sessions) or prepended to
 // the user message (resumed sessions) to inject cross-session memory.
-func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID string, userText string, memoryContext string, cb StreamCallbacks) error {
+func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID string, userText string, memoryContext string, cb StreamCallbacks) (err error) {
 	sessionID := sess.GetSessionID()
 	isNewSession := sessionID == ""
 
@@ -114,6 +159,18 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	if memoryContext != "" && isNewSession {
 		systemPrompt += memoryContext
 	}
+
+	// Resolve the credential before spawning: a pin that no longer names a
+	// configured account must fail the turn, not start a blank conversation
+	// under someone else's login.
+	acct, err := c.account(sess)
+	if err != nil {
+		return err
+	}
+	// Report how this account fared, on every exit path. A rate limit puts it
+	// on cooldown so NEW sessions go elsewhere; this one stays where its
+	// history is.
+	defer func() { c.recordOutcome(acct, err) }()
 
 	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)
 
@@ -129,8 +186,10 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// Pass user message via stdin (safe for arbitrary text).
 	cmd.Stdin = strings.NewReader(userText)
 
-	// Remove ANTHROPIC_API_KEY so CLI uses its own OAuth subscription.
-	cmd.Env = filteredEnv(envVarsToRemove)
+	// Remove ANTHROPIC_API_KEY so the CLI uses its own OAuth subscription,
+	// then let the chosen account override that: an API-key account puts one
+	// back, an OAuth account points CLAUDE_CONFIG_DIR at its own login.
+	cmd.Env = credentials.ApplyEnv(filteredEnv(envVarsToRemove), acct)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

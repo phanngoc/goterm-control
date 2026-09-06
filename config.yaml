@@ -29,6 +29,36 @@ tasks:
   poll_interval_seconds: 60
   timeout_minutes: 15
 
+# Credential pool. Leave `pool` empty (the default) and the agent runs on the
+# ambient login, exactly as before this existed.
+#
+# Rotation is per SESSION, never per turn. Both CLIs keep their session store
+# inside the same directory as their credentials — CLAUDE_CONFIG_DIR for claude,
+# CODEX_HOME for codex — so switching account mid-conversation would lose the
+# conversation. An account is chosen when a session starts and pinned for life;
+# `bomclaw accounts` shows which account holds what.
+#
+# Each account needs its OWN directory, logged in separately
+# (`CLAUDE_CONFIG_DIR=~/.claude-work claude` then /login, or
+#  `CODEX_HOME=~/.codex-work codex login`). Point two accounts at one directory
+# and they are the same identity, so rotating achieves nothing.
+accounts:
+  cooldown_minutes: 15        # after a rate limit, new sessions skip that account this long
+  pool: []
+  # pool:
+  #   # claude on separate OAuth subscriptions
+  #   - name: "personal"
+  #     config_dir: "~/.claude"
+  #   - name: "work"
+  #     config_dir: "~/.claude-work"
+  #   # claude on plain API keys instead (api_key_env keeps the secret out of this file)
+  #   - name: "key-a"
+  #     api_key_env: "ANTHROPIC_KEY_A"
+  #   # codex accounts — only used by an agent whose provider is codex
+  #   - name: "codex-main"
+  #     provider: "codex"
+  #     config_dir: "~/.codex"
+
 # Browser Bridge — the BomClaw Browser Bridge Chrome extension connects to this
 # gateway's /ext endpoint so the agent can drive the user's own, logged-in
 # browser through `bomclaw browser …`. Pair the extension with the token from

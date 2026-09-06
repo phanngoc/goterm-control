@@ -14,6 +14,7 @@ type Session struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 	ClaudeSessionID string    `json:"claude_session_id,omitempty"`
 	Provider        string    `json:"provider,omitempty"` // CLI that owns ClaudeSessionID ("claude", "codex")
+	Account         string    `json:"account,omitempty"`  // credential pool entry this session is pinned to
 	MessageCount    int       `json:"message_count"`
 	InputTokens     int       `json:"input_tokens"`
 	OutputTokens    int       `json:"output_tokens"`
@@ -57,6 +58,7 @@ type SessionSnapshot struct {
 	UpdatedAt       time.Time
 	ClaudeSessionID string
 	Provider        string
+	Account         string
 	MessageCount    int
 	InputTokens     int
 	OutputTokens    int
@@ -125,6 +127,25 @@ func (s *Session) SetProvider(name string) {
 	s.UpdatedAt = time.Now()
 }
 
+// GetAccount returns the credential pool entry this session is pinned to.
+// Empty means it was started before a pool existed, or with none configured —
+// the ambient credentials.
+func (s *Session) GetAccount() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Account
+}
+
+// SetAccount pins the session to a pool entry. Called once, when the CLI
+// session is created: both backends store the conversation inside the
+// account's own directory, so this is the only place it can ever be read from.
+func (s *Session) SetAccount(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Account = name
+	s.UpdatedAt = time.Now()
+}
+
 // IncrementMessages increments the turn counter after each exchange.
 func (s *Session) IncrementMessages() {
 	s.mu.Lock()
@@ -178,6 +199,9 @@ func (s *Session) Reset() {
 	defer s.mu.Unlock()
 	s.ClaudeSessionID = ""
 	s.Provider = ""
+	// The CLI session is gone, so the pin that pointed at where it lived must
+	// go too: the next turn picks an account fresh.
+	s.Account = ""
 	s.MessageCount = 0
 	s.MemoryFlushed = false
 	s.lastContextTokens = 0
@@ -305,6 +329,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 		UpdatedAt:       s.UpdatedAt,
 		ClaudeSessionID: s.ClaudeSessionID,
 		Provider:        s.Provider,
+		Account:         s.Account,
 		MessageCount:    s.MessageCount,
 		InputTokens:     s.InputTokens,
 		OutputTokens:    s.OutputTokens,

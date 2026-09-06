@@ -120,6 +120,8 @@ func main() {
 		runChat(os.Args[2:])
 	case "browser":
 		runBrowser(os.Args[2:])
+	case "accounts":
+		runAccounts(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -148,6 +150,7 @@ Commands:
   models             List available models
   chat               Interactive CLI chat with the agent (no gateway needed)
   browser            Drive the user's browser via the Browser Bridge extension
+  accounts           Show the credential pool and which accounts are healthy
   agents             List agents registered in the shared database
   task               Create, claim and finish work shared between agents
   note               Record and search what the agents have learned
@@ -326,6 +329,16 @@ func runGateway(args []string) {
 		}
 	}
 
+	// Credential pool: which accounts this agent rotates sessions across.
+	// Built before the bot so both it and the gateway report the same pool.
+	credPool, err := bot.PoolFromConfig(cfg)
+	if err != nil {
+		log.Fatalf("accounts: %v", err)
+	}
+	if !credPool.Empty() {
+		log.Printf("gateway: credential pool for %s: %s", cfg.Provider, strings.Join(credPool.Names(), ", "))
+	}
+
 	// Create the Telegram bot first so the gateway status RPC can report its
 	// live run state (menu bar tray polls /api/status).
 	var tgBot *bot.Bot
@@ -344,7 +357,7 @@ func runGateway(args []string) {
 	// task runs with full machine access and nobody is watching.
 	var runner *taskrunner.Runner
 	if coordDB != nil && cfg.Tasks.AutoClaim {
-		runner = taskrunner.New(coordDB, bot.NewChatClient(cfg, nil), gwTrace, taskrunner.Config{
+		runner = taskrunner.New(coordDB, bot.NewChatClientWithPool(cfg, nil, credPool), gwTrace, taskrunner.Config{
 			AgentID:  cfg.Agent.ID,
 			Model:    resolver.Default(),
 			Interval: time.Duration(cfg.Tasks.PollIntervalSeconds) * time.Second,
@@ -360,6 +373,7 @@ func runGateway(args []string) {
 		Resolver:      resolver,
 		Provider:      provider,
 		Browser:       browserHub,
+		Accounts:      credPool,
 		System:        cfg.Claude.SystemPrompt,
 		DataDir:       cfg.Session.DataDir,
 		Uptime:        func() time.Duration { return time.Since(startTime) },

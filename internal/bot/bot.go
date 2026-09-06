@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/codex"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
@@ -52,14 +54,41 @@ func (b *Bot) Handler() *Handler { return b.handler }
 // Exported because the task runner needs its own client: it executes queued
 // work in isolated sessions, alongside whatever the bot is chatting about.
 func NewChatClient(cfg *config.Config, executor *tools.Executor) chat.Client {
+	return NewChatClientWithPool(cfg, executor, nil)
+}
+
+// NewChatClientWithPool is NewChatClient with a credential pool attached. A
+// nil or empty pool leaves the client running on the ambient credentials,
+// which is what every install without an `accounts:` section does.
+func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *credentials.Pool) chat.Client {
 	if cfg.Provider == config.ProviderCodex {
 		c := codex.New(cfg.Claude.SystemPrompt)
 		c.SetWorkspace(cfg.Claude.Workspace)
+		c.SetPool(pool)
 		return c
 	}
 	c := claude.New(cfg.Claude.SystemPrompt, executor)
 	c.SetWorkspace(cfg.Claude.Workspace)
+	c.SetPool(pool)
 	return c
+}
+
+// PoolFromConfig builds this agent's credential pool from config. Accounts for
+// the other backend are ignored: an agent runs one CLI, and a codex login is
+// unreadable by claude.
+func PoolFromConfig(cfg *config.Config) (*credentials.Pool, error) {
+	accts := make([]credentials.Account, 0, len(cfg.Accounts.Pool))
+	for _, a := range cfg.Accounts.Pool {
+		accts = append(accts, credentials.Account{
+			Name:      a.Name,
+			Provider:  a.Provider,
+			ConfigDir: a.ConfigDir,
+			APIKey:    a.APIKey,
+			APIKeyEnv: a.APIKeyEnv,
+		})
+	}
+	return credentials.NewPool(cfg.Provider, accts,
+		time.Duration(cfg.Accounts.CooldownMinutes)*time.Minute)
 }
 
 func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *session.Manager) (*Bot, error) {
@@ -114,7 +143,14 @@ func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *sessio
 	// Nil coordDB (coord disabled) yields a nil recorder, which is a no-op.
 	rec := trace.New(coordDB, cfg.Agent.ID)
 
-	llm := NewChatClient(cfg, executor)
+	pool, err := PoolFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	if !pool.Empty() {
+		log.Printf("bot: credential pool for %s: %s", cfg.Provider, strings.Join(pool.Names(), ", "))
+	}
+	llm := NewChatClientWithPool(cfg, executor, pool)
 
 	// Message store (SQLite — conversation history)
 	messageStore := storage.NewMessageStore(db)

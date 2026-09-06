@@ -34,6 +34,7 @@ type Config struct {
 	Memory   MemoryConfig   `yaml:"memory"`
 	Gateway  GatewayConfig  `yaml:"gateway"`
 	Browser  BrowserConfig  `yaml:"browser"`
+	Accounts AccountsConfig `yaml:"accounts"`
 }
 
 // AgentConfig names this agent. Two agents on one machine MUST NOT share an
@@ -73,6 +74,35 @@ type TasksConfig struct {
 }
 
 // GatewayConfig holds gateway HTTP server settings.
+// AccountsConfig is the pool of credentials this agent rotates sessions
+// across. Leave `pool` empty and the agent runs on the ambient credentials,
+// exactly as it did before this existed.
+//
+// Rotation is per SESSION, never per turn: both CLIs keep their session store
+// inside the same directory as their credentials, so an account switch mid
+// conversation would lose the conversation. See internal/credentials.
+type AccountsConfig struct {
+	CooldownMinutes int             `yaml:"cooldown_minutes"` // skip an account this long after it reports a rate limit (default 15)
+	Pool            []AccountConfig `yaml:"pool"`
+}
+
+// AccountConfig is one credential in the pool.
+type AccountConfig struct {
+	Name     string `yaml:"name"`     // required; sessions pin to it, so renaming one strands its sessions
+	Provider string `yaml:"provider"` // "claude" | "codex"; defaults to the agent's provider
+
+	// ConfigDir is the CLI's own config+session directory — CLAUDE_CONFIG_DIR
+	// for claude, CODEX_HOME for codex. Each account needs a separate one,
+	// logged in separately, or they are all the same identity.
+	ConfigDir string `yaml:"config_dir"`
+
+	// APIKey runs a claude account on a plain API key instead of the OAuth
+	// subscription. APIKeyEnv names an environment variable to read it from,
+	// so the secret need not sit in config.yaml.
+	APIKey    string `yaml:"api_key"`
+	APIKeyEnv string `yaml:"api_key_env"`
+}
+
 // BrowserConfig groups browser control. Extension is the Browser Bridge: a
 // Chrome extension in the user's own browser that the agent drives through the
 // gateway (`bomclaw browser …`).
@@ -112,7 +142,7 @@ type AuthConfig struct {
 // ClaudeConfig is kept for backward compatibility — the claude CLI subprocess config.
 type ClaudeConfig struct {
 	APIKey           string `yaml:"api_key"`
-	Model            string `yaml:"model"`             // default model ID
+	Model            string `yaml:"model"` // default model ID
 	MaxTokens        int    `yaml:"max_tokens"`
 	SystemPrompt     string `yaml:"system_prompt"`
 	Workspace        string `yaml:"workspace"`         // working directory for claude CLI subprocess
@@ -121,8 +151,8 @@ type ClaudeConfig struct {
 
 // ModelsConfig defines available models and custom providers.
 type ModelsConfig struct {
-	Default  string                `yaml:"default"`  // default model ID (overrides claude.model)
-	Custom   []models.Model        `yaml:"custom"`   // additional model definitions
+	Default string         `yaml:"default"` // default model ID (overrides claude.model)
+	Custom  []models.Model `yaml:"custom"`  // additional model definitions
 }
 
 type TelegramConfig struct {
@@ -291,6 +321,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Browser.Extension.CallTimeoutSeconds == 0 {
 		cfg.Browser.Extension.CallTimeoutSeconds = 30
+	}
+	if cfg.Accounts.CooldownMinutes == 0 {
+		cfg.Accounts.CooldownMinutes = 15
 	}
 	if cfg.Telegram.Indicator.Enabled {
 		if len(cfg.Telegram.Indicator.Frames) == 0 {

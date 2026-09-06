@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/ngocp/goterm-control/internal/browserbridge"
+	"github.com/ngocp/goterm-control/internal/credentials"
 )
 
 // Request is a JSON-RPC-style request from a client.
@@ -59,6 +60,10 @@ type StatusResult struct {
 	Channels       []string              `json:"channels"`
 	Runs           []RunInfo             `json:"runs,omitempty"`    // in-flight agent runs (live)
 	Browser        *browserbridge.Status `json:"browser,omitempty"` // Browser Bridge; nil when disabled
+
+	// Accounts is the credential pool this agent rotates sessions across.
+	// Empty when none is configured, which means the ambient credentials.
+	Accounts []credentials.Status `json:"accounts,omitempty"`
 }
 
 // RunInfo describes one in-flight agent run for status consumers

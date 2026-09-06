@@ -16,6 +16,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/browserbridge"
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -68,6 +69,10 @@ type Deps struct {
 	// Browser relays actions to the user's own browser through the Browser
 	// Bridge extension. Nil when the bridge is disabled in config.
 	Browser *browserbridge.Hub
+
+	// Accounts is the credential pool sessions rotate across. Nil or empty
+	// means the ambient credentials.
+	Accounts *credentials.Pool
 }
 
 // TurnRunner is the slice of *bot.Handler the gateway needs. Declared here so
@@ -204,6 +209,7 @@ func handleStatus(deps Deps) (json.RawMessage, error) {
 		st := deps.Browser.Status()
 		result.Browser = &st
 	}
+	result.Accounts = deps.Accounts.Status()
 	return json.Marshal(result)
 }
 
