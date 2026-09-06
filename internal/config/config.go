@@ -25,6 +25,11 @@ type Config struct {
 	// Tasks controls whether this agent picks up work its peers queued.
 	Tasks TasksConfig `yaml:"tasks"`
 
+	// Schedules controls the scheduler loop that fires timed work from the
+	// shared database. Off until enabled, like everything that spends tokens
+	// or runs commands without a person typing.
+	Schedules SchedulesConfig `yaml:"schedules"`
+
 	Telegram TelegramConfig `yaml:"telegram"`
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Models   ModelsConfig   `yaml:"models"`
@@ -71,6 +76,15 @@ type TasksConfig struct {
 	AutoClaim           bool `yaml:"auto_claim"`
 	PollIntervalSeconds int  `yaml:"poll_interval_seconds"` // default 60
 	TimeoutMinutes      int  `yaml:"timeout_minutes"`       // default 15
+}
+
+// SchedulesConfig tunes the scheduler (docs/design/scheduling-and-long-tasks.md
+// §5.5). Every gateway on the machine may run it: firing is a compare-and-set
+// on the shared row, so two loops never fire one schedule twice.
+type SchedulesConfig struct {
+	Enabled               bool `yaml:"enabled"`
+	TickSeconds           int  `yaml:"tick_seconds"`            // default 30
+	CommandTimeoutSeconds int  `yaml:"command_timeout_seconds"` // default 60; a payload's timeout_s overrides
 }
 
 // GatewayConfig holds gateway HTTP server settings.
@@ -262,6 +276,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tasks.TimeoutMinutes == 0 {
 		cfg.Tasks.TimeoutMinutes = 15
+	}
+	if cfg.Schedules.TickSeconds == 0 {
+		cfg.Schedules.TickSeconds = 30
+	}
+	if cfg.Schedules.CommandTimeoutSeconds == 0 {
+		cfg.Schedules.CommandTimeoutSeconds = 60
 	}
 	if cfg.Telegram.Timeout == 0 {
 		cfg.Telegram.Timeout = 60

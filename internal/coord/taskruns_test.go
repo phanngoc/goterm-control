@@ -471,8 +471,8 @@ func TestMigrateV2DatabaseGainsV3Columns(t *testing.T) {
 	}
 	var ver string
 	_ = db.conn.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&ver)
-	if ver != "3" {
-		t.Errorf("schema_version = %s, want 3", ver)
+	if ver != fmt.Sprint(schemaVersion) {
+		t.Errorf("schema_version = %s, want %d", ver, schemaVersion)
 	}
 	// Re-opening (a second gateway) must not trip on the columns already existing.
 	db2, err := Open(path)
