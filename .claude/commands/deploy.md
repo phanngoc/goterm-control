@@ -30,14 +30,28 @@ artifacts into `~/.bomclaw/` and restart.
    swaps). Sign with the "BomClaw Code Signing" keychain identity — it keeps
    the TCC identity stable across deploys so Documents/Desktop grants survive
    binary swaps. Ad-hoc (`-s -`) is the fallback, but every ad-hoc rebuild is
-   a NEW TCC identity and macOS re-asks for folder permissions:
+   a NEW TCC identity and macOS re-asks for folder permissions.
+
+   **Verify the signature landed BEFORE restarting.** `codesign` can hang on a
+   keychain "allow access" dialog; a `timeout` kills it, and the file is left
+   with Go's linker ad-hoc signature (`Identifier=a.out`). launchd then kills
+   the new process at exec with `OS_REASON_CODESIGNING` — both gateways went
+   down for four minutes this way (2026-09-06). Never pipe `codesign` into
+   `tail` inside an `if`: the `if` tests `tail`'s exit code, not codesign's.
    ```bash
    cp bomclaw ~/.bomclaw/bomclaw
-   codesign -f -s "BomClaw Code Signing" --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw \
-     || codesign -f -s - --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
-   cp config.yaml ~/.bomclaw/config.yaml
-   cp .env ~/.bomclaw/.env
+   timeout 30 codesign -f -s "BomClaw Code Signing" --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
+   echo "codesign exit=$?"       # 124 = hung on the keychain dialog, see below
+   codesign -dv ~/.bomclaw/bomclaw 2>&1 | grep Identifier
+   # MUST print Identifier=com.bomclaw.gateway. If it prints Identifier=a.out,
+   # do NOT restart. Either click "Always Allow" on the keychain dialog and
+   # sign again, or fall back to ad-hoc to restore service:
+   #   codesign -f -s - --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
    rm -rf ~/.bomclaw/dashboard/dist && cp -R dashboard/dist ~/.bomclaw/dashboard/dist
+   # Do NOT copy config.yaml / .env over the live ones. ~/.bomclaw/config.yaml
+   # and ~/.bomclaw2/config.yaml have diverged from the repo template
+   # (agent name, auto_claim, system prompt edits). Diff and merge by hand:
+   #   diff ~/.bomclaw/config.yaml config.yaml
    # Agents call `bomclaw task/note/msg` from their own shell, and the launchd
    # PATH does not include ~/.bomclaw. The symlink target is stable, so this
    # only has to be created once — but check it, a wiped ~/.local/bin breaks
@@ -85,6 +99,10 @@ artifacts into `~/.bomclaw/` and restart.
      Verify the process runs from `~/.bomclaw` (NOT the repo path). Diagnose
      with: `launchctl submit -l t -o /tmp/t.out -- <binary> help` — if a repo
      path stalls but a `~/.bomclaw` copy prints usage, it's the TCC block.
+   - Process gone, `launchctl print gui/$(id -u)/com.bomclaw.gateway` shows
+     `last exit reason = OS_REASON_CODESIGNING` → the binary's signature is
+     not the identity's (step 3 verification skipped). Re-sign, verify the
+     Identifier, `launchctl kickstart -k gui/$(id -u)/com.bomclaw.gateway`.
    - `Conflict: terminated by other getUpdates` → redo step 4, then
      `curl "https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=true"`
 
