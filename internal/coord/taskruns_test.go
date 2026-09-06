@@ -584,7 +584,16 @@ func TestReapOrphanRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ids, err := db.ReapOrphanRuns()
+	// Young runs are never reaped, however their task looks: a peer's sweep
+	// cannot tell a live run whose agent just typed `task done` from a dead one.
+	if young, err := db.ReapOrphanRuns(time.Hour); err != nil {
+		t.Fatal(err)
+	} else if len(young) != 0 {
+		t.Fatalf("reaped %v though every run is seconds old — this is the race that closed a live run as lost", young)
+	}
+
+	// Past the age bound, the orphans go.
+	ids, err := db.ReapOrphanRuns(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,5 +611,32 @@ func TestReapOrphanRuns(t *testing.T) {
 	live, _ := db.TaskRuns(t2.ID)
 	if live[0].Liveness != RunRunning {
 		t.Errorf("live run was reaped: %+v", live[0])
+	}
+}
+
+// A run the sweep marked lost may still report in — the CLI was just slow to
+// exit. The runner's report is the fact and replaces the guess.
+func TestFinishRunOverwritesALostMarker(t *testing.T) {
+	db := testDB(t)
+	tk := newTask(t, db)
+	c, _ := db.ClaimTask("a1")
+	run, _ := db.StartRun(tk.ID, "a1", c.Attempts, "")
+	// The agent finished the task itself; a peer's sweep then closed the run.
+	_ = db.FinishTask(tk.ID, "a1", TaskCompleted, "done", c.Attempts)
+	if ids, _ := db.ReapOrphanRuns(0); len(ids) != 1 {
+		t.Fatalf("setup: expected the run to be reaped, got %v", ids)
+	}
+
+	_, err := db.FinishRun(run.ID, RunOutcome{Liveness: RunCompleted, Result: "done"})
+	if !errors.Is(err, ErrTaskFinished) {
+		t.Fatalf("expected ErrTaskFinished (task already completed by the agent), got %v", err)
+	}
+	runs, _ := db.TaskRuns(tk.ID)
+	if runs[0].Liveness != RunCompleted {
+		t.Errorf("run liveness = %s, want completed — the runner's report must replace the lost guess", runs[0].Liveness)
+	}
+	// But a run that genuinely ended cannot be reopened.
+	if _, err := db.FinishRun(run.ID, RunOutcome{Liveness: RunFailed}); err == nil {
+		t.Error("a completed run must not be re-closed")
 	}
 }
