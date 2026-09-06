@@ -80,6 +80,8 @@ interface Store {
 export type ExternalTurn = {
   sessionId: string
   phase: 'started' | 'finished'
+  kind?: 'chat' | 'task'   // absent = chat (older gateways)
+  taskId?: string
   at: number
 }
 

@@ -421,6 +421,45 @@ func (db *DB) SetSessionRef(taskID, agentID string, attempts int, ref SessionRef
 	return nil
 }
 
+// BlockTask parks a task the agent holds until a person or its children free
+// it. The agent types this from inside a run (`bomclaw task block`); the run
+// then ends and FinishRun records it as blocked without touching the task
+// again. Fenced like every other write from a holder.
+func (db *DB) BlockTask(taskID, agentID string, attempts int, on, note string) error {
+	switch on {
+	case BlockedOnChildren, BlockedOnHuman:
+	default:
+		return fmt.Errorf("coord: blocked_on must be %q or %q", BlockedOnChildren, BlockedOnHuman)
+	}
+	now := time.Now()
+	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = ?, lease_until = ?,
+			checkpoint = CASE WHEN ? != '' THEN ? ELSE checkpoint END, updated_at = ?
+		WHERE id = ? AND claimed_by = ? AND attempts = ? AND state = ?`,
+		TaskBlocked, on, ts(now), note, note, ts(now), taskID, agentID, attempts, TaskWorking)
+	if err != nil {
+		return fmt.Errorf("block task: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrLostLease
+	}
+	return db.appendEvent(taskID, agentID, TaskWorking, TaskBlocked, "blocked on "+on+": "+truncateNote(note))
+}
+
+// UnblockTask returns a blocked task to the queue — a person answering, or the
+// last child finishing. Not fenced: nobody holds a blocked task.
+func (db *DB) UnblockTask(taskID, byAgent, note string) error {
+	now := time.Now()
+	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', lease_until = ?, updated_at = ?
+		WHERE id = ? AND state = ?`, TaskSubmitted, ts(now), ts(now), taskID, TaskBlocked)
+	if err != nil {
+		return fmt.Errorf("unblock task: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("coord: task %s is not blocked", taskID)
+	}
+	return db.appendEvent(taskID, byAgent, TaskBlocked, TaskSubmitted, "unblocked: "+truncateNote(note))
+}
+
 // ReapExhausted moves tasks that have used every attempt into failed. Until
 // now they sat in `working` with an expired lease: unclaimable (ClaimTask
 // filters on attempts), yet counted as open and shown as "will be reclaimed".

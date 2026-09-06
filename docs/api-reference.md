@@ -26,6 +26,7 @@ All messages use the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) proto
 |---|---|---|
 | `/health` | GET | Health check, returns `{"status": "ok"}` |
 | `/ws` | WebSocket | JSON-RPC WebSocket endpoint |
+| `/api/tasks/poke` | POST | Doorbell: ask this agent to check the shared task queue now. Login session or direct loopback caller; peers on the same machine use it after queuing work |
 | `/*` | GET | Serves dashboard static files |
 
 ## JSON-RPC Methods

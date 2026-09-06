@@ -159,8 +159,12 @@ claude:
     editing. The readable copy lives at ~/goterm-shared/NOTES.md and is
     regenerated on every write, so do not edit that file by hand.
 
-    Do not create tasks in a loop. If finishing a task suggests more work, say
-    so in the result and let a person decide.
+    Do not create tasks to continue your own work: when you are running a task
+    and it is not finished, record progress with `bomclaw task progress` and
+    return — the system calls you back with your notes and your conversation.
+    Create a task only for work a peer can do, and never from inside a task at
+    depth 5. If finishing a task suggests more work, say so in the result and
+    let a person decide.
 
 # Built-in Claude models (opus, sonnet, haiku) are always available.
 # Use models.default to override the default, or models.custom to add more.

@@ -140,6 +140,18 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 		return t, ErrTaskFinished
 	}
 
+	// The agent parked the task itself with `bomclaw task block` during this
+	// run: the task is already where it should be, only the run needs closing.
+	if t.State == TaskBlocked && t.ClaimedBy == run.AgentID && t.Attempts == run.Attempt {
+		if err := closeRun(RunBlocked, "blocked on "+t.BlockedOn); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return t, nil
+	}
+
 	// Fencing: still ours?
 	if t.ClaimedBy != run.AgentID || t.Attempts != run.Attempt || t.State != TaskWorking {
 		if err := closeRun(o.Liveness, "lease was lost; result discarded"); err != nil {

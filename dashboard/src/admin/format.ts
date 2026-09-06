@@ -57,6 +57,25 @@ export const TASK_STATE_STYLE: Record<string, string> = {
   canceled:         'bg-gray-500/15 text-gray-400 ring-gray-500/30',
   rejected:         'bg-orange-500/15 text-orange-300 ring-orange-500/30',
   'input-required': 'bg-violet-500/15 text-violet-300 ring-violet-500/30',
+  blocked:          'bg-violet-500/15 text-violet-300 ring-violet-500/30',
+}
+
+// Run liveness colours: green for done, amber for "call me back", violet for
+// waiting, red for broke, grey for the run itself being cut off.
+export const RUN_LIVENESS_STYLE: Record<string, string> = {
+  running:   'bg-amber-500/15 text-amber-300 ring-amber-500/30',
+  completed: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30',
+  advanced:  'bg-sky-500/15 text-sky-300 ring-sky-500/30',
+  plan_only: 'bg-orange-500/15 text-orange-300 ring-orange-500/30',
+  empty:     'bg-orange-500/15 text-orange-300 ring-orange-500/30',
+  blocked:   'bg-violet-500/15 text-violet-300 ring-violet-500/30',
+  failed:    'bg-red-500/15 text-red-300 ring-red-500/30',
+  timed_out: 'bg-red-500/15 text-red-300 ring-red-500/30',
+  canceled:  'bg-gray-500/15 text-gray-400 ring-gray-500/30',
+}
+
+export function runLivenessStyle(l: string): string {
+  return RUN_LIVENESS_STYLE[l] ?? 'bg-gray-500/15 text-gray-400 ring-gray-500/30'
 }
 
 export function taskStateStyle(state: string): string {

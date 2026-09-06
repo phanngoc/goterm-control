@@ -162,6 +162,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleTaskCreate(deps, params)
 		case "tasks.cancel":
 			return handleTaskCancel(deps, params)
+		case "tasks.resume":
+			return handleTaskResume(deps, params)
 		case "messages.list":
 			return handleMessagesList(deps, params)
 		case "messages.send":

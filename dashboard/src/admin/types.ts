@@ -67,7 +67,25 @@ export interface Overview {
 
 export type TaskState =
   | 'submitted' | 'working' | 'completed'
-  | 'failed' | 'canceled' | 'rejected' | 'input-required'
+  | 'failed' | 'canceled' | 'rejected' | 'input-required' | 'blocked'
+
+// How ONE run of a task ended — a different vocabulary from TaskState on
+// purpose. A task is where the work stands; a run is one bounded attempt at it.
+export type RunLiveness =
+  | 'running' | 'completed' | 'advanced' | 'plan_only' | 'empty'
+  | 'blocked' | 'failed' | 'timed_out' | 'canceled'
+
+export interface TaskRun {
+  id: string
+  task_id: string
+  agent_id: string
+  attempt: number
+  liveness: RunLiveness
+  trace_id?: string
+  started_at: string
+  ended_at?: string
+  note?: string
+}
 
 export interface Task {
   id: string
@@ -87,6 +105,16 @@ export interface Task {
   depth: number
   created_at: string
   updated_at: string
+  // A task is many runs; these survive between them.
+  parent_id?: string
+  kind: 'manual' | 'scheduled' | 'heartbeat' | 'sub'
+  schedule_id?: string
+  checkpoint?: string
+  session_ref?: string
+  continuations: number
+  max_continuations: number
+  blocked_on?: 'children' | 'human' | ''
+  fail_reason?: 'exhausted' | 'continuations-exhausted' | 'empty-exhausted' | ''
 }
 
 export interface TaskEvent {
@@ -102,6 +130,7 @@ export interface TaskEvent {
 export interface TaskDetail {
   task: Task
   events: TaskEvent[]
+  runs: TaskRun[]
 }
 
 export interface Message {
