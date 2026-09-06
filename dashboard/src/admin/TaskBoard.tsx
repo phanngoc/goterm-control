@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Task, TaskDetail } from './types'
-import { ago, taskStateStyle, truncate } from './format'
+import { ago, runLivenessStyle, taskStateStyle, truncate } from './format'
+import { useStore } from '../stores/store'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -8,11 +9,21 @@ type Call = (method: string, params?: any) => Promise<any>
 // waiting, in flight, and finished.
 const LANES: { key: string; label: string; states: string[] }[] = [
   { key: 'queued', label: 'Queued', states: ['submitted'] },
-  { key: 'active', label: 'In flight', states: ['working', 'input-required'] },
+  { key: 'active', label: 'In flight', states: ['working', 'input-required', 'blocked'] },
   { key: 'done', label: 'Finished', states: ['completed', 'failed', 'canceled', 'rejected'] },
 ]
 
+// FAIL_REASON says why the SYSTEM gave up, in words a person acts on.
+const FAIL_REASON: Record<string, string> = {
+  'exhausted': 'every attempt ended without a result',
+  'continuations-exhausted': 'ran out of continuations — `bomclaw task resume` to grant more',
+  'empty-exhausted': 'kept returning nothing',
+}
+
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
+  // A lapsed lease on a task that still has attempts WILL be reclaimed. One
+  // that has none is failed by the reaper and shows up as failed — the old
+  // "will be reclaimed" on an exhausted task was a lie.
   const leaseExpired = task.state === 'working' && new Date(task.lease_until).getTime() < Date.now()
   return (
     <button
@@ -36,9 +47,20 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
         <span className="font-mono">{task.claimed_by || task.assigned_to || 'any'}</span>
         <span className="ml-auto">{ago(task.created_at)}</span>
       </div>
-      {(task.attempts > 1 || leaseExpired) && (
+      {task.state === 'failed' && task.fail_reason && (
+        <div className="mt-1.5 text-[11px] text-red-400">{FAIL_REASON[task.fail_reason] ?? task.fail_reason}</div>
+      )}
+      {task.state === 'blocked' && (
+        <div className="mt-1.5 text-[11px] text-violet-300">waiting on {task.blocked_on || 'a person'}</div>
+      )}
+      {task.state !== 'failed' && (task.attempts > 1 || task.continuations > 0 || leaseExpired) && (
         <div className="mt-1.5 text-[11px] text-amber-400">
-          {leaseExpired ? 'lease expired — will be reclaimed' : `attempt ${task.attempts}/${task.max_attempts}`}
+          {leaseExpired
+            ? 'lease lapsed — will be reclaimed'
+            : [
+                task.continuations > 0 ? `run ${task.continuations + 1}` : null,
+                task.attempts > 1 ? `attempt ${task.attempts}/${task.max_attempts}` : null,
+              ].filter(Boolean).join(' · ')}
         </div>
       )}
     </button>
@@ -73,8 +95,22 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
     }
   }
 
+  const resume = async () => {
+    setBusy(true)
+    try {
+      await call('tasks.resume', { id, more: 5 })
+      onChanged()
+      onClose()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const t = detail?.task
   const open = t && !['completed', 'failed', 'canceled', 'rejected'].includes(t.state)
+  const resumable = t && t.state === 'failed' && !!t.fail_reason
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onClick={onClose}>
@@ -97,8 +133,20 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
               <div>
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ring-1 ${taskStateStyle(t.state)}`}>{t.state}</span>
-                  <span className="text-[11px] text-gray-500">attempt {t.attempts}/{t.max_attempts} · depth {t.depth}</span>
+                  <span className="text-[11px] text-gray-500">
+                    attempt {t.attempts}/{t.max_attempts} · run {t.continuations + 1}/{t.max_continuations} · depth {t.depth}
+                    {t.kind !== 'manual' && <> · {t.kind}</>}
+                  </span>
                 </div>
+                {t.fail_reason && (
+                  <div className="mt-1 text-xs text-red-300">{FAIL_REASON[t.fail_reason] ?? t.fail_reason}</div>
+                )}
+                {t.state === 'blocked' && (
+                  <div className="mt-1 text-xs text-violet-300">
+                    waiting on {t.blocked_on || 'a person'}
+                    {t.blocked_on === 'human' && <> — answer with <code className="text-gray-400">bomclaw task answer --id {t.id} --note "…"</code></>}
+                  </div>
+                )}
                 <h3 className="mt-2 text-base text-gray-100">{t.title}</h3>
                 {t.body && (
                   <pre className="mt-2 text-xs text-gray-300 bg-gray-900 rounded p-3 ring-1 ring-gray-800 whitespace-pre-wrap break-words">
@@ -106,6 +154,15 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
                   </pre>
                 )}
               </div>
+
+              {t.checkpoint && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-1">Checkpoint · fed to the next run</div>
+                  <pre className="text-xs text-gray-300 bg-gray-900 rounded p-3 ring-1 ring-sky-500/20 whitespace-pre-wrap break-words">
+                    {t.checkpoint}
+                  </pre>
+                </div>
+              )}
 
               {t.result && (
                 <div>
@@ -122,6 +179,28 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
                 <div><dt className="text-gray-600">assigned to</dt><dd className="font-mono text-gray-300">{t.assigned_to || 'any'}</dd></div>
                 <div><dt className="text-gray-600">context</dt><dd className="font-mono text-gray-300 truncate">{t.context_id}</dd></div>
               </dl>
+
+              {detail!.runs?.length > 0 && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">Runs</div>
+                  <ol className="space-y-1.5">
+                    {detail!.runs.map((r, i) => {
+                      const ended = r.ended_at ? new Date(r.ended_at).getTime() : Date.now()
+                      const secs = Math.max(0, Math.round((ended - new Date(r.started_at).getTime()) / 1000))
+                      const dur = secs >= 60 ? `${Math.round(secs / 60)}m` : `${secs}s`
+                      return (
+                        <li key={r.id} className="flex items-baseline gap-2 text-xs">
+                          <span className="text-gray-600 font-mono shrink-0 w-4">{i + 1}.</span>
+                          <span className={`px-1.5 rounded ring-1 shrink-0 ${runLivenessStyle(r.liveness)}`}>{r.liveness}</span>
+                          <span className="text-gray-500 shrink-0">{dur}</span>
+                          <span className="font-mono text-gray-400 shrink-0">{r.agent_id}</span>
+                          {r.note && <span className="text-gray-500 truncate">{r.note}</span>}
+                        </li>
+                      )
+                    })}
+                  </ol>
+                </div>
+              )}
 
               {detail!.events.length > 0 && (
                 <div>
@@ -142,15 +221,27 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
           )}
         </div>
 
-        {open && (
-          <div className="px-4 py-3 border-t border-gray-800">
-            <button
-              onClick={cancel}
-              disabled={busy}
-              className="px-3 py-1.5 text-sm rounded ring-1 ring-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50"
-            >
-              Cancel task
-            </button>
+        {(open || resumable) && (
+          <div className="px-4 py-3 border-t border-gray-800 flex gap-2">
+            {open && (
+              <button
+                onClick={cancel}
+                disabled={busy}
+                className="px-3 py-1.5 text-sm rounded ring-1 ring-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+              >
+                Cancel task
+              </button>
+            )}
+            {resumable && (
+              <button
+                onClick={resume}
+                disabled={busy}
+                className="px-3 py-1.5 text-sm rounded ring-1 ring-sky-500/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
+                title="Grant 5 more attempts/continuations and put it back in the queue"
+              >
+                Resume (+5)
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -180,6 +271,13 @@ export default function TaskBoard({ call, agents }: { call: Call; agents: string
     const id = setInterval(load, 5000)
     return () => clearInterval(id)
   }, [load])
+
+  // A task run starting or finishing anywhere is pushed as session.turn with
+  // kind "task"; reload at once instead of waiting for the poll.
+  const externalTurn = useStore(s => s.externalTurn)
+  useEffect(() => {
+    if (externalTurn?.kind === 'task') load()
+  }, [externalTurn, load])
 
   const create = async () => {
     if (!title.trim()) return

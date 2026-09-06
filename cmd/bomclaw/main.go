@@ -391,8 +391,14 @@ func runGateway(args []string) {
 		// Dashboard messages run through the bot's turn engine, so both
 		// channels share one execution path: CLI tool loop, memory, trace.
 		deps.Turn = tgBot.Handler()
-		deps.Runs = func() []gateway.RunInfo {
-			var out []gateway.RunInfo
+	}
+	// Everything running right now, from both sources: chat turns and claimed
+	// tasks. The tray's awake-while-running mode, `bomclaw status` and the
+	// dashboard all read this list — a task run missing from it meant the Mac
+	// could sleep in the middle of one.
+	deps.Runs = func() []gateway.RunInfo {
+		var out []gateway.RunInfo
+		if tgBot != nil {
 			for _, s := range tgBot.Sessions().List() {
 				info := s.RunInfo()
 				if !info.Running {
@@ -406,10 +412,24 @@ func runGateway(args []string) {
 					LastTool:  info.LastTool,
 					ToolCount: info.ToolCount,
 					StartedAt: info.StartedAt.Format(time.RFC3339),
+					Kind:      "chat",
 				})
 			}
-			return out
 		}
+		for _, s := range runner.Live() {
+			info := s.RunInfo()
+			out = append(out, gateway.RunInfo{
+				ChatID:    s.ChatID,
+				SessionID: s.ID,
+				Task:      info.CurrentTask,
+				LastTool:  info.LastTool,
+				ToolCount: info.ToolCount,
+				StartedAt: info.StartedAt.Format(time.RFC3339),
+				Kind:      "task",
+				TaskID:    strings.TrimPrefix(s.ID, "task_"),
+			})
+		}
+		return out
 	}
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir(), authMgr)
@@ -432,10 +452,29 @@ func runGateway(args []string) {
 		// else would tell a browser showing that session to refresh.
 		tgBot.Handler().SetTurnListener(func(ev bot.TurnEvent) {
 			data, _ := json.Marshal(map[string]any{
-				"session_id": ev.SessionID, "chat_id": ev.ChatID, "phase": ev.Phase,
+				"session_id": ev.SessionID, "chat_id": ev.ChatID, "phase": ev.Phase, "kind": "chat",
 			})
 			srv.Broadcast(gateway.StreamEvent{Type: "event", Event: "session.turn", Data: string(data)})
 		})
+	}
+	// Task runs ride the same event so the task board updates the moment a run
+	// starts or ends, instead of on its next poll.
+	runner.SetEventListener(func(ev taskrunner.Event) {
+		data, _ := json.Marshal(map[string]any{
+			"session_id": ev.SessionID, "chat_id": -1, "phase": ev.Phase, "kind": "task", "task_id": ev.TaskID,
+		})
+		srv.Broadcast(gateway.StreamEvent{Type: "event", Event: "session.turn", Data: string(data)})
+	})
+
+	if coordDB != nil {
+		// The doorbell a peer rings when it queues work for this agent. Plain
+		// HTTP behind the same rule as /api/status — a login session, or a
+		// direct loopback caller — because the /ws route it used to go through
+		// refuses unauthenticated sockets whenever dashboard auth is on, and it
+		// is on by default, so every cross-agent poke was a 401. Mounted even
+		// when this agent does not claim tasks (runner nil → Poke is a no-op),
+		// so a peer never gets a 404 for ringing.
+		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(runner.Poke)))
 	}
 
 	// Start Telegram bot polling in background

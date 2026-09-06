@@ -150,6 +150,111 @@ func runTask(args []string) {
 		}
 		fmt.Printf("%s → %s\n", *id, state)
 
+	case "progress":
+		// The agent's own "here is how far I got". Fed into the next run's
+		// prompt, so a run that hits its time cap loses nothing it wrote down.
+		fs := flag.NewFlagSet("task progress", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		note := fs.String("note", "", "Where the work stands and what is left (required)")
+		attempts := fs.Int("attempts", 0, "The attempts value from claim (default: read from the task)")
+		fs.Parse(rest)
+		if *note == "" && fs.NArg() > 0 {
+			*note = strings.Join(fs.Args(), " ")
+		}
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		if *attempts == 0 {
+			*attempts = currentAttempts(db, *id, "task progress")
+		}
+		if err := db.SetCheckpoint(*id, requireAgent(*agent), *attempts, *note); err != nil {
+			fmt.Fprintf(os.Stderr, "task progress: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s checkpoint recorded\n", *id)
+
+	case "block":
+		// Park the task until a person answers or its children finish. The
+		// run ends right after; the system calls you back when it is unblocked.
+		fs := flag.NewFlagSet("task block", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		on := fs.String("on", coord.BlockedOnHuman, "What it waits for: human | children")
+		note := fs.String("note", "", "What you need (required for --on human)")
+		attempts := fs.Int("attempts", 0, "The attempts value from claim (default: read from the task)")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		if *attempts == 0 {
+			*attempts = currentAttempts(db, *id, "task block")
+		}
+		if err := db.BlockTask(*id, requireAgent(*agent), *attempts, *on, *note); err != nil {
+			fmt.Fprintf(os.Stderr, "task block: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s → blocked on %s\n", *id, *on)
+
+	case "unblock", "answer":
+		// A person (or the last child) freeing a blocked task. --note is the
+		// answer; it lands in the checkpoint so the next run reads it.
+		fs := flag.NewFlagSet("task "+sub, flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		note := fs.String("note", "", "The answer, or why it is free now")
+		fs.Parse(rest)
+		if *note == "" && fs.NArg() > 0 {
+			*note = strings.Join(fs.Args(), " ")
+		}
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		by := *agent
+		if strings.TrimSpace(by) == "" {
+			by = "human"
+		}
+		if *note != "" {
+			// Append the answer under the agent's own checkpoint rather than
+			// replacing it: the next run needs both.
+			if t, err := db.GetTask(*id); err == nil {
+				merged := strings.TrimSpace(t.Checkpoint)
+				if merged != "" {
+					merged += "\n\n"
+				}
+				merged += "Answer from " + by + ": " + *note
+				_, _ = db.Conn().Exec(`UPDATE tasks SET checkpoint = ? WHERE id = ?`, merged, *id)
+			}
+		}
+		if err := db.UnblockTask(*id, by, *note); err != nil {
+			fmt.Fprintf(os.Stderr, "task %s: %v\n", sub, err)
+			os.Exit(1)
+		}
+		gateway.NotifyAgents(db, "", "", "about unblocked "+*id)
+		fmt.Printf("%s → submitted\n", *id)
+
+	case "resume":
+		// Reopen a task the system gave up on (exhausted attempts or
+		// continuations). A person's call; grants more of whichever ran out.
+		fs := flag.NewFlagSet("task resume", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		more := fs.Int("more", 5, "How many more attempts/continuations to allow")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		by := *agent
+		if strings.TrimSpace(by) == "" {
+			by = "human"
+		}
+		if err := db.ResumeTask(*id, by, *more); err != nil {
+			fmt.Fprintf(os.Stderr, "task resume: %v\n", err)
+			os.Exit(1)
+		}
+		gateway.NotifyAgents(db, "", "", "about resumed "+*id)
+		fmt.Printf("%s → submitted (+%d)\n", *id, *more)
+
 	case "list":
 		fs := flag.NewFlagSet("task list", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
@@ -204,14 +309,43 @@ func runTask(args []string) {
 			os.Exit(1)
 		}
 		events, _ := db.TaskEvents(*id)
-		fmt.Printf("%s  [%s]  %s\n", task.ID, task.State, task.Title)
-		fmt.Printf("from %s → %s   attempts %d/%d   depth %d\n",
-			task.CreatedBy, orAny(task.ClaimedBy, task.AssignedTo), task.Attempts, task.MaxAttempts, task.Depth)
+		runs, _ := db.TaskRuns(*id)
+		state := task.State
+		if task.FailReason != "" {
+			state += " (" + task.FailReason + ")"
+		} else if task.BlockedOn != "" {
+			state += " on " + task.BlockedOn
+		}
+		fmt.Printf("%s  [%s]  %s\n", task.ID, state, task.Title)
+		fmt.Printf("from %s → %s   attempts %d/%d   continuations %d/%d   depth %d   kind %s\n",
+			task.CreatedBy, orAny(task.ClaimedBy, task.AssignedTo), task.Attempts, task.MaxAttempts,
+			task.Continuations, task.MaxContinuations, task.Depth, task.Kind)
+		if ref := coord.ParseSessionRef(task.SessionRef); ref.SessionID != "" {
+			fmt.Printf("session: %s/%s%s (next run resumes it on %s)\n",
+				ref.Provider, shortID(ref.SessionID), accountSuffix(ref.Account), orAny(task.AssignedTo, "any agent"))
+		}
 		if task.Body != "" {
 			fmt.Printf("\n%s\n", task.Body)
 		}
+		if task.Checkpoint != "" {
+			fmt.Printf("\ncheckpoint:\n%s\n", task.Checkpoint)
+		}
 		if task.Result != "" {
 			fmt.Printf("\nresult:\n%s\n", task.Result)
+		}
+		if len(runs) > 0 {
+			fmt.Println("\nruns:")
+			for i, r := range runs {
+				dur := "…"
+				if !r.EndedAt.IsZero() {
+					dur = r.EndedAt.Sub(r.StartedAt).Round(time.Second).String()
+				}
+				line := fmt.Sprintf("  %d. %s  %-10s %-8s %s", i+1, r.StartedAt.Local().Format("15:04:05"), r.Liveness, dur, r.AgentID)
+				if r.Note != "" {
+					line += "  — " + truncate(r.Note, 70)
+				}
+				fmt.Println(line)
+			}
 		}
 		if len(events) > 0 {
 			fmt.Println("\nhistory:")
@@ -227,6 +361,31 @@ func runTask(args []string) {
 	}
 }
 
+// currentAttempts reads the fencing token off the row when the caller did not
+// pass one — correct for the common single-claim case, same as `task done`.
+func currentAttempts(db *coord.DB, id, cmd string) int {
+	t, err := db.GetTask(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", cmd, err)
+		os.Exit(1)
+	}
+	return t.Attempts
+}
+
+func shortID(s string) string {
+	if len(s) > 12 {
+		return s[:12] + "…"
+	}
+	return s
+}
+
+func accountSuffix(a string) string {
+	if a == "" {
+		return ""
+	}
+	return " (account " + a + ")"
+}
+
 func taskUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: bomclaw task <command>
 
@@ -234,8 +393,12 @@ func taskUsage() {
   claim  [--json]                                           take the next claimable task
   done   --id ID [--result R] [--attempts N]                finish it
   fail   --id ID [--result R] [--attempts N]                give up on it
+  progress --id ID --note "..."                             record how far you got (fed to the next run)
+  block  --id ID --on human|children [--note "..."]         park it until answered / children finish
+  answer --id ID --note "..."                               (person) unblock with an answer
+  resume --id ID [--more N]                                 (person) reopen a task the system gave up on
   list   [--state S] [--mine] [--limit N]                   see the queue
-  show   --id ID                                            one task with its history
+  show   --id ID                                            one task: runs, checkpoint, history
 
 Every command accepts --agent (default $BOMCLAW_AGENT_ID) and --db.`)
 }

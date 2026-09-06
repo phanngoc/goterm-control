@@ -126,10 +126,12 @@ type taskIDParams struct {
 	ID string `json:"id"`
 }
 
-// TaskDetail is a task together with its audit trail.
+// TaskDetail is a task together with its audit trail and its run ledger: one
+// row per claim, each saying how that bounded attempt ended.
 type TaskDetail struct {
 	Task   *coord.Task       `json:"task"`
 	Events []coord.TaskEvent `json:"events"`
+	Runs   []coord.TaskRun   `json:"runs"`
 }
 
 func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -148,7 +150,33 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(TaskDetail{Task: task, Events: events})
+	runs, err := deps.Coord.TaskRuns(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(TaskDetail{Task: task, Events: events, Runs: runs})
+}
+
+type taskResumeParams struct {
+	ID   string `json:"id"`
+	More int    `json:"more,omitempty"`
+}
+
+// handleTaskResume reopens a task the system gave up on. A person's decision,
+// from the dashboard, so it carries no fencing token.
+func handleTaskResume(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p taskResumeParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if err := deps.Coord.ResumeTask(p.ID, deps.AgentID, p.More); err != nil {
+		return nil, err
+	}
+	go NotifyAgents(deps.Coord, "", "", "about resumed "+p.ID)
+	return json.Marshal(map[string]bool{"resumed": true})
 }
 
 type taskCreateParams struct {

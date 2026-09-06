@@ -63,7 +63,9 @@ export function useGateway() {
           if (msg.event === 'session.turn') {
             try {
               const d = JSON.parse(msg.data)
-              useStore.getState().setExternalTurn({ sessionId: d.session_id, phase: d.phase, at: Date.now() })
+              useStore.getState().setExternalTurn({
+                sessionId: d.session_id, phase: d.phase, kind: d.kind, taskId: d.task_id, at: Date.now(),
+              })
             } catch {}
           }
           return

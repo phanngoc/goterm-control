@@ -76,4 +76,10 @@ type RunInfo struct {
 	LastTool  string `json:"last_tool,omitempty"`
 	ToolCount int    `json:"tool_count"`
 	StartedAt string `json:"started_at"`
+
+	// Kind is "chat" for a conversation turn and "task" for a claimed task
+	// executing in the runner. Until task runs appeared here the tray's
+	// awake-while-running mode let the Mac sleep in the middle of one.
+	Kind   string `json:"kind,omitempty"`
+	TaskID string `json:"task_id,omitempty"`
 }
