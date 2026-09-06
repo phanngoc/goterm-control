@@ -3,7 +3,10 @@ package coord
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -477,4 +480,127 @@ func TestMigrateV2DatabaseGainsV3Columns(t *testing.T) {
 		t.Fatalf("second open: %v", err)
 	}
 	db2.Close()
+}
+
+// The production failure: FinishRun begins a read-then-write transaction while
+// the trace recorder is inserting spans into the same file from another
+// connection. With a deferred BEGIN the upgrade to a write lock fails at once
+// with SQLITE_BUSY (stale snapshot), ignoring busy_timeout, and the run is
+// never closed. With BEGIN IMMEDIATE it waits its turn. This test hammers
+// exactly that interleaving; it fails without _txlock=immediate in coord.Open.
+func TestFinishRunSurvivesConcurrentSpanWrites(t *testing.T) {
+	db := testDB(t)
+	const tasks = 40
+
+	var ids []string
+	for i := 0; i < tasks; i++ {
+		tk := newTask(t, db)
+		ids = append(ids, tk.ID)
+	}
+
+	// A writer that never stops: what the trace recorder looks like.
+	stop := make(chan struct{})
+	var writerErrs int64
+	var wg sync.WaitGroup
+	for w := 0; w < 3; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				id := fmt.Sprintf("run-%d-%d", w, i)
+				if err := db.InsertRun(&Run{ID: id, TraceID: id, DottedOrder: id, AgentID: "a1",
+					Name: "span", RunType: RunTypeTool, Status: StatusPending, StartedAt: time.Now()}); err != nil {
+					atomic.AddInt64(&writerErrs, 1)
+				}
+				_ = db.EndRun(id, time.Now(), "", "", 0, 0)
+			}
+		}(w)
+	}
+
+	var busy int64
+	var finishWG sync.WaitGroup
+	for _, id := range ids {
+		finishWG.Add(1)
+		go func(taskID string) {
+			defer finishWG.Done()
+			tk, err := db.ClaimTask("a1")
+			if err != nil {
+				atomic.AddInt64(&busy, 1)
+				return
+			}
+			run, err := db.StartRun(tk.ID, "a1", tk.Attempts, "")
+			if err != nil {
+				atomic.AddInt64(&busy, 1)
+				return
+			}
+			if _, err := db.FinishRun(run.ID, RunOutcome{Liveness: RunCompleted, Result: "ok"}); err != nil {
+				t.Logf("FinishRun: %v", err)
+				atomic.AddInt64(&busy, 1)
+			}
+		}(id)
+	}
+	finishWG.Wait()
+	close(stop)
+	wg.Wait()
+
+	if busy != 0 {
+		t.Fatalf("%d of %d run closes failed under concurrent span writes — a run left 'running' forever", busy, tasks)
+	}
+	var open int
+	_ = db.conn.QueryRow(`SELECT count(*) FROM task_runs WHERE liveness = ?`, RunRunning).Scan(&open)
+	if open != 0 {
+		t.Fatalf("%d runs still 'running' after every FinishRun returned", open)
+	}
+}
+
+// A run left 'running' after the task moved on — a crash mid-run, or a close
+// that failed — is closed as lost on the next sweep. A run whose claim is
+// genuinely still live is left alone.
+func TestReapOrphanRuns(t *testing.T) {
+	db := testDB(t)
+
+	// (a) task finished by the agent's own `task done`, run never closed
+	t1 := newTask(t, db)
+	c1, _ := db.ClaimTask("a1")
+	r1, _ := db.StartRun(t1.ID, "a1", c1.Attempts, "")
+	_ = db.FinishTask(t1.ID, "a1", TaskCompleted, "done", c1.Attempts)
+
+	// (b) live run: task working, same holder, lease in the future
+	t2 := newTask(t, db)
+	c2, _ := db.ClaimTask("a1")
+	r2, _ := db.StartRun(t2.ID, "a1", c2.Attempts, "")
+
+	// (c) the holder died; lease lapsed; someone else reclaimed (attempt 2)
+	t3 := newTask(t, db)
+	c3, _ := db.ClaimTask("a1")
+	r3, _ := db.StartRun(t3.ID, "a1", c3.Attempts, "")
+	_, _ = db.conn.Exec(`UPDATE tasks SET lease_until = ? WHERE id = ?`, ts(time.Now().Add(-time.Minute)), t3.ID)
+	if _, err := db.ClaimTask("a2"); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := db.ReapOrphanRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	if !got[r1.ID] || !got[r3.ID] || got[r2.ID] {
+		t.Fatalf("reaped %v; want r1 %s and r3 %s, not the live r2 %s", ids, r1.ID, r3.ID, r2.ID)
+	}
+	runs, _ := db.TaskRuns(t1.ID)
+	if runs[0].Liveness != RunLost || runs[0].EndedAt.IsZero() || runs[0].Note == "" {
+		t.Errorf("orphan should be lost with an end time and a note, got %+v", runs[0])
+	}
+	live, _ := db.TaskRuns(t2.ID)
+	if live[0].Liveness != RunRunning {
+		t.Errorf("live run was reaped: %+v", live[0])
+	}
 }

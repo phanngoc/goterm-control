@@ -53,7 +53,16 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("coord: mkdir %s: %w", filepath.Dir(path), err)
 	}
 
-	conn, err := sql.Open("sqlite", storage.DSN(path))
+	// _txlock=immediate makes every Begin() a BEGIN IMMEDIATE. This file is
+	// written by several connections at once — two gateway processes, plus the
+	// trace recorder's async spans inside each — and a transaction that starts
+	// deferred (read first, write later) cannot upgrade to a write lock if
+	// another writer committed in between: SQLite returns SQLITE_BUSY at once,
+	// ignoring busy_timeout, because the snapshot it read is already stale.
+	// FinishRun is exactly that shape, and a span landing between its SELECT
+	// and its UPDATE lost a run's outcome in production. Taking the write lock
+	// up front turns that into an ordinary wait.
+	conn, err := sql.Open("sqlite", storage.DSN(path)+"&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("coord: open %s: %w", path, err)
 	}

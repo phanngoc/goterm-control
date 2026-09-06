@@ -25,6 +25,7 @@ const (
 	RunFailed    = "failed"    // the run itself broke (CLI error, exception)
 	RunTimedOut  = "timed_out" // hit the per-run cap
 	RunCanceled  = "canceled"  // ctx cancelled: shutdown or a person stopping it
+	RunLost      = "lost"      // never closed: the process died, or the close failed; healed by ReapOrphanRuns
 )
 
 // TaskRun is one row of task_runs.
@@ -270,6 +271,39 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 	}
 	t.UpdatedAt = now
 	return t, nil
+}
+
+// ReapOrphanRuns closes runs still marked running whose claim is over: the
+// task has moved on (finished, requeued, reclaimed by someone else) or has been
+// unheld for longer than a lease, so no process can still be inside that run.
+// A gateway crash mid-run leaves exactly this behind; so did a FinishRun that
+// failed on a busy database. Marked lost, not failed — the outcome is unknown,
+// and the task's own state already says what happened to the work.
+func (db *DB) ReapOrphanRuns() ([]string, error) {
+	now := time.Now()
+	rows, err := db.conn.Query(`UPDATE task_runs SET liveness = ?, ended_at = ?,
+			note = 'run never closed; task moved on without it'
+		WHERE liveness = ?
+		  AND task_id IN (
+		    SELECT t.id FROM tasks t WHERE t.id = task_runs.task_id
+		      AND NOT (t.state = ? AND t.claimed_by = task_runs.agent_id
+		               AND t.attempts = task_runs.attempt AND t.lease_until > ?)
+		  )
+		RETURNING id`,
+		RunLost, ts(now), RunRunning, TaskWorking, ts(now))
+	if err != nil {
+		return nil, fmt.Errorf("reap orphan runs: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // TaskRuns lists a task's runs, oldest first.
