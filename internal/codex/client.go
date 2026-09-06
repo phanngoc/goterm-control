@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/ngocp/goterm-control/internal/chat"
+	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -35,11 +37,52 @@ const ProviderName = "codex"
 // Client wraps the codex CLI subprocess.
 type Client struct {
 	systemPrompt string
+	pool         *credentials.Pool
 	workspace    string // working directory for the CLI subprocess
 }
 
 // New creates a Codex client backed by the codex CLI subprocess.
 // The CLI manages its own auth (`codex login`) and its own tool loop.
+// SetPool attaches the credential pool this client rotates sessions across.
+// Nil, or an empty pool, keeps the previous behaviour: run on whatever
+// credentials the process already has.
+func (c *Client) SetPool(p *credentials.Pool) { c.pool = p }
+
+// account resolves which credential this thread runs under, pinning one on the
+// first turn. codex keeps its thread store inside CODEX_HOME alongside the
+// login, so a thread can only ever be resumed from the account that created it.
+func (c *Client) account(sess *session.Session) (credentials.Account, error) {
+	if c.pool.Empty() {
+		return credentials.Account{}, nil
+	}
+	pinned := sess.GetAccount()
+	acct, err := c.pool.Pick(pinned)
+	if err != nil {
+		return credentials.Account{}, err
+	}
+	if pinned == "" && acct.Name != "" {
+		sess.SetAccount(acct.Name)
+		c.pool.MarkStarted(acct.Name)
+		log.Printf("codex: session %s pinned to account %s", sess.ID, acct.Name)
+	}
+	return acct, nil
+}
+
+// recordOutcome feeds the pool this turn's result. Cancellation is the user
+// stopping the agent, not the account failing.
+func (c *Client) recordOutcome(acct credentials.Account, err error) {
+	if c.pool.Empty() || acct.Name == "" {
+		return
+	}
+	switch {
+	case err == nil:
+		c.pool.MarkSuccess(acct.Name)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	default:
+		c.pool.MarkFailure(acct.Name, err)
+	}
+}
+
 func New(systemPrompt string) *Client {
 	log.Printf("codex: subprocess client initialized")
 	return &Client{systemPrompt: systemPrompt}
@@ -59,7 +102,13 @@ func (c *Client) Name() string { return ProviderName }
 // them to <workspace>/AGENTS.md, which codex loads automatically — that writes
 // into the user's workspace, so it is deliberately not done here.)
 func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID string,
-	userText string, memoryContext string, cb chat.StreamCallbacks) error {
+	userText string, memoryContext string, cb chat.StreamCallbacks) (err error) {
+
+	acct, err := c.account(sess)
+	if err != nil {
+		return err
+	}
+	defer func() { c.recordOutcome(acct, err) }()
 
 	threadID := sess.GetSessionID()
 	// A thread started by another CLI cannot be resumed by codex — a provider
@@ -74,6 +123,9 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	args := buildArgs(modelID, threadID, isNewThread)
 
 	cmd := exec.CommandContext(ctx, codexBin, args...)
+	// codex has always inherited the ambient environment; the account layers
+	// CODEX_HOME on top so each login keeps its own threads.
+	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
 	if c.workspace != "" {
 		_ = os.MkdirAll(c.workspace, 0755)
 		cmd.Dir = c.workspace

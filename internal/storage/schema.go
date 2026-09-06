@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 // conversationDDL is shared by fresh installs (via ddl) and the v5→v6
 // migration, so the two can never drift apart.
@@ -50,7 +50,8 @@ var ddl = append([]string{
 		label             TEXT DEFAULT '',
 		seq               INTEGER DEFAULT 0,
 		memory_flushed    INTEGER DEFAULT 0,
-		provider          TEXT DEFAULT 'claude'
+		provider          TEXT DEFAULT 'claude',
+		account           TEXT DEFAULT ''
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_sessions_chat ON sessions(chat_id)`,
 
@@ -143,9 +144,30 @@ func (db *DB) migrate() error {
 		if err := db.migrateV5ToV6(); err != nil {
 			return fmt.Errorf("migrate v5→v6: %w", err)
 		}
-		return db.setVersion(6)
+		if err := db.setVersion(6); err != nil {
+			return err
+		}
+		ver = 6
+	}
+	if ver < 7 {
+		if err := db.migrateV6ToV7(); err != nil {
+			return fmt.Errorf("migrate v6→v7: %w", err)
+		}
+		return db.setVersion(7)
 	}
 	return nil
+}
+
+// migrateV6ToV7 adds the account column: which credential in the pool a
+// session runs under. Both CLIs keep their session store inside the same
+// directory as their credentials, so a session cannot be read from any other
+// account — the pin is what sends every later turn back to the right one.
+//
+// Existing rows stay empty, meaning "the ambient credentials", which is what
+// they were started on.
+func (db *DB) migrateV6ToV7() error {
+	_, err := db.conn.Exec(`ALTER TABLE sessions ADD COLUMN account TEXT DEFAULT ''`)
+	return err
 }
 
 // migrateV5ToV6 introduces conversations and channel bindings, and folds the

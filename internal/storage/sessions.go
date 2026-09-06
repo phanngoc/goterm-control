@@ -23,7 +23,7 @@ func (s *SQLiteSessionStore) Load() (map[int64]*session.ChatState, error) {
 	rows, err := s.db.conn.Query(`SELECT
 		id, chat_id, created_at, updated_at, claude_session_id,
 		message_count, input_tokens, output_tokens, compact_summary,
-		label, seq, memory_flushed, provider
+		label, seq, memory_flushed, provider, account
 		FROM sessions`)
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
@@ -38,11 +38,11 @@ func (s *SQLiteSessionStore) Load() (map[int64]*session.ChatState, error) {
 			createdStr, updatedStr       string
 			msgCount, inTok, outTok, seq int
 			memFlushed                   int
-			provider                     string
+			provider, account            string
 		)
 		if err := rows.Scan(&id, &chatID, &createdStr, &updatedStr, &claudeID,
 			&msgCount, &inTok, &outTok, &summary, &label, &seq, &memFlushed,
-			&provider); err != nil {
+			&provider, &account); err != nil {
 			continue
 		}
 
@@ -51,6 +51,7 @@ func (s *SQLiteSessionStore) Load() (map[int64]*session.ChatState, error) {
 
 		sess := session.NewFromDB(id, chatID, created, updated, claudeID, msgCount, inTok, outTok, summary, label, seq, memFlushed != 0)
 		sess.Provider = provider
+		sess.Account = account
 
 		cs, ok := chats[chatID]
 		if !ok {
@@ -115,12 +116,13 @@ func (s *SQLiteSessionStore) Save(chats map[int64]*session.ChatState) error {
 	sessStmt, err := tx.Prepare(`INSERT INTO sessions
 		(id, chat_id, created_at, updated_at, claude_session_id,
 		 message_count, input_tokens, output_tokens, compact_summary, label, seq,
-		 memory_flushed, provider)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 memory_flushed, provider, account)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			updated_at = excluded.updated_at,
 			claude_session_id = excluded.claude_session_id,
 			provider = excluded.provider,
+			account = excluded.account,
 			message_count = excluded.message_count,
 			input_tokens = excluded.input_tokens,
 			output_tokens = excluded.output_tokens,
@@ -155,7 +157,7 @@ func (s *SQLiteSessionStore) Save(chats map[int64]*session.ChatState) error {
 				snap.CreatedAt.Format(time.RFC3339), snap.UpdatedAt.Format(time.RFC3339),
 				snap.ClaudeSessionID, snap.MessageCount,
 				snap.InputTokens, snap.OutputTokens, snap.CompactSummary,
-				snap.Label, snap.Seq, memFlushed, snap.Provider,
+				snap.Label, snap.Seq, memFlushed, snap.Provider, snap.Account,
 			)
 			if err != nil {
 				return fmt.Errorf("upsert session %s: %w", snap.ID, err)

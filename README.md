@@ -225,6 +225,7 @@ bomclaw send        Send a message via the gateway
 bomclaw status      Show gateway status
 bomclaw models      List available models
 bomclaw browser     Drive your own browser via the Browser Bridge extension
+bomclaw accounts    Show the credential pool and which accounts are healthy
 ```
 
 ### Examples
