@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/storage"
@@ -25,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // DB is the shared coordination database.
 type DB struct {
@@ -139,10 +140,37 @@ var ddl = []string{
 		max_attempts INTEGER NOT NULL DEFAULT 3,
 		depth        INTEGER NOT NULL DEFAULT 0, -- guards agent ping-pong
 		created_at   TEXT NOT NULL,
-		updated_at   TEXT NOT NULL
+		updated_at   TEXT NOT NULL,
+		-- v3: a task is many runs. These columns carry what survives between them.
+		parent_id         TEXT NOT NULL DEFAULT '',   -- '' = a root task
+		kind              TEXT NOT NULL DEFAULT 'manual', -- manual | scheduled | heartbeat | sub
+		schedule_id       TEXT NOT NULL DEFAULT '',
+		checkpoint        TEXT NOT NULL DEFAULT '',   -- latest progress note, fed to the next run
+		session_ref       TEXT NOT NULL DEFAULT '',   -- JSON SessionRef: the CLI session to --resume
+		continuations     INTEGER NOT NULL DEFAULT 0, -- runs that ended "not done yet" (≠ attempts, which are failures)
+		max_continuations INTEGER NOT NULL DEFAULT 20,
+		blocked_on        TEXT NOT NULL DEFAULT '',   -- '' | children | human
+		fail_reason       TEXT NOT NULL DEFAULT ''    -- exhausted | continuations-exhausted | empty-exhausted
 	) STRICT`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(state, lease_until, priority DESC, created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_context   ON tasks(context_id)`,
+
+	// One row per claim. tasks.state says where the WORK is; a run's liveness
+	// says how ONE attempt at it ended. Keeping them apart is what lets a task
+	// outlive the 15-minute run cap without lying about either.
+	`CREATE TABLE IF NOT EXISTS task_runs (
+		id         TEXT PRIMARY KEY,
+		task_id    TEXT NOT NULL,
+		agent_id   TEXT NOT NULL,
+		attempt    INTEGER NOT NULL,            -- fencing token of this claim
+		liveness   TEXT NOT NULL DEFAULT 'running',
+		           -- running|completed|advanced|plan_only|empty|blocked|failed|timed_out|canceled
+		trace_id   TEXT NOT NULL DEFAULT '',
+		started_at TEXT NOT NULL,
+		ended_at   TEXT NOT NULL DEFAULT '',
+		note       TEXT NOT NULL DEFAULT ''
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at)`,
 
 	`CREATE TABLE IF NOT EXISTS task_events (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -203,8 +231,42 @@ var ddl = []string{
 	END`,
 }
 
+// v3Columns are the columns added to tasks after it first shipped. CREATE TABLE
+// IF NOT EXISTS leaves an existing table alone, so they are added one by one,
+// each guarded by a catalogue check — which also makes it safe for two gateways
+// to open the file at the same moment.
+var v3Columns = []struct{ name, decl string }{
+	{"parent_id", "TEXT NOT NULL DEFAULT ''"},
+	{"kind", "TEXT NOT NULL DEFAULT 'manual'"},
+	{"schedule_id", "TEXT NOT NULL DEFAULT ''"},
+	{"checkpoint", "TEXT NOT NULL DEFAULT ''"},
+	{"session_ref", "TEXT NOT NULL DEFAULT ''"},
+	{"continuations", "INTEGER NOT NULL DEFAULT 0"},
+	{"max_continuations", "INTEGER NOT NULL DEFAULT 20"},
+	{"blocked_on", "TEXT NOT NULL DEFAULT ''"},
+	{"fail_reason", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v3Indexes reference columns that v3Columns adds, so on a database created by
+// the previous version they can only be built after those columns exist — a
+// fresh database gets them from the CREATE TABLE and the ALTERs are no-ops,
+// but an upgraded one would fail with "no such column" if these sat in ddl.
+var v3Indexes = []string{
+	`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id, state)`,
+}
+
 func (db *DB) migrate() error {
 	for _, stmt := range ddl {
+		if _, err := db.conn.Exec(stmt); err != nil {
+			return fmt.Errorf("%s: %w", firstLine(stmt), err)
+		}
+	}
+	for _, c := range v3Columns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range v3Indexes {
 		if _, err := db.conn.Exec(stmt); err != nil {
 			return fmt.Errorf("%s: %w", firstLine(stmt), err)
 		}
@@ -214,6 +276,28 @@ func (db *DB) migrate() error {
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		fmt.Sprint(schemaVersion))
 	return err
+}
+
+// ensureColumn adds a column if the table does not have it yet. A concurrent
+// opener may add it between the check and the ALTER; that error is the one
+// benign outcome and is swallowed.
+func (db *DB) ensureColumn(table, column, decl string) error {
+	var n int
+	if err := db.conn.QueryRow(
+		`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return fmt.Errorf("inspect %s.%s: %w", table, column, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := db.conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl))
+	if err != nil && strings.Contains(err.Error(), "duplicate column") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 func firstLine(s string) string {

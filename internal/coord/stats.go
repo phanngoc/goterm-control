@@ -39,7 +39,7 @@ func (db *DB) Stats() (*Stats, error) {
 		}
 		s.TaskCounts[state] = n
 		switch state {
-		case TaskSubmitted, TaskWorking, TaskInputRequired:
+		case TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked:
 			s.OpenTasks += n
 		}
 	}
@@ -70,10 +70,7 @@ func (db *DB) Stats() (*Stats, error) {
 
 // GetTask loads one task by id.
 func (db *DB) GetTask(id string) (*Task, error) {
-	row := db.conn.QueryRow(`SELECT id, context_id, created_by, assigned_to,
-		claimed_by, state, priority, title, body, result, trace_id, lease_until,
-		attempts, max_attempts, depth, created_at, updated_at
-		FROM tasks WHERE id = ?`, id)
+	row := db.conn.QueryRow(`SELECT `+taskCols+` FROM tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

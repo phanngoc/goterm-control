@@ -2,6 +2,7 @@ package coord
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,8 +19,38 @@ const (
 	TaskFailed        = "failed"
 	TaskCanceled      = "canceled"
 	TaskRejected      = "rejected"
-	TaskInputRequired = "input-required"
+	TaskInputRequired = "input-required" // legacy; new code uses TaskBlocked + BlockedOn
+	TaskBlocked       = "blocked"        // waiting on children or a human; not claimable
 )
+
+// Task kinds: how a task came to exist.
+const (
+	KindManual    = "manual"    // a person or an agent queued it
+	KindScheduled = "scheduled" // materialised from a schedule
+	KindHeartbeat = "heartbeat"
+	KindSub       = "sub" // a child of another task
+)
+
+// What a task can be blocked on.
+const (
+	BlockedOnChildren = "children"
+	BlockedOnHuman    = "human"
+)
+
+// Fail reasons: why the system, rather than the agent, gave up.
+const (
+	FailExhausted              = "exhausted"               // max_attempts of runtime failures
+	FailContinuationsExhausted = "continuations-exhausted" // ran max_continuations times without finishing
+	FailEmptyExhausted         = "empty-exhausted"         // kept returning nothing
+)
+
+// DefaultMaxContinuations bounds how many "not done yet" runs a task may take.
+// At the default 15-minute run cap this is roughly five hours of actual work.
+const DefaultMaxContinuations = 20
+
+// maxEmptyRuns is how many empty replies a task tolerates before it is failed:
+// an agent that returns nothing twice is not going to return something.
+const maxEmptyRuns = 2
 
 // DefaultLease is how long a claim holds a task before other agents may take
 // it. An agent that dies mid-task simply stops renewing and the work returns.
@@ -55,7 +86,54 @@ type Task struct {
 	Depth       int       `json:"depth"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+
+	// A task is many runs; these survive between them.
+	ParentID         string `json:"parent_id,omitempty"`
+	Kind             string `json:"kind"`
+	ScheduleID       string `json:"schedule_id,omitempty"`
+	Checkpoint       string `json:"checkpoint,omitempty"`  // latest progress note, fed to the next run
+	SessionRef       string `json:"session_ref,omitempty"` // JSON SessionRef; the CLI session to --resume
+	Continuations    int    `json:"continuations"`
+	MaxContinuations int    `json:"max_continuations"`
+	BlockedOn        string `json:"blocked_on,omitempty"`
+	FailReason       string `json:"fail_reason,omitempty"`
 }
+
+// SessionRef names the CLI session a task's work lives in. Both CLIs keep the
+// session inside the account's config directory, so a continuation can only
+// --resume it from the same agent and account — which is why all three are
+// recorded, and why a task with a SessionRef is soft-pinned to its agent.
+type SessionRef struct {
+	Provider  string `json:"provider"`
+	SessionID string `json:"session_id"`
+	Account   string `json:"account,omitempty"`
+}
+
+// ParseSessionRef decodes tasks.session_ref; empty or malformed yields a zero ref.
+func ParseSessionRef(raw string) SessionRef {
+	var r SessionRef
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &r)
+	}
+	return r
+}
+
+// String encodes the ref for storage.
+func (r SessionRef) String() string {
+	if r.SessionID == "" {
+		return ""
+	}
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+// taskCols is every column of tasks in scanTask order. One list, so a column
+// added in a migration cannot be read by one query and forgotten by another.
+const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
+	priority, title, body, result, trace_id, lease_until, attempts,
+	max_attempts, depth, created_at, updated_at,
+	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
+	max_continuations, blocked_on, fail_reason`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -77,6 +155,9 @@ type NewTask struct {
 	Priority   int
 	ContextID  string // "" starts a new chain
 	Depth      int    // parent depth + 1 when an agent spawns follow-up work
+	ParentID   string // set for a child task; see KindSub
+	Kind       string // "" = KindManual
+	ScheduleID string
 }
 
 // CreateTask records new work. It refuses to go past MaxDepth so a pair of
@@ -91,32 +172,43 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 
 	now := time.Now()
 	t := &Task{
-		ID:          "t_" + uuid.NewString(),
-		ContextID:   n.ContextID,
-		CreatedBy:   n.CreatedBy,
-		AssignedTo:  n.AssignedTo,
-		State:       TaskSubmitted,
-		Priority:    n.Priority,
-		Title:       n.Title,
-		Body:        n.Body,
-		LeaseUntil:  now, // already in the past ⇒ immediately claimable
-		MaxAttempts: 3,
-		Depth:       n.Depth,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:               "t_" + uuid.NewString(),
+		ContextID:        n.ContextID,
+		CreatedBy:        n.CreatedBy,
+		AssignedTo:       n.AssignedTo,
+		State:            TaskSubmitted,
+		Priority:         n.Priority,
+		Title:            n.Title,
+		Body:             n.Body,
+		LeaseUntil:       now, // already in the past ⇒ immediately claimable
+		MaxAttempts:      3,
+		Depth:            n.Depth,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		ParentID:         n.ParentID,
+		Kind:             n.Kind,
+		ScheduleID:       n.ScheduleID,
+		MaxContinuations: DefaultMaxContinuations,
 	}
 	if t.ContextID == "" {
 		t.ContextID = "ctx_" + uuid.NewString()
+	}
+	if t.Kind == "" {
+		t.Kind = KindManual
 	}
 
 	_, err := db.conn.Exec(`INSERT INTO tasks
 		(id, context_id, created_by, assigned_to, claimed_by, state, priority,
 		 title, body, result, trace_id, lease_until, attempts, max_attempts, depth,
-		 created_at, updated_at)
-		VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, '', '', ?, 0, ?, ?, ?, ?)`,
+		 created_at, updated_at,
+		 parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
+		 max_continuations, blocked_on, fail_reason)
+		VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, '', '', ?, 0, ?, ?, ?, ?,
+		        ?, ?, ?, '', '', 0, ?, '', '')`,
 		t.ID, t.ContextID, t.CreatedBy, t.AssignedTo, t.State, t.Priority,
 		t.Title, t.Body, ts(t.LeaseUntil), t.MaxAttempts, t.Depth,
-		ts(t.CreatedAt), ts(t.UpdatedAt))
+		ts(t.CreatedAt), ts(t.UpdatedAt),
+		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
 	}
@@ -149,9 +241,7 @@ func (db *DB) ClaimTask(agentID string) (*Task, error) {
 			ORDER BY priority DESC, created_at
 			LIMIT 1
 		)
-		RETURNING id, context_id, created_by, assigned_to, claimed_by, state,
-		          priority, title, body, result, trace_id, lease_until, attempts,
-		          max_attempts, depth, created_at, updated_at`,
+		RETURNING `+taskCols,
 		TaskWorking, agentID, ts(now.Add(DefaultLease)), ts(now),
 		TaskSubmitted, TaskWorking, ts(now), agentID)
 
@@ -219,8 +309,8 @@ func (db *DB) AttachTrace(taskID, traceID string) error {
 // which is not the claiming agent and so carries no fencing token.
 func (db *DB) CancelTask(taskID, byAgent string) error {
 	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, updated_at = ?
-		WHERE id = ? AND state IN (?, ?, ?)`,
-		TaskCanceled, ts(time.Now()), taskID, TaskSubmitted, TaskWorking, TaskInputRequired)
+		WHERE id = ? AND state IN (?, ?, ?, ?)`,
+		TaskCanceled, ts(time.Now()), taskID, TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked)
 	if err != nil {
 		return fmt.Errorf("cancel task: %w", err)
 	}
@@ -255,9 +345,7 @@ func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
 	}
 	args = append(args, limit)
 
-	rows, err := db.conn.Query(`SELECT id, context_id, created_by, assigned_to,
-		claimed_by, state, priority, title, body, result, trace_id, lease_until,
-		attempts, max_attempts, depth, created_at, updated_at
+	rows, err := db.conn.Query(`SELECT `+taskCols+`
 		FROM tasks WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY created_at DESC LIMIT ?`, args...)
 	if err != nil {
@@ -298,6 +386,140 @@ func (db *DB) TaskEvents(taskID string) ([]TaskEvent, error) {
 	return out, rows.Err()
 }
 
+// SetCheckpoint records progress on a task the agent currently holds. Fenced
+// by attempts like FinishTask: a note from a lease that was lost must not land
+// on the new owner's task.
+func (db *DB) SetCheckpoint(taskID, agentID string, attempts int, note string) error {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return fmt.Errorf("coord: checkpoint note is required")
+	}
+	res, err := db.conn.Exec(`UPDATE tasks SET checkpoint = ?, updated_at = ?
+		WHERE id = ? AND claimed_by = ? AND attempts = ? AND state = ?`,
+		note, ts(time.Now()), taskID, agentID, attempts, TaskWorking)
+	if err != nil {
+		return fmt.Errorf("set checkpoint: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrLostLease
+	}
+	return db.appendEvent(taskID, agentID, TaskWorking, TaskWorking, "checkpoint: "+truncateNote(note))
+}
+
+// SetSessionRef records which CLI session a task's work lives in, so a later
+// run can --resume it. Fenced the same way.
+func (db *DB) SetSessionRef(taskID, agentID string, attempts int, ref SessionRef) error {
+	res, err := db.conn.Exec(`UPDATE tasks SET session_ref = ?, updated_at = ?
+		WHERE id = ? AND claimed_by = ? AND attempts = ?`,
+		ref.String(), ts(time.Now()), taskID, agentID, attempts)
+	if err != nil {
+		return fmt.Errorf("set session ref: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrLostLease
+	}
+	return nil
+}
+
+// ReapExhausted moves tasks that have used every attempt into failed. Until
+// now they sat in `working` with an expired lease: unclaimable (ClaimTask
+// filters on attempts), yet counted as open and shown as "will be reclaimed".
+// Returns the ids it failed.
+func (db *DB) ReapExhausted() ([]string, error) {
+	now := ts(time.Now())
+	rows, err := db.conn.Query(`UPDATE tasks SET state = ?, fail_reason = ?, updated_at = ?
+		WHERE state = ? AND lease_until <= ? AND attempts >= max_attempts
+		RETURNING id`,
+		TaskFailed, FailExhausted, now, TaskWorking, now)
+	if err != nil {
+		return nil, fmt.Errorf("reap exhausted: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		_ = db.appendEvent(id, "system", TaskWorking, TaskFailed,
+			"exhausted: every attempt ended without a result")
+	}
+	return ids, rows.Err()
+}
+
+// RelaxDeadAssignments frees tasks addressed to an agent that has stopped
+// heartbeating: assigned_to goes back to "anyone", and the session ref is
+// dropped because no other agent can resume a session that lives in the dead
+// agent's config directory — the next run starts from the checkpoint instead.
+// Returns the ids it relaxed.
+func (db *DB) RelaxDeadAssignments(staleAfter time.Duration) ([]string, error) {
+	cutoff := ts(time.Now().Add(-staleAfter))
+	rows, err := db.conn.Query(`UPDATE tasks SET assigned_to = '', session_ref = '', updated_at = ?
+		WHERE state = ? AND assigned_to != ''
+		  AND assigned_to IN (SELECT id FROM agents WHERE last_seen_at < ?)
+		RETURNING id, assigned_to`,
+		ts(time.Now()), TaskSubmitted, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("relax dead assignments: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id, was string
+		if err := rows.Scan(&id, &was); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		_ = db.appendEvent(id, "system", TaskSubmitted, TaskSubmitted,
+			"assignee stopped heartbeating; task opened to any agent, session dropped")
+	}
+	return ids, rows.Err()
+}
+
+// ResumeTask reopens a task the system gave up on, granting `more` further
+// attempts or continuations depending on why it stopped. This is a person's
+// decision, so it is not fenced.
+func (db *DB) ResumeTask(taskID, byAgent string, more int) error {
+	if more <= 0 {
+		more = 5
+	}
+	t, err := db.GetTask(taskID)
+	if err != nil {
+		return err
+	}
+	if t.State != TaskFailed {
+		return fmt.Errorf("coord: task %s is %s, only a failed task can be resumed", taskID, t.State)
+	}
+	set := "max_attempts = max_attempts + ?"
+	switch t.FailReason {
+	case FailContinuationsExhausted:
+		set = "max_continuations = max_continuations + ?"
+	case FailEmptyExhausted:
+		// Empties are not counted on the task; just reopen and let the run
+		// counter start over from this point.
+		set = "max_continuations = max_continuations + ?"
+	}
+	_, err = db.conn.Exec(`UPDATE tasks SET state = ?, fail_reason = '', lease_until = ?, updated_at = ?, `+set+`
+		WHERE id = ?`, TaskSubmitted, ts(time.Now()), ts(time.Now()), more, taskID)
+	if err != nil {
+		return fmt.Errorf("resume task: %w", err)
+	}
+	return db.appendEvent(taskID, byAgent, TaskFailed, TaskSubmitted,
+		fmt.Sprintf("resumed by %s (+%d)", byAgent, more))
+}
+
+func truncateNote(s string) string {
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:199]) + "…"
+	}
+	return s
+}
+
 func (db *DB) appendEvent(taskID, agentID, from, to, note string) error {
 	_, err := db.conn.Exec(`INSERT INTO task_events
 		(task_id, agent_id, from_state, to_state, note, created_at)
@@ -314,7 +536,9 @@ func scanTask(s scanner) (*Task, error) {
 	var lease, created, updated string
 	if err := s.Scan(&t.ID, &t.ContextID, &t.CreatedBy, &t.AssignedTo, &t.ClaimedBy,
 		&t.State, &t.Priority, &t.Title, &t.Body, &t.Result, &t.TraceID,
-		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated); err != nil {
+		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
+		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
+		&t.MaxContinuations, &t.BlockedOn, &t.FailReason); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)
