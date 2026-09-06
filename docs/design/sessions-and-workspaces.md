@@ -321,7 +321,7 @@ submitted → working → in_review → completed
 | **S2 — Một nguồn lịch sử** | Cả hai kênh ghi `messages` + transcript; UI đọc `messages` | Bỏ được giới hạn cắt 40 message của đường web |
 | **S3 — Session workspace** | `~/.goterm/sessions/<id>/`, inject vào prompt, chuyển `inputs`/`outputs` lớn ra file | Agent đặt sản phẩm đúng chỗ; bảng `runs` ngừng phình |
 | **S4 — Nối task** | `tasks.session_id`, `sessions.task_id`; taskrunner dùng session thật | Từ admin page bấm task → xem được artifact và trace của nó |
-| **S5 — Heartbeat & trạng thái** | `assignment`/`comment` wake, cờ busy, `in_review` + `blocked` | Giao task đích danh → agent nhận trong vài giây, không đợi 60s |
+| **S5 — Heartbeat & trạng thái** | `assignment`/`comment` wake, cờ busy, `in_review` + `blocked` | Giao task đích danh → agent nhận trong vài giây, không đợi 60s. **Thiết kế chi tiết + mở rộng (lịch, task cha–con, chạy dài): [scheduling-and-long-tasks.md](./scheduling-and-long-tasks.md)** |
 
 S0 chặn tất cả. Làm S1 trước S0 sẽ được một hội thoại nhìn liền mạch nhưng hành xử khác nhau tuỳ chỗ gõ — tệ hơn hiện tại, vì hiện tại ít nhất người dùng biết đó là hai chỗ.
 
