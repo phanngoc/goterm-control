@@ -48,7 +48,7 @@ func TestBuildExecStart(t *testing.T) {
 
 func TestBuildEnvironmentLines(t *testing.T) {
 	env := map[string]string{
-		"HOME":             "/home/user",
+		"HOME":              "/home/user",
 		"ANTHROPIC_API_KEY": "sk-test-123",
 	}
 	got := buildEnvironmentLines(env)

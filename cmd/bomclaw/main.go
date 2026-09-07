@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -191,7 +192,13 @@ func runGateway(args []string) {
 	envPath := fs.String("env", ".env", "Path to .env file")
 	bind := fs.String("bind", "127.0.0.1", "Bind address")
 	port := fs.Int("port", 18789, "Gateway port")
+	logFile := fs.String("log-file", "", "Also append log output to this file (Task Scheduler cannot redirect a task's output)")
 	fs.Parse(args)
+
+	// Before anything else logs, or the first lines only reach stderr.
+	if *logFile != "" {
+		startFileLogging(*logFile)
+	}
 
 	loadEnv(*envPath)
 
@@ -888,6 +895,32 @@ func resolveBinaryPath() (string, error) {
 		fmt.Fprintln(os.Stderr, "Warning: binary is in a temp directory — install from a stable path")
 	}
 	return real, nil
+}
+
+// startFileLogging tees the log to a file as well as stderr.
+//
+// This exists because Task Scheduler cannot redirect a task's output. The first
+// attempt wrapped the action in `cmd /c ... >>log`, which was worse than it
+// looks: Task Scheduler then manages cmd rather than the gateway, so ending the
+// task orphaned a live gateway that went on holding the inherited log handle —
+// and every later start failed, because cmd could not reopen a file the orphan
+// still had open. Writing the log from inside the process keeps the gateway
+// itself as the task's action, which is what makes stop, status and the
+// keep-alive work at all.
+//
+// The file is intentionally never closed: it lives exactly as long as the
+// process does.
+func startFileLogging(path string) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		log.Printf("gateway: could not create log dir for %s: %v", path, err)
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("gateway: could not open --log-file %s: %v", path, err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
 }
 
 // serviceLogHint names where the installed gateway's output ends up, which
