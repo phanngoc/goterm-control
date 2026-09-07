@@ -232,6 +232,28 @@ Scheduler under the **BomClaw** folder. Its generated definition is kept at
 `%LOCALAPPDATA%\BomClaw\bomclaw-gateway.xml`, and gateway output goes to
 `%USERPROFILE%\.goterm\logs\gateway.log` and `gateway.err.log`.
 
+### Optional — tray icon
+
+`bomtray` puts a status dot in the notification area, the counterpart of the
+macOS menu bar item: it polls every gateway, shows the current run, opens the
+dashboard, tails the log, restarts the service, and can keep the machine awake
+while an agent is working.
+
+```powershell
+.\bomtray.exe install     # starts now and at every logon (HKCU Run key)
+.\bomtray.exe uninstall
+```
+
+The dot is **slate** when idle, **green** while a run is in flight, **red**
+when a gateway that was answering stops, and grows an **amber pip** while a
+sleep hold is active. Hover for the per-agent detail — Windows has no text
+slot in the notification area, so the tooltip carries what the macOS title bar
+shows inline.
+
+> Windows 11 hides newly registered tray icons by default. If you do not see
+> it, click the **`^`** chevron — and drag it onto the taskbar to keep it
+> visible.
+
 **One thing to know about secrets:** Task Scheduler has no environment block,
 unlike systemd's `Environment=` and launchd's `EnvironmentVariables`. A task
 inherits the environment your session had at logon, so put `TELEGRAM_TOKEN`
@@ -250,7 +272,8 @@ exported only in the shell you ran `install` from will not reach the service.
 | Browser automation (CDP) | ✅ | ✅ | ✅ (Chrome, Chromium, Edge, Brave) |
 | Screenshot, clipboard, open app / URL | — | ✅ | ✅ |
 | `run_applescript` | — | ✅ | — (use `run_shell`) |
-| Menu-bar tray app (`bomtray`) | — | ✅ | — |
+| Tray app (`bomtray`) | — | ✅ menu bar | ✅ notification area |
+| Keep machine awake | — | ✅ IOKit assertion | ✅ SetThreadExecutionState |
 
 Tools that do not exist on a platform are not offered to the model there.
 

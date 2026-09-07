@@ -337,8 +337,14 @@ BomClaw builds natively for all three:
 - **macOS** &mdash; Intel, Apple Silicon. Background service via LaunchAgent.
   Adds AppleScript, plus the `bomtray` menu-bar companion.
 - **Windows 11** &mdash; x86_64, ARM64, no WSL. Background service via a
-  Scheduled Task. `run_shell` runs PowerShell instead of bash; AppleScript has
-  no counterpart and is not offered.
+  Scheduled Task, and `bomtray` in the notification area. `run_shell` runs
+  PowerShell instead of bash; AppleScript has no counterpart and is not offered.
+
+Ubuntu is the next target for the tray. The shared logic is already
+platform-neutral and `cmd/bomtray/main_other.go` lists exactly what a new
+platform has to supply &mdash; presentation, sleep inhibition, desktop actions,
+autostart. The tray protocol itself is largely handled by the systray library;
+the rest is a logind inhibit, `xdg-open`, and a `systemd --user` unit.
 
 Screenshots, clipboard and "open app / URL" work on macOS and Windows. They are
 not implemented on Linux, where the answer depends on X11 vs Wayland and on
