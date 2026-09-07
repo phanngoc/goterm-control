@@ -123,10 +123,16 @@ func (db *DB) ListNotes(f NoteFilter) ([]Note, error) {
 	}
 	args = append(args, limit)
 
+	// rowid breaks the tie, and it is not decoration: created_at has
+	// second-or-better resolution but two notes written inside one clock tick
+	// carry the same value, and Windows' wall clock advances in ~1ms steps. On
+	// a tie SQLite is free to return either row first, so "newest first" was
+	// not reproducible there. rowid is insertion order, which is exactly the
+	// intended meaning.
 	return db.queryNotes(`SELECT id, author, scope, kind, title, body, tags,
 		superseded_by, created_at FROM shared_notes
 		WHERE `+strings.Join(where, " AND ")+`
-		ORDER BY created_at DESC LIMIT ?`, args...)
+		ORDER BY created_at DESC, rowid DESC LIMIT ?`, args...)
 }
 
 // SearchNotes runs a full-text search over current notes.

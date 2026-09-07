@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
@@ -278,20 +277,19 @@ func (s *Scheduler) fireCommand(ctx context.Context, sc *coord.Schedule, now tim
 	s.applyFailure(sc, ended, fmt.Sprintf("exit %d", code), out)
 }
 
-// runCommand executes `sh -c cmd` in its own process group so a timeout kills
-// what the command spawned, not just the shell.
+// runCommand runs a schedule's shell command, isolated so that a timeout kills
+// whatever the command spawned and not just the shell.
+//
+// Which shell, how a process group is made, and how the tree is killed are all
+// platform-specific — see command_unix.go and command_windows.go.
 func runCommand(ctx context.Context, sc *coord.Schedule, p *coord.CommandPayload, timeout time.Duration) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", p.Cmd)
+	cmd := newShellCommand(ctx, p.Cmd)
 	if p.Cwd != "" {
 		cmd.Dir = expandHome(p.Cwd)
 	}
 	cmd.Env = append(os.Environ(), "BOMCLAW_SCHEDULE="+sc.Name, "BOMCLAW_SCHEDULE_ID="+sc.ID)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if err != nil {
