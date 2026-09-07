@@ -17,13 +17,13 @@ type FileSystemTool struct {
 // resolvePath expands ~ and makes path absolute relative to $HOME.
 func resolvePath(path string) string {
 	if path == "" {
-		return os.Getenv("HOME")
+		return homeDir()
 	}
 	if strings.HasPrefix(path, "~/") {
-		return filepath.Join(os.Getenv("HOME"), path[2:])
+		return filepath.Join(homeDir(), path[2:])
 	}
 	if !filepath.IsAbs(path) {
-		return filepath.Join(os.Getenv("HOME"), path)
+		return filepath.Join(homeDir(), path)
 	}
 	return path
 }

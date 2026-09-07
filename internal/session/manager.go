@@ -238,7 +238,20 @@ func (m *Manager) pruneOldestLocked(cs *ChatState, keep int) []string {
 		candidates = append(candidates, s)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].UpdatedAt.Before(candidates[j].UpdatedAt)
+		a, b := candidates[i], candidates[j]
+		if !a.UpdatedAt.Equal(b.UpdatedAt) {
+			return a.UpdatedAt.Before(b.UpdatedAt)
+		}
+		// UpdatedAt ties whenever sessions are created inside one clock tick.
+		// That is routine on Windows, whose wall clock advances in ~1ms steps
+		// rather than nanoseconds, and possible anywhere. Candidates arrive
+		// here in map order, so without a second key an arbitrary session was
+		// evicted instead of the oldest. Seq is assigned monotonically per
+		// chat (ChatState.NextSeq), which makes it exactly creation order.
+		if a.Seq != b.Seq {
+			return a.Seq < b.Seq
+		}
+		return a.ID < b.ID
 	})
 
 	deleter, _ := m.store.(SessionDeleter)

@@ -139,7 +139,7 @@ Usage:
 
 Commands:
   gateway            Start the gateway in foreground
-  gateway install    Install as a background service (systemd/launchd)
+  gateway install    Install as a background service (systemd / launchd / Scheduled Task)
   gateway uninstall  Remove the background service
   gateway start      Start the installed service
   gateway stop       Stop the installed service
@@ -785,7 +785,7 @@ func (a *toolAdapter) Execute(ctx context.Context, name string, input json.RawMe
 // buildToolDefs creates agent.ToolDef from the tool names we support.
 func buildToolDefs() []agent.ToolDef {
 	names := []struct{ name, desc string }{
-		{"run_shell", "Execute a shell command"},
+		{"run_shell", "Execute a shell command (bash on macOS and Linux, PowerShell on Windows)"},
 		{"read_file", "Read file contents"},
 		{"write_file", "Write file contents"},
 		{"list_dir", "List directory"},
@@ -817,6 +817,11 @@ func buildToolDefs() []agent.ToolDef {
 	// Import tool schemas from claude package tools
 	var defs []agent.ToolDef
 	for _, n := range names {
+		// run_applescript exists only on macOS. Offering it anywhere else just
+		// invites the model to spend a turn discovering that it cannot work.
+		if n.name == "run_applescript" && runtime.GOOS != "darwin" {
+			continue
+		}
 		schema := findToolSchema(n.name)
 		defs = append(defs, agent.ToolDef{
 			Name:        n.name,
@@ -850,10 +855,45 @@ func resolveBinaryPath() (string, error) {
 		return exe, nil
 	}
 	// Warn if binary is in a temp directory (e.g. go run)
-	if strings.Contains(real, "/tmp/") || strings.Contains(real, "/temp/") {
+	if isTempPath(real) {
 		fmt.Fprintln(os.Stderr, "Warning: binary is in a temp directory — install from a stable path")
 	}
 	return real, nil
+}
+
+// serviceLogHint names where the installed gateway's output ends up, which
+// differs per service manager: systemd captures it in the journal, while the
+// LaunchAgent and the Windows Scheduled Task redirect it to files.
+func serviceLogHint() string {
+	if runtime.GOOS == "linux" {
+		return "journalctl --user -u bomclaw-gateway"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "~/.goterm/logs/gateway.err.log"
+	}
+	return filepath.Join(home, ".goterm", "logs", "gateway.err.log")
+}
+
+// isTempPath reports whether p sits under a temp directory — where `go run`
+// leaves a binary that will not exist by the time a service manager tries to
+// start it.
+//
+// os.TempDir covers %TEMP% on Windows and $TMPDIR on Unix; the literal /tmp
+// and /temp checks stay for a Unix box whose TMPDIR is unset or points
+// somewhere else. The comparison is case-insensitive because Windows paths are.
+func isTempPath(p string) bool {
+	lower := strings.ToLower(filepath.ToSlash(p))
+	if tmp := os.TempDir(); tmp != "" {
+		prefix := strings.ToLower(filepath.ToSlash(tmp))
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "/tmp/") || strings.Contains(lower, "/temp/")
 }
 
 func buildInstallEnv(configPath, envPath string) map[string]string {
@@ -954,7 +994,7 @@ func runGatewayInstall(args []string) {
 	if err != nil {
 		fmt.Printf(" timeout\n")
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Check logs: journalctl --user -u %s\n", "bomclaw-gateway")
+		fmt.Fprintf(os.Stderr, "Check logs: %s\n", serviceLogHint())
 	} else {
 		fmt.Printf(" ok (%s, %d attempts)\n", result.Elapsed.Round(time.Millisecond), result.Attempts)
 	}
@@ -1181,7 +1221,7 @@ func findToolSchema(name string) map[string]any {
 			"pixels":    map[string]any{"type": "integer", "description": "Pixels to scroll (default: 300)"},
 		}},
 		"browser_screenshot": {"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "Output file path (default: /tmp/browser-screenshot.png)"},
+			"path": map[string]any{"type": "string", "description": "Output file path (default: browser-screenshot.png in the system temp directory)"},
 		}},
 		"browser_get_text": {"type": "object", "properties": map[string]any{
 			"ref":      map[string]any{"type": "string", "description": "Element ref to get text from (omit for full page)"},

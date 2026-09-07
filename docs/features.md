@@ -50,7 +50,7 @@ All channels support real-time streaming:
 | `take_screenshot` | Capture the current screen |
 | `get_clipboard` | Read clipboard contents |
 | `set_clipboard` | Write to clipboard |
-| `run_applescript` | Control macOS apps via AppleScript |
+| `run_applescript` | Control macOS apps via AppleScript (macOS only) |
 | `open_app` | Open applications or files (`open`/`xdg-open`) |
 | `get_system_info` | Hardware, OS, CPU, memory, disk information |
 | `list_processes` | List running processes with filter and sort |

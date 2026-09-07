@@ -180,46 +180,57 @@ bomclaw gateway stop
 </details>
 
 <details>
-<summary><strong>🪟 Windows (via WSL)</strong></summary>
+<summary><strong>🪟 Windows 11 (native)</strong></summary>
 <div markdown="1">
 
-**Step 1 — Install WSL**
+No WSL needed. Open **PowerShell** from the Start menu — none of this needs
+Administrator.
 
-Open **PowerShell as Administrator** and run:
+**Step 1 — Download**
 
 ```powershell
-wsl --install
+Invoke-WebRequest -Uri https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-windows-amd64.zip -OutFile bomclaw.zip
+Expand-Archive .\bomclaw.zip -DestinationPath .
 ```
 
-Restart your computer, then open **Ubuntu** from the Start menu.
+If SmartScreen flags the download, right-click `bomclaw.exe` →
+**Properties** → tick **Unblock** → **OK**.
 
-**Step 2 — Download (inside WSL)**
+**Step 2 — Install Claude CLI**
 
-```bash
-curl -L https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-linux-amd64.tar.gz | tar xz
-chmod +x bomclaw-linux-amd64
-```
-
-**Step 3 — Install Claude CLI**
-
-```bash
-sudo apt update && sudo apt install -y nodejs npm
-sudo npm install -g @anthropic-ai/claude-code
+```powershell
+winget install OpenJS.NodeJS       # skip if you already have Node
+npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-**Step 4 — Set up Telegram (optional)**
+**Step 3 — Set up Telegram (optional)**
 
-```bash
-echo 'TELEGRAM_TOKEN=your-token-here' > .env
+```powershell
+'TELEGRAM_TOKEN=your-token-here' | Out-File -Encoding utf8 .env
 ```
 
-**Step 5 — Run**
+**Step 4 — Run**
 
-```bash
-./bomclaw-linux-amd64 chat --env .env
-# Or: ./bomclaw-linux-amd64 gateway --env .env
+```powershell
+.\bomclaw.exe chat --env .env
+# Or: .\bomclaw.exe gateway --env .env
 ```
+
+**Step 5 — Run in the background (optional)**
+
+```powershell
+.\bomclaw.exe gateway install --config .\config.yaml --env .\.env
+```
+
+This registers a Scheduled Task (`\BomClaw\bomclaw-gateway`) that starts at
+logon and restarts on failure. It runs as you, in your own desktop session,
+which is what lets screenshots, the clipboard and browser control work.
+
+Task Scheduler stores no environment block, so keep `TELEGRAM_TOKEN` and any
+API key in the `--env` file (or persist them with `setx`) — a value exported
+only in the shell you ran `install` from will not reach the service. Logs land
+in `%USERPROFILE%\.goterm\logs\gateway.log` and `gateway.err.log`.
 
 </div>
 </details>
@@ -320,11 +331,18 @@ BomClaw auto-detects your authentication method at startup:
 
 ## Supported Platforms
 
-BomClaw runs anywhere Go compiles:
+BomClaw builds natively for all three:
 
-- **Linux** &mdash; Full support (x86_64, ARM64)
-- **macOS** &mdash; Full support (Intel, Apple Silicon) + AppleScript tools
-- **Windows** &mdash; Via WSL (Windows Subsystem for Linux)
+- **Linux** &mdash; x86_64, ARM64. Background service via `systemd --user`.
+- **macOS** &mdash; Intel, Apple Silicon. Background service via LaunchAgent.
+  Adds AppleScript, plus the `bomtray` menu-bar companion.
+- **Windows 11** &mdash; x86_64, ARM64, no WSL. Background service via a
+  Scheduled Task. `run_shell` runs PowerShell instead of bash; AppleScript has
+  no counterpart and is not offered.
+
+Screenshots, clipboard and "open app / URL" work on macOS and Windows. They are
+not implemented on Linux, where the answer depends on X11 vs Wayland and on
+which helpers are installed; the tools report that rather than failing obscurely.
 
 ## Next Steps
 

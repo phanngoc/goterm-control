@@ -3,6 +3,7 @@ package browserbridge
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -16,8 +17,17 @@ func TestLoadOrCreateToken(t *testing.T) {
 	if !first.Created || first.Value == "" || first.Path != filepath.Join(dir, TokenFile) {
 		t.Fatalf("first call should generate and store a token, got %+v", first)
 	}
-	if fi, err := os.Stat(first.Path); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("token file should be owner-only (0600), got %v err=%v", fi.Mode(), err)
+	fi, err := os.Stat(first.Path)
+	if err != nil {
+		t.Fatalf("stat token file: %v", err)
+	}
+	// Windows does not carry POSIX mode bits — os.Chmod there only toggles the
+	// read-only attribute, so a file written 0600 reads back 0666 and this
+	// assertion cannot hold. The token still is not world-readable: it lives
+	// under the user's profile, whose ACL already excludes other standard
+	// users. Restricting it further would mean an explicit ACL, not a mode.
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("token file should be owner-only (0600), got %v", fi.Mode())
 	}
 
 	second, err := LoadOrCreateToken("", dir)

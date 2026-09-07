@@ -57,7 +57,7 @@ layout: default
       <div class="feature-card" style="text-align: center;">
         <div class="feature-icon green" style="font-size: 2rem;">&#x1F30D;</div>
         <h3>Cross-Platform</h3>
-        <p>Runs wherever Go compiles &mdash; Linux, macOS, Windows via WSL. One codebase, every platform.</p>
+        <p>Native builds for Linux, macOS and Windows 11 &mdash; no WSL. One codebase, every platform.</p>
       </div>
       <div class="feature-card" style="text-align: center;">
         <div class="feature-icon yellow" style="font-size: 2rem;">&#x1F9E9;</div>

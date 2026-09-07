@@ -2,7 +2,7 @@
 
 Lean AI agent that gives Claude full control over your computer. One binary, one process, no microservices.
 
-BomClaw turns any machine — Linux, macOS, or Windows (via WSL) — into an
+BomClaw turns any machine — Linux, macOS, or Windows 11 — into an
 AI-controlled workstation you can command from Telegram or a local CLI.
 It runs an agentic loop: the model calls tools, sees results, and keeps going
 until the task is done. Think of it as a personal, self-hosted Claude Code
@@ -10,7 +10,7 @@ that you talk to from anywhere.
 
 **Philosophy:**
 - Full computer control — shell, files, processes, clipboard, browser, screenshots
-- Cross-platform — runs wherever Go compiles (Linux, macOS, Windows/WSL)
+- Cross-platform — native builds for Linux, macOS and Windows 11 (no WSL needed)
 - Small enough to understand (~65 source files, 18 packages)
 - Built for one user — bespoke, not a framework
 - Customization = code changes, not config sprawl
@@ -165,6 +165,97 @@ bomclaw gateway uninstall
 
 ---
 
+## Install on Windows 11 (no coding required)
+
+Runs natively — no WSL. Everything below is PowerShell; open it from Start,
+no Administrator needed.
+
+### Step 1 — Download
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/phanngoc/goterm-control/releases/download/v0.1.0/bomclaw-v0.1.0-windows-amd64.zip -OutFile bomclaw.zip
+Expand-Archive .\bomclaw.zip -DestinationPath .
+```
+
+Windows may flag the download as untrusted (SmartScreen). If it does, right-click
+`bomclaw.exe` → **Properties** → tick **Unblock** → **OK**.
+
+### Step 2 — Install Claude CLI
+
+```powershell
+winget install OpenJS.NodeJS       # skip if you already have Node
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+### Step 3 — Set up credentials
+
+```powershell
+'TELEGRAM_TOKEN=your-telegram-bot-token-here' | Out-File -Encoding utf8 .env
+```
+
+> Get a Telegram bot token: open Telegram, search **@BotFather**, send `/newbot`, follow the instructions.
+> This step is optional — you can skip Telegram and just use the CLI chat.
+
+### Step 4 — Run
+
+```powershell
+# Chat directly in the terminal
+.\bomclaw.exe chat --env .env
+
+# Or start the full gateway (Telegram bot + web dashboard)
+.\bomclaw.exe gateway --env .env
+```
+
+### Optional — Run as a background service
+
+On Windows the gateway installs as a **Scheduled Task** that starts at logon
+and restarts on failure — the counterpart of a LaunchAgent on macOS or a
+`systemd --user` unit on Linux. It runs as you, in your own desktop session,
+which is what lets screenshots, the clipboard and browser control work. (A real
+Windows service would land in session 0, where it can see none of that, and
+would need Administrator to install.)
+
+```powershell
+# Register and start it (no elevation required)
+.\bomclaw.exe gateway install --config .\config.yaml --env .\.env
+
+# Manage it
+.\bomclaw.exe gateway status
+.\bomclaw.exe gateway restart
+.\bomclaw.exe gateway stop
+.\bomclaw.exe gateway uninstall
+```
+
+The task is registered as `\BomClaw\bomclaw-gateway` — visible in Task
+Scheduler under the **BomClaw** folder. Its generated definition is kept at
+`%LOCALAPPDATA%\BomClaw\bomclaw-gateway.xml`, and gateway output goes to
+`%USERPROFILE%\.goterm\logs\gateway.log` and `gateway.err.log`.
+
+**One thing to know about secrets:** Task Scheduler has no environment block,
+unlike systemd's `Environment=` and launchd's `EnvironmentVariables`. A task
+inherits the environment your session had at logon, so put `TELEGRAM_TOKEN`
+and any API key in the `--env` file (or persist them with `setx`) — a value
+exported only in the shell you ran `install` from will not reach the service.
+`gateway install` names any variable it could not carry.
+
+### Platform support
+
+| Capability | Linux | macOS | Windows 11 |
+|---|---|---|---|
+| Gateway, Telegram bot, dashboard, coordination | ✅ | ✅ | ✅ |
+| `run_shell` | bash | bash | PowerShell |
+| Files, search, processes, system info | ✅ | ✅ | ✅ |
+| Background service | systemd (user) | LaunchAgent | Scheduled Task |
+| Browser automation (CDP) | ✅ | ✅ | ✅ (Chrome, Chromium, Edge, Brave) |
+| Screenshot, clipboard, open app / URL | — | ✅ | ✅ |
+| `run_applescript` | — | ✅ | — (use `run_shell`) |
+| Menu-bar tray app (`bomtray`) | — | ✅ | — |
+
+Tools that do not exist on a platform are not offered to the model there.
+
+---
+
 ## Quick Start (Developers)
 
 ```bash
@@ -191,7 +282,7 @@ go build -o bomclaw ./cmd/bomclaw/
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.26+ (matches `go.mod`)
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and logged in (`claude login`)
   - Uses your Claude Pro/Max subscription via OAuth2 — no API key needed
   - Or alternatively, set `ANTHROPIC_API_KEY` for direct API access
@@ -378,11 +469,11 @@ The agent has 25 tools for full computer control:
 | `take_screenshot` | Capture screen |
 | `get_clipboard` | Read clipboard |
 | `set_clipboard` | Write to clipboard |
-| `run_applescript` | Control apps via AppleScript (macOS) |
-| `open_app` | Open applications or files (`open`/`xdg-open`) |
+| `run_applescript` | Control apps via AppleScript (macOS only — not offered elsewhere) |
+| `open_app` | Open applications or files (`open` / `Start-Process`) |
 | `get_system_info` | Hardware, OS, CPU, memory, disk |
 | `list_processes` | Running processes with filter/sort |
-| `kill_process` | Kill by PID or name (TERM/KILL) |
+| `kill_process` | Kill by PID or name (TERM/KILL; on Windows, close request / forced) |
 | `browse_url` | Fetch URL content or open in browser |
 
 **Browser automation tools (Chrome DevTools Protocol):**
