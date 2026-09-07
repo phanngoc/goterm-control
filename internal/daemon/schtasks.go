@@ -13,17 +13,10 @@ import (
 	"time"
 )
 
-const (
-	// schtasksName is the task path. The BomClaw folder keeps the gateway out
-	// of the top-level task list, where it would sit among the tasks Windows
-	// registers for itself.
-	schtasksName = `\BomClaw\bomclaw-gateway`
-
-	// schtasksImage is the process to look for when reporting the live PID.
-	// The task itself runs cmd.exe (see wrapWithLogRedirect), so the task's
-	// own PID is not the gateway's.
-	schtasksImage = "bomclaw.exe"
-)
+// schtasksName is the task path. The BomClaw folder keeps the gateway out of
+// the top-level task list, where it would sit among the tasks Windows
+// registers for itself.
+const schtasksName = `\BomClaw\bomclaw-gateway`
 
 type schtasksService struct {
 	taskName string
@@ -210,18 +203,48 @@ func (s *schtasksService) ReadRuntime() (*ServiceRuntime, error) {
 		}
 	}
 
-	// A live process is the authority on "running", and unlike the field names
-	// above it does not depend on the console locale: schtasks /V prints
-	// translated keys on a non-English Windows, so the parse above can come up
-	// empty on a machine where the gateway is plainly up.
-	if pid := findProcessPID(schtasksImage); pid > 0 {
-		rt.PID = pid
-		rt.Status = "running"
-	} else if rt.Status == "unknown" {
-		rt.Status = "stopped"
+	// schtasks /V prints translated field names on a non-English Windows, so
+	// the parse above can come up empty on a machine where the task is plainly
+	// registered and running. Get-ScheduledTask reports State as a .NET enum
+	// name, which is not localised.
+	if rt.Status == "unknown" {
+		rt.Status, rt.SubState = s.stateViaPowerShell()
 	}
 
+	// PID is deliberately left at 0. The task's own process is cmd.exe (see
+	// wrapWithLogRedirect), and Task Scheduler cannot report the PID of the
+	// process inside the action. Scanning for the image name is not a
+	// substitute: every bomclaw subcommand is also bomclaw.exe, so
+	// `bomclaw gateway status` found *itself* and reported the service as
+	// running with its own PID even while the task sat at Ready. Reporting no
+	// PID is honest; `gateway status` establishes liveness from the port.
+
 	return rt, nil
+}
+
+// stateViaPowerShell reads the task state as a locale-independent enum name.
+// Returns ("unknown", "") if the task or the ScheduledTasks module is absent.
+func (s *schtasksService) stateViaPowerShell() (status, subState string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	res, err := execCommand(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+		"(Get-ScheduledTask -TaskPath '\\BomClaw\\' -TaskName 'bomclaw-gateway').State")
+	if err != nil || res.ExitCode != 0 {
+		return "unknown", ""
+	}
+
+	state := strings.TrimSpace(res.Stdout)
+	switch state {
+	case "Running":
+		return "running", state
+	case "Ready", "Disabled":
+		return "stopped", state
+	case "":
+		return "unknown", ""
+	default:
+		return strings.ToLower(state), state
+	}
 }
 
 // buildGatewayArgs builds the `gateway` subcommand arguments from InstallArgs.
@@ -307,32 +330,6 @@ func warnUnexportableEnv(env map[string]string) {
 	log.Printf("daemon: Task Scheduler stores no environment block — %s must be in the "+
 		"--env file or a persisted user variable (setx) to reach the gateway",
 		strings.Join(unset, ", "))
-}
-
-// findProcessPID returns the PID of the first running process with the given
-// image name, or 0. CSV output with /NH is parsed so the result does not
-// depend on the console locale's column headers.
-func findProcessPID(image string) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	res, err := execCommand(ctx, "tasklist", "/FI", "IMAGENAME eq "+image, "/FO", "CSV", "/NH")
-	if err != nil || res.ExitCode != 0 {
-		return 0
-	}
-	// Rows look like: "bomclaw.exe","12345","Console","1","45,678 K"
-	// With no match tasklist prints a prose INFO line instead, which has no
-	// field separator and so falls through.
-	for line := range strings.SplitSeq(res.Stdout, "\n") {
-		fields := strings.Split(strings.TrimSpace(line), `","`)
-		if len(fields) < 2 {
-			continue
-		}
-		if pid, err := strconv.Atoi(strings.Trim(fields[1], `"`)); err == nil && pid > 0 {
-			return pid
-		}
-	}
-	return 0
 }
 
 // parseTaskResult parses a schtasks "Last Result" value, which some Windows
