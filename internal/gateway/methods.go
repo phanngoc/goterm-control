@@ -51,6 +51,11 @@ type Deps struct {
 	// Nil when this agent does not claim tasks.
 	PokeTasks func()
 
+	// PokeSchedules asks the local scheduler loop to tick now (after a
+	// "run now"). Nil when schedules are disabled on this gateway; the row is
+	// still updated and another gateway's tick fires it.
+	PokeSchedules func()
+
 	// NotesFile is the markdown rendering of shared notes, rewritten whenever
 	// a note is added so agents can read it with their file tools.
 	NotesFile string
@@ -172,6 +177,18 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleNotesList(deps, params)
 		case "notes.add":
 			return handleNoteAdd(deps, params)
+		case "schedules.list":
+			return handleSchedulesList(deps)
+		case "schedules.get":
+			return handleScheduleGet(deps, params)
+		case "schedules.create":
+			return handleScheduleCreate(deps, params)
+		case "schedules.toggle":
+			return handleScheduleToggle(deps, params)
+		case "schedules.delete":
+			return handleScheduleDelete(deps, params)
+		case "schedules.run":
+			return handleScheduleRun(deps, params)
 		case "tasks.poke":
 			if deps.PokeTasks != nil {
 				deps.PokeTasks()

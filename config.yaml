@@ -29,6 +29,17 @@ tasks:
   poll_interval_seconds: 60
   timeout_minutes: 15
 
+# Timed work (docs/design/scheduling-and-long-tasks.md §5.5). `bomclaw schedule
+# add` writes rows to the shared database; a gateway with this on fires them.
+# OFF by default: a schedule creates tasks or runs shell commands with nobody
+# typing. Safe to turn on in every gateway — firing is a compare-and-set on
+# the row, so two loops never fire one schedule twice; a schedule with
+# --owner only fires in that gateway.
+schedules:
+  enabled: false
+  tick_seconds: 30              # how often to look for due schedules
+  command_timeout_seconds: 60   # cap on a --command payload (its --timeout overrides)
+
 # Credential pool. Leave `pool` empty (the default) and the agent runs on the
 # ambient login, exactly as before this existed.
 #

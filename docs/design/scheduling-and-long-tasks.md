@@ -384,11 +384,24 @@ Restart gateway ở bất kỳ bước nào: lease hết → claim lại → `--
 | Giai đoạn | Nội dung | Điều kiện hoàn thành |
 |---|---|---|
 | ~~**P0 — Nền cho "dài" và "nhìn thấy"**~~ ✅ | `task_runs` + liveness; `checkpoint`/`session_ref`/`continuations` + `--resume`; `progress`/`done` lệnh; dead-letter thật; task run vào `Runs` + `TurnEvent`; sửa chuông sang HTTP loopback; nới `assigned_to` khi agent chết | Một task 40 phút xong qua 3 run **giữ ngữ cảnh**; tray giữ Mac thức suốt; hết attempts → `failed` thật trên TaskBoard; poke chéo agent < 2s dưới auth bật. **Xong (PR #88–#91).** Đo thật: task claim sau 9s qua chuông HTTP; run đóng đúng; Runs API hiện `kind:task`. Hai bug chỉ lộ khi chạy thật: `SQLITE_BUSY` khi FinishRun đọc-rồi-ghi trong khi trace recorder ghi span (→ `_txlock=immediate` + retry, #90) và sweep của gateway kia gặt run còn sống ngay sau `task done` (→ reap theo tuổi, FinishRun ghi đè `lost`, #91) |
-| **P1 — Lịch & heartbeat** | `schedules`/`schedule_runs`; vòng quét CAS; `agent`+`command`; catch-up; backoff + auto-disable + báo Telegram; `bomclaw schedule`; heartbeat + scratch + skip rules; tab Schedules | `0 8 * * 1-5` chạy đúng giờ đúng TZ, đúng một lần khi hai gateway; máy tắt qua giờ → bù một lần; heartbeat scratch rỗng → 0 API call |
+| **P1 — Lịch & heartbeat** | **P1a ✅ lịch**: `schedules`/`schedule_runs` (schema v4, kèm `agents.scratch` cho P1b); vòng quét CAS 30s; `agent`→task `kind=scheduled` (run `pending` tới khi task kết thúc, gateway nào thấy trước thì settle — cũng CAS), `command`→sh trong gateway, output cắt 8KB giữ đầu+cuối; catch-up một lần / `--skip-missed`; bậc thang 30s→1m→5m→15m→1h, báo Telegram lần 2 (cooldown 1h), tự tắt lần 10; kết quả task theo lịch **gửi Telegram** cho chủ (`--quiet` để không); `bomclaw schedule add|list|show|enable|disable|remove|run-now`; RPC `schedules.*`; config `schedules.enabled` mặc định false. **P1b** heartbeat + scratch + skip rules; **P1c** tab Schedules — chưa | `0 8 * * 1-5` chạy đúng giờ đúng TZ, đúng một lần khi hai gateway (test `TestTwoGatewaysFireOnce`, `TestClaimScheduleIsExclusiveAcrossHandles`); máy tắt qua giờ → bù một lần (`TestMissedScheduleCatchesUpOnce`); heartbeat scratch rỗng → 0 API call |
 | **P2 — Cha–con** | `parent_id`, `task sub/block`, children-done → cha thức, prompt gom kết quả con, `max_open_children`, TaskBoard vẽ cây, wake `comment` + auto-read inbox | Luồng A (§7) chạy thật với hai agent; `MaxDepth` từ chối ở depth 6 trên đường thật |
 | **P3 — Song song trong một agent** | taskrunner claim nhiều task đồng thời (giới hạn `tasks.concurrency`), vẫn một lane cho chat | Task dài không chặn task ngắn xếp sau |
 
 P0 trước P1 vì lịch sinh ra task — task chưa "dài được, thấy được" thì lịch chỉ nhân bản vấn đề theo giờ. P2 sau P1 vì cha–con cần `task_runs` (P0) và cần chuông chạy (P0) để cha thức đúng lúc.
+
+---
+
+## 9b. Ghi chú triển khai P1a (khác/thêm so với §5.5)
+
+- **Kết quả task theo lịch được gửi Telegram** cho `security.allowed_user_ids` khi task `completed` (payload `quiet: true` để chỉ ghi). §5.5 không nói; lý do: một "tóm tắt inbox 08:00" không ai đọc là một lần gọi model vô ích. Đường gửi: `bot.Bot.Notify` — không có hội thoại để trả lời vào, nên người nhận là danh sách tin cậy trong config, không phải "ai nhắn gần nhất"; không có allow-list thì chỉ ghi log.
+- **"Lỗi" của payload `agent`**: hàng `schedule_runs` sinh ra ở trạng thái `pending` mang `task_id`; mỗi tick, gateway nào cũng quét pending, task `completed` → `ok`, `failed|canceled|rejected` → `failed`. Việc đóng là CAS trên `status` (`pending→…`) nên hai gateway không đếm lỗi hai lần.
+- **Thời điểm kế tiếp** tính từ *lúc claim* (`every` = now+d, `cron` = Next(now) trong TZ, `at` = `Never`). `ScheduleSucceeded` không đụng `next_run_at` (có thể đã claim lần mới); `ScheduleFailed` ghi đè `next_run_at = now + Backoff(n)` — bậc thang **đè** nhịp riêng của lịch, job hằng ngày lỗi sẽ thử lại trong giờ, không đợi mai.
+- **Missed** = trễ hơn `2×tick` (60s) — trễ một tick là bình thường, không phải downtime.
+- **Spec không parse được** (TZ bị gỡ, lỗi dữ liệu) → tự `enabled=0` + báo, thay vì log lỗi mỗi 30s mãi.
+- Parser cron: `robfig/cron/v3` chuẩn 5 trường + descriptor (`@daily`, `@every 1h`); DOM và DOW cùng đặt → **OR** (ghi trong `schedule --help`).
+- `schedule run-now` chỉ đẩy `next_run_at = now`; gateway bắt ở tick kế (≤30s). RPC `schedules.run` có thêm poke vòng quét cục bộ nên từ dashboard là ngay.
+- Chưa có: heartbeat (P1b), tab Schedules (P1c), purge `schedule_runs` theo tuổi (hàng nhỏ; thêm khi cần).
 
 ---
 

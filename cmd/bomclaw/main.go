@@ -33,6 +33,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/daemon"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
+	"github.com/ngocp/goterm-control/internal/scheduler"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/taskrunner"
@@ -106,6 +107,8 @@ func main() {
 		runStatus(os.Args[2:])
 	case "task":
 		runTask(os.Args[2:])
+	case "schedule":
+		runSchedule(os.Args[2:])
 	case "note":
 		runNote(os.Args[2:])
 	case "inbox":
@@ -153,6 +156,7 @@ Commands:
   accounts           Show the credential pool and which accounts are healthy
   agents             List agents registered in the shared database
   task               Create, claim and finish work shared between agents
+  schedule           Timed work: run a task or a command on a cron, interval or one-shot
   note               Record and search what the agents have learned
   inbox              Read messages other agents sent to this one
   msg                Send a message to another agent
@@ -368,6 +372,30 @@ func runGateway(args []string) {
 		log.Printf("taskrunner: disabled (tasks.auto_claim=false) — queued work waits for `bomclaw task claim`")
 	}
 
+	// Scheduler — fires timed work from the shared database. Off by default:
+	// it creates tasks and runs commands with nobody typing. Any number of
+	// gateways may run it; firing is a compare-and-set on the shared row.
+	var sched *scheduler.Scheduler
+	if coordDB != nil && cfg.Schedules.Enabled {
+		sched = scheduler.New(coordDB, scheduler.Config{
+			AgentID:        cfg.Agent.ID,
+			Tick:           time.Duration(cfg.Schedules.TickSeconds) * time.Second,
+			CommandTimeout: time.Duration(cfg.Schedules.CommandTimeoutSeconds) * time.Second,
+		})
+		// Results and alerts go to the owner's Telegram; the local runner is
+		// rung directly and peers over HTTP, exactly as for a hand-queued task.
+		sched.SetNotify(func(text string) { tgBot.Notify(text) })
+		sched.SetWake(func(t *coord.Task) {
+			if runner != nil {
+				runner.Poke()
+			}
+			gateway.NotifyTaskCreated(coordDB, t)
+		})
+		sched.Start(ctx)
+	} else if coordDB != nil {
+		log.Printf("scheduler: disabled (schedules.enabled=false) — `bomclaw schedule add` rows wait for a gateway that runs it")
+	}
+
 	deps := gateway.Deps{
 		Sessions:      sessions,
 		Resolver:      resolver,
@@ -384,6 +412,7 @@ func runGateway(args []string) {
 		ProviderName:  cfg.Provider,
 		Trace:         gwTrace,
 		PokeTasks:     runner.Poke,
+		PokeSchedules: sched.Poke,
 		NotesFile:     cfg.Coord.NotesFile,
 		Conversations: conversations,
 	}
