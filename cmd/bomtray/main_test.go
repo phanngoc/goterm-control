@@ -115,3 +115,46 @@ func TestTooltipWithNothingAnswering(t *testing.T) {
 		t.Errorf("tooltip = %q, want it to say no gateway is answering", got)
 	}
 }
+
+// A single missed poll must not declare an agent down. The status request has a
+// 2s timeout against a gateway that spawns CLI subprocesses, so one miss is
+// routine — and it used to fire "is DOWN" straight away, then "is back up"
+// seconds later, about a gateway with hours of uptime.
+func TestOneMissedPollDoesNotMeanDown(t *testing.T) {
+	ag := &agent{url: "http://127.0.0.1:18790"}
+	ag.st = &gateway.StatusResult{AgentID: "bomclaw", AgentName: "BomClaw"}
+	ag.seen, ag.up = true, true
+
+	for i := 1; i < downAfter; i++ {
+		ag.fails = i
+		ag.up = ag.fails < downAfter
+		if !ag.up {
+			t.Fatalf("declared down after only %d missed poll(s); downAfter is %d", i, downAfter)
+		}
+	}
+
+	ag.fails = downAfter
+	ag.up = ag.fails < downAfter
+	if ag.up {
+		t.Errorf("still up after %d consecutive misses", downAfter)
+	}
+}
+
+// A failed poll used to nil out the status, so the agent lost its name and the
+// notification said "127.0.0.1:18790 is DOWN" instead of "BomClaw is DOWN".
+func TestAFailedPollKeepsTheAgentName(t *testing.T) {
+	ag := &agent{url: "http://127.0.0.1:18790"}
+	ag.st = &gateway.StatusResult{AgentID: "bomclaw", AgentName: "BomClaw"}
+	ag.seen = true
+
+	// What poll() now does on error: count it, keep the last good status.
+	ag.fails++
+	ag.up = ag.fails < downAfter
+
+	if got := ag.name(); got != "BomClaw" {
+		t.Errorf("name after a failed poll = %q, want the last known name", got)
+	}
+	if ag.st == nil {
+		t.Error("the last good status must be kept — it is where the name comes from")
+	}
+}

@@ -53,6 +53,17 @@ type trayState struct {
 	awake   bool // a sleep-prevention hold is currently active
 }
 
+// downAfter is how many consecutive failed polls it takes to call an agent
+// down, and therefore to notify about it.
+//
+// One is not enough. The status request has a 2 second timeout against a
+// gateway that spawns CLI subprocesses heavy enough to starve it for that long,
+// so a single miss is routine — and it used to fire "… is DOWN" immediately,
+// followed by "… is back up" a few seconds later, over and over, about a
+// gateway that never stopped serving. Three misses is roughly ten seconds of
+// silence, which a gateway that is actually up does not produce.
+const downAfter = 3
+
 // defaultAgents is the standard local layout. Both are probed; whichever
 // answers is shown.
 var defaultAgents = []string{"http://127.0.0.1:18789", "http://127.0.0.1:18790"}
@@ -70,6 +81,7 @@ type agent struct {
 	mu        sync.Mutex
 	st        *gateway.StatusResult
 	up        bool
+	fails     int  // consecutive failed polls; down is declared at downAfter
 	seen      bool // has this address EVER answered? unseen agents stay hidden
 	upKnown   bool
 	wasUp     bool
@@ -332,13 +344,18 @@ func (a *app) poll() {
 			defer wg.Done()
 			st, err := fetchStatus(ag.url)
 			ag.mu.Lock()
-			ag.st, ag.up = st, err == nil
 			if err == nil {
-				ag.seen = true
+				ag.st, ag.fails, ag.seen = st, 0, true
 				if st.Workspace != "" {
 					ag.workspace = st.Workspace
 				}
+			} else {
+				ag.fails++
+				// The last good status is kept on purpose. It carries the
+				// agent's name, and a missed poll should not turn "BomClaw"
+				// back into an IP address in the menu and the notification.
 			}
+			ag.up = ag.fails < downAfter
 			ag.mu.Unlock()
 		}(ag)
 	}
