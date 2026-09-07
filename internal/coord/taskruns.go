@@ -289,12 +289,19 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 // running" is the normal shape of a live run — a peer's sweep closed one as
 // lost in exactly that window. Callers pass the run cap plus a lease: nothing
 // live can be older than that.
+//
+// The age comparison is inclusive so that olderThan=0 means "no age bound",
+// which is what the tests pass it for. With a strict started_at < now it did
+// not: Windows' wall clock advances in ~1ms steps, so a run started
+// microseconds earlier carries the very same timestamp as now and was left
+// unreaped. Production callers pass a real duration, where the boundary
+// instant makes no difference either way.
 func (db *DB) ReapOrphanRuns(olderThan time.Duration) ([]string, error) {
 	now := time.Now()
 	rows, err := db.conn.Query(`UPDATE task_runs SET liveness = ?, ended_at = ?,
 			note = 'run never closed; task moved on without it'
 		WHERE liveness = ?
-		  AND started_at < ?
+		  AND started_at <= ?
 		  AND task_id IN (
 		    SELECT t.id FROM tasks t WHERE t.id = task_runs.task_id
 		      AND NOT (t.state = ? AND t.claimed_by = task_runs.agent_id

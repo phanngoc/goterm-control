@@ -34,10 +34,17 @@ func psRun(ctx context.Context, script string) (string, error) {
 // to it. The value travels as base64 so that no quote, newline, backtick or
 // $-expansion in the caller's text can change how the script parses — the text
 // here comes from the model, and clipboard contents are arbitrary.
+//
+// The wrapping parentheses are required, not cosmetic. PowerShell parses a
+// cmdlet's arguments in command mode, where a bare `[Type]::Method(...)` is not
+// an expression it will bind to a parameter — `Set-Clipboard -Value [Encoding]…`
+// fails with "A positional parameter cannot be found that accepts argument
+// 'System.Byte[]'". Parenthesising forces expression mode, and is harmless in
+// the places this is already interpolated into an argument list.
 func psLiteral(s string) string {
 	b64 := base64.StdEncoding.EncodeToString([]byte(s))
 	return fmt.Sprintf(
-		"[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('%s'))", b64)
+		"([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('%s')))", b64)
 }
 
 // captureScreen writes a PNG of the whole desktop to path.
