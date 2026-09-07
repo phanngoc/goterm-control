@@ -48,6 +48,36 @@ func TestBuildTaskXMLRunsIndefinitely(t *testing.T) {
 	}
 }
 
+// The keep-alive. RestartOnFailure does not restart an action that exited
+// non-zero — Task Scheduler treats that as a completed run — so a repeating
+// trigger is what actually brings a crashed gateway back. IgnoreNew is what
+// makes it safe to fire while the gateway is healthy.
+func TestBuildTaskXMLRestartsACrashedGateway(t *testing.T) {
+	xml := buildTaskXML(taskXMLArgs{Command: `C:\bomclaw.exe`})
+
+	for _, want := range []string{
+		"<TimeTrigger>",
+		"<Repetition>",
+		"<Interval>PT1M</Interval>",
+		"<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+	} {
+		if !strings.Contains(xml, want) {
+			t.Errorf("task XML missing %q — a crashed gateway would stay down", want)
+		}
+	}
+
+	// A Duration alongside the Interval would make the repetition stop; the
+	// gateway is meant to be watched forever.
+	if strings.Contains(xml, "<Duration>") {
+		t.Error("the repetition must not be time-bounded")
+	}
+
+	// Both triggers are needed: logon covers a reboot, repetition covers a crash.
+	if !strings.Contains(xml, "<LogonTrigger>") {
+		t.Error("task XML lost the logon trigger")
+	}
+}
+
 func TestBuildTaskXMLEscapesValues(t *testing.T) {
 	xml := buildTaskXML(taskXMLArgs{
 		Description: `Bom & Claw <gateway>`,

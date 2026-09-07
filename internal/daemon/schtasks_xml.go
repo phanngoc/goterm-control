@@ -31,9 +31,8 @@ type taskXMLArgs struct {
 //
 //   - ExecutionTimeLimit PT0S means "no limit". The default is 72 hours, after
 //     which Task Scheduler would stop the gateway on its own.
-//   - RestartOnFailure is the closest thing to systemd's Restart=always. It
-//     only fires when the process exits non-zero, so a clean exit stays exited,
-//     the same way SuccessExitStatus behaves in the systemd unit.
+//   - The repeating TimeTrigger, not RestartOnFailure, is what keeps the
+//     gateway up; see the comment on it below for why.
 func buildTaskXML(a taskXMLArgs) string {
 	description := a.Description
 	if description == "" {
@@ -52,15 +51,38 @@ func buildTaskXML(a taskXMLArgs) string {
 	}
 	b.WriteString("  </RegistrationInfo>\n")
 
+	b.WriteString("  <Triggers>\n")
 	// Start at logon rather than at boot: before logon there is no interactive
 	// session for the gateway to attach to.
-	b.WriteString("  <Triggers>\n")
 	b.WriteString("    <LogonTrigger>\n")
 	b.WriteString("      <Enabled>true</Enabled>\n")
 	if a.UserID != "" {
 		fmt.Fprintf(&b, "      <UserId>%s</UserId>\n", xmlEscape(a.UserID))
 	}
 	b.WriteString("    </LogonTrigger>\n")
+	// The keep-alive, and the actual counterpart of systemd's Restart=always.
+	//
+	// RestartOnFailure below is NOT that, despite reading like it: Task
+	// Scheduler applies it when a task fails to *launch*, and an action whose
+	// process exits non-zero is a run that *completed* with that result. A
+	// gateway that crashed was therefore never restarted — verified on Windows
+	// 11, where a task exiting 1 sat at Ready with NextRunTime empty and no
+	// retry for as long as it was watched.
+	//
+	// A trigger repeating indefinitely from a boundary in the past does the job:
+	// paired with MultipleInstancesPolicy IgnoreNew, a tick while the gateway is
+	// alive is dropped, and the first tick after it died starts it again. The
+	// cost of the policy is bounded by the interval — up to a minute of downtime
+	// after a crash.
+	b.WriteString("    <TimeTrigger>\n")
+	b.WriteString("      <StartBoundary>2000-01-01T00:00:00</StartBoundary>\n")
+	b.WriteString("      <Enabled>true</Enabled>\n")
+	b.WriteString("      <Repetition>\n")
+	b.WriteString("        <Interval>PT1M</Interval>\n")
+	// No Duration: repeat forever. StopAtDurationEnd would be meaningless.
+	b.WriteString("        <StopAtDurationEnd>false</StopAtDurationEnd>\n")
+	b.WriteString("      </Repetition>\n")
+	b.WriteString("    </TimeTrigger>\n")
 	b.WriteString("  </Triggers>\n")
 
 	b.WriteString("  <Principals>\n")

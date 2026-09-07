@@ -1,12 +1,18 @@
-//go:build darwin
+//go:build darwin || windows
 
-// bomtray is a macOS menu bar companion for the bomclaw gateways.
-// It polls each gateway's /api/status endpoint, shows live agent state in the
-// menu bar, exposes quick actions, and can keep the Mac awake while an agent
-// is running (IOKit power assertion, kwota pattern).
+// bomtray is a tray companion for the bomclaw gateways: a macOS menu bar item,
+// or a Windows 11 notification-area icon. It polls each gateway's /api/status
+// endpoint, shows live agent state, exposes quick actions, and can keep the
+// machine awake while an agent is running.
 //
 // It is a separate binary on purpose: when a gateway dies, the tray icon
 // survives and turns red instead of vanishing.
+//
+// How that state is shown differs per platform, and not just cosmetically:
+// macOS puts a text title in the menu bar, whereas systray's SetTitle is a
+// no-op on Windows, where the notification area has room for an icon and a
+// tooltip and nothing else. Both sit behind setTrayPresentation — see
+// state_darwin.go and state_windows.go.
 //
 // A machine normally runs more than one gateway (agent 1 on :18789, agent 2 on
 // :18790), so the tray polls a list. An address that never answers is hidden
@@ -38,6 +44,14 @@ const (
 	awakeAuto   awakeMode = "auto" // hold only while an agent is running
 	awakeAlways awakeMode = "always"
 )
+
+// trayState is everything the icon or the menu bar title has to convey at a
+// glance. Each platform renders it its own way; see setTrayPresentation.
+type trayState struct {
+	down    bool // a gateway that answered before has stopped answering
+	running bool // some agent has a run in flight
+	awake   bool // a sleep-prevention hold is currently active
+}
 
 // defaultAgents is the standard local layout. Both are probed; whichever
 // answers is shown.
@@ -79,11 +93,14 @@ func (ag *agent) name() string {
 	return shortURL(ag.url)
 }
 
-// launchdLabel derives the gateway's service label from its agent id, which is
-// how the installer names it (com.<id>.gateway). Previously the tray had a
-// single hardcoded default that did not match any installed service, so
-// "Restart Gateway" silently did nothing.
-func (ag *agent) launchdLabel(override string) string {
+// serviceTarget names the service to restart for this agent. What a target
+// looks like is platform-specific — a launchd label on macOS, a Task Scheduler
+// path on Windows — so the shape is decided by serviceLabelFor.
+//
+// The tray used to carry a single hardcoded default that matched no installed
+// service, so "Restart Gateway" silently did nothing; the id now comes from the
+// gateway itself.
+func (ag *agent) serviceTarget(override string) string {
 	if override != "" {
 		return override
 	}
@@ -93,10 +110,7 @@ func (ag *agent) launchdLabel(override string) string {
 		id = ag.st.AgentID
 	}
 	ag.mu.Unlock()
-	if id == "" {
-		return ""
-	}
-	return "com." + id + ".gateway"
+	return serviceLabelFor(id)
 }
 
 type app struct {
@@ -137,7 +151,7 @@ func main() {
 	var urls urlList
 	flag.Var(&urls, "agent", "Gateway base URL; repeat for each agent (default: :18789 and :18790)")
 	workspace := flag.String("workspace", filepath.Join(home, "goterm-workspace"), "Fallback workspace for memory stats when a gateway does not report one")
-	label := flag.String("gateway-label", "", "Override the launchd label (default: com.<agent-id>.gateway, from the gateway itself)")
+	label := flag.String("gateway-label", "", "Override the service to restart (default: derived from the agent id the gateway reports)")
 	logPath := flag.String("log", filepath.Join(home, ".goterm/logs/gateway.err.log"), "Gateway log file for Tail Logs")
 	interval := flag.Int("interval", 3, "Poll interval in seconds")
 	flag.Parse()
@@ -165,8 +179,9 @@ func main() {
 }
 
 func (a *app) onReady() {
-	systray.SetTitle("🤖")
-	systray.SetTooltip("bomclaw gateways")
+	// Windows shows nothing at all until an icon is set, so paint the resting
+	// state before the first poll rather than after it.
+	setTrayPresentation(trayState{}, "bomclaw gateways")
 
 	// One block of rows per agent. Hidden until that gateway answers, so a
 	// single-agent machine shows a single-agent menu.
@@ -185,7 +200,7 @@ func (a *app) onReady() {
 	a.memItem = systray.AddMenuItem("💾 Memory: ...", "Open MEMORY.md")
 
 	systray.AddSeparator()
-	awakeMenu := systray.AddMenuItem("Keep Mac Awake", "Prevent system sleep (display may still sleep)")
+	awakeMenu := systray.AddMenuItem(awakeMenuLabel(), "Prevent system sleep (display may still sleep)")
 	a.modeOff = awakeMenu.AddSubMenuItemCheckbox("Off", "", a.mode == awakeOff)
 	a.modeAuto = awakeMenu.AddSubMenuItemCheckbox("While bot is running", "Hold a power assertion only during agent runs", a.mode == awakeAuto)
 	a.modeAlways = awakeMenu.AddSubMenuItemCheckbox("Always", "", a.mode == awakeAlways)
@@ -199,7 +214,7 @@ func (a *app) onReady() {
 	restartMenu := systray.AddMenuItem("Restart Gateway", "")
 	restartItems := make([]*systray.MenuItem, len(a.agents))
 	for i, ag := range a.agents {
-		restartItems[i] = restartMenu.AddSubMenuItem(shortURL(ag.url), "launchctl kickstart -k")
+		restartItems[i] = restartMenu.AddSubMenuItem(shortURL(ag.url), "Restart this gateway's background service")
 	}
 
 	systray.AddSeparator()
@@ -216,12 +231,12 @@ func (a *app) onReady() {
 	for i, ag := range a.agents {
 		go func(i int, ag *agent) {
 			for range restartItems[i].ClickedCh {
-				lbl := ag.launchdLabel(a.label)
-				if lbl == "" {
-					notify("Bomclaw", "Cannot restart "+ag.name()+": its launchd label is unknown")
+				target := ag.serviceTarget(a.label)
+				if target == "" {
+					notify("Bomclaw", "Cannot restart "+ag.name()+": its service name is unknown")
 					continue
 				}
-				restartGateway(lbl)
+				restartGateway(target)
 			}
 		}(i, ag)
 	}
@@ -276,6 +291,37 @@ func (a *app) memDir() string {
 	return a.mem.Dir()
 }
 
+// tooltip is the one-line summary of every agent that has ever answered.
+//
+// On Windows this is the only place detail can go: the notification area shows
+// an icon and a tooltip and nothing else, so it has to carry what the macOS
+// menu bar title does. Windows caps a tooltip at 128 UTF-16 units, which the
+// Windows side trims to.
+func (a *app) tooltip() string {
+	parts := make([]string, 0, len(a.agents)+1)
+	for _, ag := range a.agents {
+		st, up, seen := ag.snapshot()
+		if !seen {
+			continue
+		}
+		switch {
+		case !up:
+			parts = append(parts, ag.name()+": down")
+		case st != nil && len(st.Runs) > 0:
+			parts = append(parts, ag.name()+": "+truncate(st.Runs[0].Task, 28))
+		default:
+			parts = append(parts, ag.name()+": idle")
+		}
+	}
+	if len(parts) == 0 {
+		return "bomclaw — no gateway answering"
+	}
+	if a.awake.Held() {
+		parts = append(parts, "awake held")
+	}
+	return "bomclaw · " + strings.Join(parts, " · ")
+}
+
 // poll refreshes every agent in parallel, then updates the menu, the awake
 // assertion and any transition notifications.
 func (a *app) poll() {
@@ -324,18 +370,12 @@ func (a *app) poll() {
 		a.awake.Release()
 	}
 
-	// --- menu bar title ---
-	title := "🤖"
-	switch {
-	case anyDown:
-		title = "🤖⛔"
-	case anyRunning:
-		title = "🤖⚡"
-	}
-	if a.awake.Held() {
-		title += "☕"
-	}
-	systray.SetTitle(title)
+	// --- tray icon / title ---
+	setTrayPresentation(trayState{
+		down:    anyDown,
+		running: anyRunning,
+		awake:   a.awake.Held(),
+	}, a.tooltip())
 
 	if stats, err := a.mem.StatsIn(a.memDir(), time.Now()); err == nil {
 		a.memItem.SetTitle(fmt.Sprintf("💾 Memory: %s · %d notes", humanBytes(stats.MemoryMDBytes), stats.DailyNoteCount))

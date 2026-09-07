@@ -52,15 +52,29 @@ func psLiteral(s string) string {
 // VirtualScreen, not PrimaryScreen: this is the counterpart of macOS
 // `screencapture -x`, which captures every attached display.
 //
+// SetProcessDPIAware first, and it is not optional. Without it Windows reports
+// VirtualScreen in *scaled* coordinates while CopyFromScreen copies *physical*
+// pixels, so on any display above 100% scaling the bitmap is allocated too
+// small and the capture is silently cropped to the top-left corner. On the
+// machine this was found on — 125% scaling, two monitors — the desktop is
+// 2400x2550 physical but was reported as 1920x2040, losing a fifth of the
+// height and a third of the width with no error anywhere.
+//
 // This needs a real interactive session to draw from. The gateway's Scheduled
 // Task runs with an InteractiveToken for exactly this reason — a Windows
 // service in session 0 would capture a black frame.
 func captureScreen(ctx context.Context, path string) error {
 	script := strings.Join([]string{
 		"Add-Type -AssemblyName System.Windows.Forms,System.Drawing",
+		`Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' ` +
+			"-Name Dpi -Namespace Win32 > $null",
+		// Must happen before anything reads the screen metrics.
+		"[Win32.Dpi]::SetProcessDPIAware() > $null",
 		"$r = [System.Windows.Forms.SystemInformation]::VirtualScreen",
 		"$bmp = New-Object System.Drawing.Bitmap $r.Width, $r.Height",
 		"$g = [System.Drawing.Graphics]::FromImage($bmp)",
+		// $r.Location, not Empty: with more than one monitor the virtual
+		// desktop's origin can be negative.
 		"$g.CopyFromScreen($r.Location, [System.Drawing.Point]::Empty, $r.Size)",
 		"$bmp.Save(" + psLiteral(path) + ", [System.Drawing.Imaging.ImageFormat]::Png)",
 		"$g.Dispose()",
