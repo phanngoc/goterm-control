@@ -54,25 +54,24 @@ func (s *schtasksService) Install(ctx context.Context, args InstallArgs) error {
 		return fmt.Errorf("create log dir: %w", err)
 	}
 
-	gatewayArgs := buildGatewayArgs(args)
-	outLog := filepath.Join(s.logDir, "gateway.log")
-	errLog := filepath.Join(s.logDir, "gateway.err.log")
-
-	// Task Scheduler cannot redirect a task's output, so the action goes
-	// through cmd.exe purely to produce the same gateway.log/gateway.err.log
-	// pair the LaunchAgent and the systemd unit give. Without it a background
-	// gateway on Windows has nowhere to report a startup failure.
-	var command, arguments string
-	if cmdSafe(append([]string{args.BinaryPath, outLog, errLog}, gatewayArgs...)) {
-		command, arguments = wrapWithLogRedirect(args.BinaryPath, gatewayArgs, outLog, errLog)
-	} else {
-		// A path cmd.exe would not pass through verbatim. Run the gateway
-		// directly and give up the log files rather than risk starting it with
-		// mangled arguments.
-		command, arguments = args.BinaryPath, buildTaskArguments(gatewayArgs)
-		log.Printf("daemon: a path contains a quote or percent sign — installing without " +
-			"log redirection; gateway output will only appear in Task Scheduler history")
-	}
+	// The gateway is the task's action directly, and writes its own log via
+	// --log-file. Task Scheduler cannot redirect output, and wrapping the
+	// action in `cmd /c ... >>log` to get around that was a mistake: Task
+	// Scheduler then manages cmd instead of the gateway, so /End orphaned a
+	// live gateway which kept the inherited log handle, and every later start
+	// failed because cmd could not reopen a file the orphan still held. Status,
+	// stop and the keep-alive all depend on the task owning the real process.
+	// --hide-console because bomclaw is a console binary: a task started with
+	// an InteractiveToken otherwise leaves a console window sitting on the
+	// user's desktop for as long as the gateway runs, and a task definition has
+	// no way to pass CREATE_NO_WINDOW. The gateway dismisses its own window,
+	// which keeps this task the direct owner of the real process.
+	gatewayArgs := append(buildGatewayArgs(args),
+		"--log-file", filepath.Join(s.logDir, "gateway.log"),
+		"--hide-console",
+	)
+	command := args.BinaryPath
+	arguments := buildTaskArguments(gatewayArgs)
 
 	warnUnexportableEnv(args.Environment)
 
@@ -139,22 +138,36 @@ func (s *schtasksService) Uninstall(ctx context.Context) error {
 }
 
 func (s *schtasksService) Start(ctx context.Context) error {
+	// Enable first: Stop disables the task, and /Run on a disabled task is
+	// refused.
+	if err := schtasks(ctx, "/Change", "/TN", s.taskName, "/ENABLE"); err != nil {
+		return fmt.Errorf("enable task: %w", err)
+	}
 	return schtasks(ctx, "/Run", "/TN", s.taskName)
 }
 
 func (s *schtasksService) Stop(ctx context.Context) error {
-	return schtasks(ctx, "/End", "/TN", s.taskName)
+	// /End alone is not a stop. The keep-alive trigger fires every minute and
+	// knows nothing about an administrative stop, so it brought the gateway
+	// straight back — `gateway stop` lasted under a minute, measured. Task
+	// Scheduler has no "stopped until started" state, so disabling the task is
+	// what makes it durable; Start re-enables.
+	if err := schtasks(ctx, "/End", "/TN", s.taskName); err != nil {
+		log.Printf("daemon: end task (may not have been running): %v", err)
+	}
+	return schtasks(ctx, "/Change", "/TN", s.taskName, "/DISABLE")
 }
 
 func (s *schtasksService) Restart(ctx context.Context) error {
 	// schtasks has no /Restart. /End on a task that is not running reports an
 	// error, which is not a failure to restart — and the gateway clears any
 	// stale listener on its port at startup (KillStaleListeners), so a socket
-	// still closing does not lose the race.
+	// still closing does not lose the race. Start re-enables, so a restart
+	// after a stop works.
 	if err := schtasks(ctx, "/End", "/TN", s.taskName); err != nil {
 		log.Printf("daemon: end before start (may not be running): %v", err)
 	}
-	return schtasks(ctx, "/Run", "/TN", s.taskName)
+	return s.Start(ctx)
 }
 
 func (s *schtasksService) IsInstalled() (bool, error) {
@@ -211,13 +224,12 @@ func (s *schtasksService) ReadRuntime() (*ServiceRuntime, error) {
 		rt.Status, rt.SubState = s.stateViaPowerShell()
 	}
 
-	// PID is deliberately left at 0. The task's own process is cmd.exe (see
-	// wrapWithLogRedirect), and Task Scheduler cannot report the PID of the
-	// process inside the action. Scanning for the image name is not a
+	// PID is deliberately left at 0. Neither schtasks nor Get-ScheduledTask
+	// reports the pid of a running task, and scanning by image name is not a
 	// substitute: every bomclaw subcommand is also bomclaw.exe, so
 	// `bomclaw gateway status` found *itself* and reported the service as
-	// running with its own PID even while the task sat at Ready. Reporting no
-	// PID is honest; `gateway status` establishes liveness from the port.
+	// running with its own pid while the task sat at Ready. Reporting no pid is
+	// honest, and `gateway status` establishes liveness from the port anyway.
 
 	return rt, nil
 }
@@ -263,48 +275,6 @@ func buildGatewayArgs(args InstallArgs) []string {
 		out = append(out, "--port", strconv.Itoa(args.Port))
 	}
 	return out
-}
-
-// wrapWithLogRedirect returns the Command and Arguments for a task action that
-// runs bin through cmd.exe with stdout and stderr appended to log files.
-func wrapWithLogRedirect(bin string, args []string, outLog, errLog string) (string, string) {
-	comspec := os.Getenv("COMSPEC")
-	if comspec == "" {
-		comspec = `C:\Windows\System32\cmd.exe`
-	}
-
-	// cmd.exe does its own quote handling and does not understand the
-	// backslash escaping CommandLineToArgvW uses, so every value here is
-	// simply wrapped in double quotes. /s is what makes this deterministic: it
-	// tells cmd to strip exactly the outermost pair of quotes and take the
-	// rest literally. Without /s, cmd's rule for a line holding more than two
-	// quotes is not something to rely on.
-	var b strings.Builder
-	b.WriteString(`/s /c "`)
-	b.WriteString(cmdQuote(bin))
-	for _, a := range args {
-		b.WriteString(" ")
-		b.WriteString(cmdQuote(a))
-	}
-	fmt.Fprintf(&b, ` 1>>%s 2>>%s"`, cmdQuote(outLog), cmdQuote(errLog))
-
-	return comspec, b.String()
-}
-
-// cmdQuote wraps a value in double quotes for cmd.exe.
-func cmdQuote(s string) string { return `"` + s + `"` }
-
-// cmdSafe reports whether every value survives cmd.exe's parsing unchanged.
-// cmd has no escape for a double quote, and a percent sign can be eaten by
-// environment expansion even inside quotes, so a path holding either is not
-// routed through the redirect wrapper.
-func cmdSafe(vals []string) bool {
-	for _, v := range vals {
-		if strings.ContainsAny(v, `"%`) {
-			return false
-		}
-	}
-	return true
 }
 
 // warnUnexportableEnv reports environment variables the task definition cannot

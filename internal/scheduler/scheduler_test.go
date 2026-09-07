@@ -90,7 +90,7 @@ func TestCommandScheduleRunsAndRecordsOutput(t *testing.T) {
 	db := openDB(t)
 	now := time.Now()
 	sc, err := db.CreateSchedule(coord.NewSchedule{Name: "echo", CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "10m", TZ: "UTC",
-		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "echo hello $BOMCLAW_SCHEDULE"}, NextRunAt: now.Add(-time.Second)})
+		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdEchoScheduleName}, NextRunAt: now.Add(-time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestCommandFailureClimbsLadderAndAlerts(t *testing.T) {
 	db := openDB(t)
 	now := time.Now()
 	sc, _ := db.CreateSchedule(coord.NewSchedule{Name: "broken", CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "10m", TZ: "UTC",
-		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "echo boom >&2; exit 3"}, NextRunAt: now.Add(-time.Second)})
+		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdFailWithStderr}, NextRunAt: now.Add(-time.Second)})
 	var n notes
 	s := New(db, Config{AgentID: "a1"})
 	s.SetNotify(n.add)
@@ -182,7 +182,7 @@ func TestCommandTimeoutFails(t *testing.T) {
 	db := openDB(t)
 	now := time.Now()
 	sc, _ := db.CreateSchedule(coord.NewSchedule{Name: "slow", CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "10m", TZ: "UTC",
-		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "sleep 5", TimeoutS: 1}, NextRunAt: now.Add(-time.Second)})
+		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdSleep5, TimeoutS: 1}, NextRunAt: now.Add(-time.Second)})
 	s := New(db, Config{AgentID: "a1"})
 	fixed(s, now)
 	start := time.Now()
@@ -203,7 +203,7 @@ func TestMissedScheduleCatchesUpOnce(t *testing.T) {
 	db := openDB(t)
 	now := time.Now()
 	sc, _ := db.CreateSchedule(coord.NewSchedule{Name: "hourly", CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "1h", TZ: "UTC",
-		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "true"}, NextRunAt: now.Add(-8 * time.Hour)})
+		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdSucceed}, NextRunAt: now.Add(-8 * time.Hour)})
 	s := New(db, Config{AgentID: "a1"})
 	fixed(s, now)
 	s.Tick(context.Background())
@@ -224,7 +224,7 @@ func TestMissedScheduleWithSkipMissedReArms(t *testing.T) {
 	db := openDB(t)
 	now := time.Now()
 	sc, _ := db.CreateSchedule(coord.NewSchedule{Name: "skippy", CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "1h", TZ: "UTC",
-		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "echo RAN"}, SkipMissed: true, NextRunAt: now.Add(-8 * time.Hour)})
+		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdEchoRAN}, SkipMissed: true, NextRunAt: now.Add(-8 * time.Hour)})
 	s := New(db, Config{AgentID: "a1"})
 	fixed(s, now)
 	s.Tick(context.Background())
@@ -239,7 +239,7 @@ func TestMissedScheduleWithSkipMissedReArms(t *testing.T) {
 	}
 	// A schedule found one tick late is NOT missed: it runs.
 	late, _ := db.CreateSchedule(coord.NewSchedule{Name: "ontime", CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "1h", TZ: "UTC",
-		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "echo RAN"}, SkipMissed: true, NextRunAt: now.Add(-40 * time.Second)})
+		PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdEchoRAN}, SkipMissed: true, NextRunAt: now.Add(-40 * time.Second)})
 	s.Tick(context.Background())
 	s.Wait()
 	runs, _ = db.ScheduleRuns(late.ID, 10)
@@ -380,7 +380,7 @@ func TestTwoGatewaysFireOnce(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		a.CreateSchedule(coord.NewSchedule{Name: "s" + string(rune('a'+i)), CreatedBy: "t", Kind: coord.ScheduleEvery, Spec: "10m", TZ: "UTC",
-			PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: "true"}, NextRunAt: now.Add(-time.Second)})
+			PayloadKind: coord.PayloadCommand, Payload: coord.CommandPayload{Cmd: cmdSucceed}, NextRunAt: now.Add(-time.Second)})
 	}
 	sa, sb := New(a, Config{AgentID: "a1"}), New(b, Config{AgentID: "a2"})
 	fixed(sa, now)

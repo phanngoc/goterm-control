@@ -174,53 +174,33 @@ func TestBuildGatewayArgs(t *testing.T) {
 	}
 }
 
-func TestWrapWithLogRedirect(t *testing.T) {
-	t.Setenv("COMSPEC", `C:\Windows\System32\cmd.exe`)
+// The task's action must be the gateway binary itself, never a shell wrapping
+// it. Wrapping the action in `cmd /c ... >>log` to get output redirection made
+// Task Scheduler manage cmd instead of the gateway: ending the task orphaned a
+// live gateway, which kept the inherited log handle, and every later start then
+// failed because cmd could not reopen a file the orphan still held. Status,
+// stop and the keep-alive all need the task to own the real process.
+func TestTaskActionRunsTheGatewayDirectly(t *testing.T) {
+	xml := buildTaskXML(taskXMLArgs{
+		Command: `C:\Users\ngoc\.bomclaw\bomclaw.exe`,
+		Arguments: buildTaskArguments([]string{
+			"gateway", "--port", "18790", "--log-file", `C:\logs\gateway.log`, "--hide-console",
+		}),
+	})
 
-	command, arguments := wrapWithLogRedirect(
-		`C:\Program Files\bomclaw.exe`,
-		[]string{"gateway", "--port", "18789"},
-		`C:\logs\gateway.log`,
-		`C:\logs\gateway.err.log`,
-	)
-
-	if command != `C:\Windows\System32\cmd.exe` {
-		t.Errorf("command = %q, want COMSPEC", command)
+	if !strings.Contains(xml, `<Command>C:\Users\ngoc\.bomclaw\bomclaw.exe</Command>`) {
+		t.Errorf("the action should be the binary itself:\n%s", xml)
 	}
-
-	want := `/s /c "` +
-		`"C:\Program Files\bomclaw.exe" "gateway" "--port" "18789"` +
-		` 1>>"C:\logs\gateway.log" 2>>"C:\logs\gateway.err.log""`
-	if arguments != want {
-		t.Errorf("arguments =\n  %q\nwant\n  %q", arguments, want)
+	for _, shell := range []string{"cmd.exe", "/s /c", "powershell", "1&gt;&gt;", "2&gt;&gt;"} {
+		if strings.Contains(xml, shell) {
+			t.Errorf("the action must not go through a shell, found %q", shell)
+		}
 	}
-
-	// /s is what makes the quoting deterministic — without it cmd's handling of
-	// a line with more than two quotes is not something to rely on.
-	if !strings.HasPrefix(arguments, "/s /c ") {
-		t.Error("the wrapper must pass /s")
-	}
-}
-
-func TestWrapWithLogRedirectFallsBackWithoutComspec(t *testing.T) {
-	t.Setenv("COMSPEC", "")
-	command, _ := wrapWithLogRedirect(`C:\bomclaw.exe`, nil, "o", "e")
-	if command != `C:\Windows\System32\cmd.exe` {
-		t.Errorf("command = %q, want the hardcoded cmd.exe fallback", command)
-	}
-}
-
-func TestCmdSafe(t *testing.T) {
-	safe := []string{`C:\Users\ngoc\.bomclaw\bomclaw.exe`, `C:\Some Name\cfg.yaml`, "--port", "18789"}
-	if !cmdSafe(safe) {
-		t.Errorf("ordinary paths must be considered safe: %v", safe)
-	}
-
-	// cmd.exe has no escape for a double quote, and expands %VAR% even inside
-	// quotes — either one silently changes what gets executed.
-	for _, bad := range []string{`C:\a"b\cfg.yaml`, `C:\100%%\cfg.yaml`, `C:\%TEMP%\cfg.yaml`} {
-		if cmdSafe([]string{`C:\bomclaw.exe`, bad}) {
-			t.Errorf("cmdSafe should reject %q", bad)
+	// The gateway writes its own log and dismisses its own console window;
+	// both are what let the action be the binary itself.
+	for _, flag := range []string{"--log-file", "--hide-console"} {
+		if !strings.Contains(xml, flag) {
+			t.Errorf("expected %q in the action arguments", flag)
 		}
 	}
 }
