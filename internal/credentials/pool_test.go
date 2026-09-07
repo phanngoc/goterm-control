@@ -3,6 +3,7 @@ package credentials
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -249,7 +250,9 @@ func TestExpandHome(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	p := mustPool(t, ProviderClaude, []Account{{Name: "a", ConfigDir: "~/.claude-alt"}})
 	a, _ := p.Pick("a")
-	if a.ConfigDir != home+"/.claude-alt" {
+	// filepath.Join, so the separator is the host's — a hardcoded "/" here
+	// failed on Windows against a correctly expanded path.
+	if a.ConfigDir != filepath.Join(home, ".claude-alt") {
 		t.Errorf("~ not expanded: %q", a.ConfigDir)
 	}
 }

@@ -1,0 +1,70 @@
+name: Go
+
+# Native build, vet and test on every platform BomClaw claims to support.
+#
+# The point of the matrix is the Windows leg: before it existed, a POSIX-only
+# call (syscall.Kill, Setpgid) could land without anyone noticing that the
+# Windows build had stopped compiling. Each leg builds natively rather than
+# cross-compiling, because cmd/bomtray needs cgo on darwin.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # No gofmt gate yet: 13 files already on main do not pass it, and
+      # reformatting them belongs in its own commit rather than here.
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  # The build must also stay clean for the platforms not in the matrix above,
+  # so a POSIX assumption cannot slip in behind a !windows build tag.
+  crosscompile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cross-compile
+        shell: bash
+        run: |
+          for target in linux/arm64 windows/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            echo "=== $os/$arch ==="
+            # cmd/bomtray needs cgo (Cocoa/IOKit) and cannot cross-compile;
+            # everything else must.
+            GOOS=$os GOARCH=$arch go build ./internal/... ./cmd/bomclaw/...
+          done

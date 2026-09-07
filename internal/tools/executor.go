@@ -11,17 +11,17 @@ import (
 type Executor struct {
 	shell   *ShellTool
 	fs      *FileSystemTool
-	mac     *MacTool
+	desktop *DesktopTool
 	system  *SystemTool
 	browser *BrowserTool
 }
 
 // ToolResult carries the result of a tool call.
 type ToolResult struct {
-	Output      string
-	IsError     bool
-	IsImage     bool   // true when Output is a file path to an image
-	ImagePath   string // path to image file when IsImage=true
+	Output    string
+	IsError   bool
+	IsImage   bool   // true when Output is a file path to an image
+	ImagePath string // path to image file when IsImage=true
 }
 
 func New(cfg ExecutorConfig) *Executor {
@@ -31,7 +31,7 @@ func New(cfg ExecutorConfig) *Executor {
 			MaxOutputBytes: cfg.MaxOutputBytes,
 		},
 		fs:      &FileSystemTool{AllowedPaths: cfg.AllowedPaths},
-		mac:     &MacTool{},
+		desktop: &DesktopTool{},
 		system:  &SystemTool{},
 		browser: &BrowserTool{},
 	}
@@ -68,7 +68,7 @@ func (e *Executor) Run(ctx context.Context, name string, input json.RawMessage) 
 	case "search_files":
 		out, err = e.fs.SearchFiles(ctx, input)
 	case "take_screenshot":
-		out, err = e.mac.Screenshot(ctx, input)
+		out, err = e.desktop.Screenshot(ctx, input)
 		if err == nil && len(out) > 11 && out[:11] == "SCREENSHOT:" {
 			return ToolResult{
 				IsImage:   true,
@@ -77,13 +77,13 @@ func (e *Executor) Run(ctx context.Context, name string, input json.RawMessage) 
 			}
 		}
 	case "get_clipboard":
-		out, err = e.mac.GetClipboard(ctx, input)
+		out, err = e.desktop.GetClipboard(ctx, input)
 	case "set_clipboard":
-		out, err = e.mac.SetClipboard(ctx, input)
+		out, err = e.desktop.SetClipboard(ctx, input)
 	case "run_applescript":
-		out, err = e.mac.RunAppleScript(ctx, input)
+		out, err = e.desktop.RunAppleScript(ctx, input)
 	case "open_app":
-		out, err = e.mac.OpenApp(ctx, input)
+		out, err = e.desktop.OpenApp(ctx, input)
 	case "get_system_info":
 		out, err = e.system.Info(ctx, input)
 	case "list_processes":
@@ -91,7 +91,7 @@ func (e *Executor) Run(ctx context.Context, name string, input json.RawMessage) 
 	case "kill_process":
 		out, err = e.system.Kill(ctx, input)
 	case "browse_url":
-		out, err = e.mac.BrowseURL(ctx, input)
+		out, err = e.desktop.BrowseURL(ctx, input)
 
 	// Browser automation (agent-browser CLI)
 	case "browser_navigate":

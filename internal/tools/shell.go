@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -39,16 +40,16 @@ func (t *ShellTool) Run(ctx context.Context, raw json.RawMessage) (string, error
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", inp.Command)
+	cmd := shellCommand(ctx, inp.Command)
 
 	// Working directory
 	workDir := inp.WorkingDir
 	if workDir == "" {
-		workDir = os.Getenv("HOME")
+		workDir = homeDir()
 	}
 	// Expand ~ manually
 	if strings.HasPrefix(workDir, "~/") {
-		workDir = os.Getenv("HOME") + workDir[1:]
+		workDir = filepath.Join(homeDir(), workDir[2:])
 	}
 	cmd.Dir = workDir
 

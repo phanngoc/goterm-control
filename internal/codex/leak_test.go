@@ -1,3 +1,11 @@
+//go:build !windows
+
+// The harness in this file is POSIX-only: the fake codex is a /bin/sh script
+// that reports its own pid through $$ and lingers with sleep, and liveness is
+// probed with signal 0, which Windows has no equivalent of. The behaviour under
+// test — that a failed or abandoned turn reaps its child — is not
+// platform-specific, and stays covered by the Linux and macOS legs of CI.
+
 package codex
 
 import (

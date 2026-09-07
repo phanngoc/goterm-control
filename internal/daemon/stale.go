@@ -1,19 +1,18 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
-	"strconv"
-	"strings"
-	"syscall"
 	"time"
 )
 
 // KillStaleListeners detects and kills any process holding the given TCP port.
-// This prevents "address already in use" errors when launchd/systemd auto-restarts
-// the gateway after a crash while the old socket is still in TIME_WAIT.
+// This prevents "address already in use" errors when the service manager
+// auto-restarts the gateway after a crash while the old socket is still bound.
+//
+// Finding and signalling the holder is platform-specific (see stale_unix.go
+// and stale_windows.go); the escalation policy below is shared.
 func KillStaleListeners(port int) error {
 	if !isPortOccupied(port) {
 		return nil
@@ -21,7 +20,7 @@ func KillStaleListeners(port int) error {
 
 	pids, err := findListenerPIDs(port)
 	if err != nil {
-		return fmt.Errorf("lsof: %w", err)
+		return fmt.Errorf("find listeners on port %d: %w", port, err)
 	}
 	if len(pids) == 0 {
 		return nil
@@ -32,20 +31,20 @@ func KillStaleListeners(port int) error {
 		if pid == self {
 			continue
 		}
-		_ = syscall.Kill(pid, syscall.SIGTERM)
+		_ = terminatePID(pid)
 	}
 
-	// Wait for port to free up (SIGTERM grace period)
+	// Wait for port to free up (graceful shutdown grace period)
 	if waitPortFree(port, 3*time.Second) {
 		return nil
 	}
 
-	// Escalate to SIGKILL
+	// Escalate to a forced kill
 	for _, pid := range pids {
 		if pid == self {
 			continue
 		}
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_ = killPID(pid)
 	}
 
 	if waitPortFree(port, 2*time.Second) {
@@ -63,29 +62,6 @@ func isPortOccupied(port int) bool {
 	}
 	conn.Close()
 	return true
-}
-
-// findListenerPIDs returns PIDs of processes listening on the given TCP port.
-func findListenerPIDs(port int) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := execCommand(ctx, "lsof", "-ti", fmt.Sprintf("tcp:%d", port))
-	if err != nil {
-		return nil, err
-	}
-	if result.ExitCode != 0 || strings.TrimSpace(result.Stdout) == "" {
-		return nil, nil
-	}
-
-	var pids []int
-	for line := range strings.SplitSeq(strings.TrimSpace(result.Stdout), "\n") {
-		line = strings.TrimSpace(line)
-		if pid, err := strconv.Atoi(line); err == nil && pid > 0 {
-			pids = append(pids, pid)
-		}
-	}
-	return pids, nil
 }
 
 // waitPortFree polls until the port is free or the timeout elapses.

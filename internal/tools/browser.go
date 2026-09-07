@@ -10,7 +10,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/browser"
 )
 
-const browserScreenshotPath = "/tmp/browser-screenshot.png"
+var browserScreenshotPath = tempFile("browser-screenshot.png")
 
 // BrowserTool provides browser automation via native CDP over WebSocket.
 // Chrome is launched lazily on first use.

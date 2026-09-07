@@ -9,32 +9,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
 const (
-	defaultCdpPort       = 9222
-	httpTimeout          = 1500 * time.Millisecond
-	reachabilityTimeout  = 500 * time.Millisecond
-	launchReadyWindow    = 15 * time.Second
-	launchPollInterval   = 200 * time.Millisecond
-	stopTimeout          = 2500 * time.Millisecond
-	stopPollInterval     = 100 * time.Millisecond
+	defaultCdpPort      = 9222
+	httpTimeout         = 1500 * time.Millisecond
+	reachabilityTimeout = 500 * time.Millisecond
+	launchReadyWindow   = 15 * time.Second
+	launchPollInterval  = 200 * time.Millisecond
+	stopTimeout         = 2500 * time.Millisecond
+	stopPollInterval    = 100 * time.Millisecond
 )
-
-// Chrome candidates on Linux, ordered by preference.
-var chromePaths = []string{
-	"/usr/bin/google-chrome",
-	"/usr/bin/google-chrome-stable",
-	"/usr/bin/brave-browser",
-	"/usr/bin/brave-browser-stable",
-	"/usr/bin/microsoft-edge",
-	"/usr/bin/microsoft-edge-stable",
-	"/usr/bin/chromium",
-	"/usr/bin/chromium-browser",
-	"/snap/bin/chromium",
-}
 
 // Chrome manages a local Chrome process with CDP enabled.
 type Chrome struct {
@@ -45,19 +31,21 @@ type Chrome struct {
 }
 
 // FindChrome returns the path to the first available Chrome executable.
+// The candidate list and the PATH names to try are platform-specific — see
+// chrome_paths_windows.go and chrome_paths_other.go.
 func FindChrome() (string, error) {
-	for _, p := range chromePaths {
+	for _, p := range chromeCandidates() {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
 	}
 	// Fallback: check PATH.
-	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
+	for _, name := range chromeExeNames() {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("no Chrome/Chromium found; install google-chrome or chromium")
+	return "", fmt.Errorf("no Chrome/Chromium found; install Google Chrome, Chromium, Edge or Brave")
 }
 
 // Launch starts Chrome with --remote-debugging-port and waits for CDP ready.
@@ -94,8 +82,8 @@ func Launch(ctx context.Context) (*Chrome, error) {
 	c.cmd = exec.CommandContext(ctx, exe, args...)
 	c.cmd.Stdout = nil
 	c.cmd.Stderr = nil
-	// Detach from parent process group so Chrome survives if we crash mid-launch.
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Detach from our process group so Chrome survives if we crash mid-launch.
+	detach(c.cmd)
 
 	if err := c.cmd.Start(); err != nil {
 		return nil, fmt.Errorf("chrome launch: %w", err)
@@ -115,7 +103,7 @@ func Launch(ctx context.Context) (*Chrome, error) {
 	return nil, fmt.Errorf("chrome CDP not ready after %s on port %d", launchReadyWindow, c.cdpPort)
 }
 
-// Stop terminates Chrome gracefully (SIGTERM), falling back to SIGKILL.
+// Stop terminates Chrome gracefully, falling back to a forced kill.
 func (c *Chrome) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -123,7 +111,7 @@ func (c *Chrome) Stop() error {
 		return nil
 	}
 
-	c.cmd.Process.Signal(syscall.SIGTERM)
+	_ = requestStop(c.cmd.Process)
 
 	deadline := time.Now().Add(stopTimeout)
 	for time.Now().Before(deadline) {

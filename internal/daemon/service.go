@@ -64,6 +64,8 @@ func Resolve() (Service, error) {
 		return newSystemdService()
 	case "darwin":
 		return newLaunchdService()
+	case "windows":
+		return newSchtasksService()
 	default:
 		return nil, fmt.Errorf("daemon service not supported on %s", runtime.GOOS)
 	}
