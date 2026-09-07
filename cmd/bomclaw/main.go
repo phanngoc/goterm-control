@@ -193,9 +193,18 @@ func runGateway(args []string) {
 	bind := fs.String("bind", "127.0.0.1", "Bind address")
 	port := fs.Int("port", 18789, "Gateway port")
 	logFile := fs.String("log-file", "", "Also append log output to this file (Task Scheduler cannot redirect a task's output)")
+	hideConsole := fs.Bool("hide-console", false, "Hide the console window this process owns (Windows service use; ignored elsewhere)")
 	fs.Parse(args)
 
-	// Before anything else logs, or the first lines only reach stderr.
+	// First, and before any logging: a hidden window should never have been
+	// seen at all. hideConsoleWindow declines if the console is shared with a
+	// terminal, so passing this interactively cannot hide the user's shell.
+	if *hideConsole {
+		hideConsoleWindow()
+	}
+
+	// Then logging, before anything else logs, or the first lines only reach
+	// stderr — which nobody is reading once the window is hidden.
 	if *logFile != "" {
 		startFileLogging(*logFile)
 	}

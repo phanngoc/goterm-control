@@ -61,7 +61,15 @@ func (s *schtasksService) Install(ctx context.Context, args InstallArgs) error {
 	// live gateway which kept the inherited log handle, and every later start
 	// failed because cmd could not reopen a file the orphan still held. Status,
 	// stop and the keep-alive all depend on the task owning the real process.
-	gatewayArgs := append(buildGatewayArgs(args), "--log-file", filepath.Join(s.logDir, "gateway.log"))
+	// --hide-console because bomclaw is a console binary: a task started with
+	// an InteractiveToken otherwise leaves a console window sitting on the
+	// user's desktop for as long as the gateway runs, and a task definition has
+	// no way to pass CREATE_NO_WINDOW. The gateway dismisses its own window,
+	// which keeps this task the direct owner of the real process.
+	gatewayArgs := append(buildGatewayArgs(args),
+		"--log-file", filepath.Join(s.logDir, "gateway.log"),
+		"--hide-console",
+	)
 	command := args.BinaryPath
 	arguments := buildTaskArguments(gatewayArgs)
 

@@ -230,7 +230,24 @@ would need Administrator to install.)
 The task is registered as `\BomClaw\bomclaw-gateway` — visible in Task
 Scheduler under the **BomClaw** folder. Its generated definition is kept at
 `%LOCALAPPDATA%\BomClaw\bomclaw-gateway.xml`, and gateway output goes to
-`%USERPROFILE%\.goterm\logs\gateway.log` and `gateway.err.log`.
+`%USERPROFILE%\.goterm\logs\gateway.log`.
+
+**No console window.** `bomclaw` is a console binary, so a task running it
+would normally leave a black window on your desktop for as long as the gateway
+lives, and a task definition has no way to ask for `CREATE_NO_WINDOW`. The
+installer passes `--hide-console`, and the gateway dismisses its own window at
+startup — but only when it is the sole process attached to that console, so
+running `bomclaw gateway` in a terminal never hides *your* window.
+
+The other route is to point the task at a `.vbs` and let `wscript` launch it
+hidden. That is avoided on purpose: the usual form returns immediately, the
+task completes, and the gateway is orphaned — leaving `gateway status` and
+`gateway stop` with nothing to talk to. Keeping the gateway as the task's own
+action is what makes those work.
+
+`gateway stop` also **disables** the task, because the keep-alive trigger knows
+nothing about an administrative stop and would otherwise restart the gateway
+within a minute. `gateway start` re-enables it.
 
 ### Optional — tray icon
 

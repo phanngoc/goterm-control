@@ -182,8 +182,10 @@ func TestBuildGatewayArgs(t *testing.T) {
 // stop and the keep-alive all need the task to own the real process.
 func TestTaskActionRunsTheGatewayDirectly(t *testing.T) {
 	xml := buildTaskXML(taskXMLArgs{
-		Command:   `C:\Users\ngoc\.bomclaw\bomclaw.exe`,
-		Arguments: buildTaskArguments([]string{"gateway", "--port", "18790", "--log-file", `C:\logs\gateway.log`}),
+		Command: `C:\Users\ngoc\.bomclaw\bomclaw.exe`,
+		Arguments: buildTaskArguments([]string{
+			"gateway", "--port", "18790", "--log-file", `C:\logs\gateway.log`, "--hide-console",
+		}),
 	})
 
 	if !strings.Contains(xml, `<Command>C:\Users\ngoc\.bomclaw\bomclaw.exe</Command>`) {
@@ -194,9 +196,12 @@ func TestTaskActionRunsTheGatewayDirectly(t *testing.T) {
 			t.Errorf("the action must not go through a shell, found %q", shell)
 		}
 	}
-	// The gateway writes its own log instead, so the flag has to survive.
-	if !strings.Contains(xml, "--log-file") {
-		t.Error("expected --log-file in the action arguments")
+	// The gateway writes its own log and dismisses its own console window;
+	// both are what let the action be the binary itself.
+	for _, flag := range []string{"--log-file", "--hide-console"} {
+		if !strings.Contains(xml, flag) {
+			t.Errorf("expected %q in the action arguments", flag)
+		}
 	}
 }
 
