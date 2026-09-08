@@ -97,6 +97,10 @@ type Task struct {
 	MaxContinuations int    `json:"max_continuations"`
 	BlockedOn        string `json:"blocked_on,omitempty"`
 	FailReason       string `json:"fail_reason,omitempty"`
+
+	// v5: set once this task's outcome has been delivered to whoever asked for
+	// it. Empty on a terminal task means a report is still owed.
+	ReportedAt string `json:"reported_at,omitempty"`
 }
 
 // SessionRef names the CLI session a task's work lives in. Both CLIs keep the
@@ -133,7 +137,7 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	priority, title, body, result, trace_id, lease_until, attempts,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-	max_continuations, blocked_on, fail_reason`
+	max_continuations, blocked_on, fail_reason, reported_at`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -577,11 +581,94 @@ func scanTask(s scanner) (*Task, error) {
 		&t.State, &t.Priority, &t.Title, &t.Body, &t.Result, &t.TraceID,
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
-		&t.MaxContinuations, &t.BlockedOn, &t.FailReason); err != nil {
+		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)
 	t.CreatedAt = parseTS(created)
 	t.UpdatedAt = parseTS(updated)
 	return &t, nil
+}
+
+// TerminalTaskStates are the states a task never leaves. A task in one of these
+// has an outcome worth reporting; anything else is still in play.
+var TerminalTaskStates = []string{TaskCompleted, TaskFailed, TaskCanceled, TaskRejected}
+
+// PendingReports lists tasks agentID delegated that have finished and whose
+// outcome nobody has delivered yet — the requester's side of the queue, which
+// until now had no query at all. Oldest first, so a backlog reports in order.
+//
+// Four clauses decide what counts as "delegated to someone else", and each one
+// keeps a class of task out:
+//
+//   - claimed_by != created_by is the actual test. Whoever ran it was not me,
+//     so I did not watch it happen. A task that died before anyone claimed it
+//     has claimed_by = ” and still qualifies, which is right: a rejected or
+//     cancelled hand-off is exactly the outcome worth hearing about.
+//   - schedule_id = ” leaves scheduled work alone. The scheduler already
+//     settles and reports its own runs (scheduler.settle), so matching them
+//     here would deliver every scheduled result to Telegram twice.
+//   - parent_id = ” reports root tasks only. A sub-task is a detail of its
+//     parent's work; the parent's own outcome is the one that was asked for.
+//   - reported_at = ” is the marker MarkReported sets, so a result is
+//     delivered once even though every gateway runs this query.
+func (db *DB) PendingReports(agentID string, limit int) ([]Task, error) {
+	if agentID == "" {
+		return nil, fmt.Errorf("pending reports: agent id is required")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	states := make([]string, len(TerminalTaskStates))
+	args := []any{agentID}
+	for i, s := range TerminalTaskStates {
+		states[i] = "?"
+		args = append(args, s)
+	}
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(`SELECT `+taskCols+`
+		FROM tasks
+		WHERE created_by = ?
+		  AND claimed_by != created_by
+		  AND schedule_id = ''
+		  AND parent_id = ''
+		  AND state IN (`+strings.Join(states, ",")+`)
+		  AND reported_at = ''
+		ORDER BY updated_at, rowid LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pending reports: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Task{}
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+// MarkReported claims the delivery of one task's outcome. It returns true for
+// exactly one caller.
+//
+// Every gateway on the machine runs the same PendingReports query against the
+// same file, so two of them can see the same finished task in the same tick.
+// The compare-and-set on reported_at is what makes the second one a no-op —
+// the same idiom as ClaimTask, ClaimSchedule and SettleScheduleRun, and for the
+// same reason: the shared database is the only coordination primitive here, so
+// there is no lock and no leader to lose.
+func (db *DB) MarkReported(taskID string, now time.Time) (bool, error) {
+	res, err := db.conn.Exec(
+		`UPDATE tasks SET reported_at = ? WHERE id = ? AND reported_at = ''`,
+		ts(now), taskID)
+	if err != nil {
+		return false, fmt.Errorf("mark reported %s: %w", taskID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
