@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -929,7 +928,20 @@ func startFileLogging(path string) {
 		log.Printf("gateway: could not open --log-file %s: %v", path, err)
 		return
 	}
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	// The file only — deliberately NOT io.MultiWriter(os.Stderr, f).
+	//
+	// MultiWriter stops at the first writer that returns an error, so a
+	// failing stderr silently takes the file down with it. That is what
+	// happened: a service gateway logged normally for a while, then went
+	// completely silent for 96 minutes while still serving requests, leaving
+	// no trace of the turns it handled.
+	//
+	// Teeing to stderr is pure liability here anyway. --log-file is passed by
+	// the service installer, which also hides the console window, so nothing
+	// is reading stderr — and a console whose output is never drained is a
+	// well-known way to make writes block, which would take the single mutex
+	// inside log with it and stall every goroutine that logs.
+	log.SetOutput(f)
 }
 
 // serviceLogHint names where the installed gateway's output ends up, which
