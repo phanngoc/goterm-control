@@ -33,6 +33,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/daemon"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
+	"github.com/ngocp/goterm-control/internal/reporter"
 	"github.com/ngocp/goterm-control/internal/scheduler"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/storage"
@@ -385,6 +386,21 @@ func runGateway(args []string) {
 		runner.Start(ctx)
 	} else if coordDB != nil {
 		log.Printf("taskrunner: disabled (tasks.auto_claim=false) — queued work waits for `bomclaw task claim`")
+	}
+
+	// Reporter — tells the owner what came of tasks this agent handed to a
+	// peer. Not gated on auto_claim or schedules.enabled, and that is the whole
+	// point: a gateway delegates because it does *not* run the work itself, so
+	// it is exactly the gateway whose runner and scheduler are switched off.
+	// Any number of gateways may run it; the compare-and-set on tasks
+	// .reported_at means only one delivers.
+	var report *reporter.Reporter
+	if coordDB != nil {
+		report = reporter.New(coordDB, reporter.Config{AgentID: cfg.Agent.ID})
+		if tgBot != nil {
+			report.SetNotify(func(text string) { tgBot.Notify(text) })
+		}
+		report.Start(ctx)
 	}
 
 	// Scheduler — fires timed work from the shared database. Off by default:

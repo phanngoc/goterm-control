@@ -3,6 +3,7 @@ package coord
 import (
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -337,13 +338,21 @@ func TestMigrateV3DatabaseGainsSchedules(t *testing.T) {
 	defer db.Close()
 	var version string
 	db.conn.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version)
-	if version != "4" {
-		t.Errorf("schema_version %s, want 4", version)
+	// Against the constant, not a literal: this asserts "migrating brings an old
+	// file fully up to date", which stays true across the next bump.
+	if want := strconv.Itoa(schemaVersion); version != want {
+		t.Errorf("schema_version %s, want %s", version, want)
 	}
 	var n int
 	db.conn.QueryRow(`SELECT count(*) FROM pragma_table_info('agents') WHERE name='scratch'`).Scan(&n)
 	if n != 1 {
 		t.Error("agents.scratch missing after migration")
+	}
+	// v5: without this column the reporter's query fails on every existing
+	// coord.db rather than on a fresh one, which is the only kind anyone has.
+	db.conn.QueryRow(`SELECT count(*) FROM pragma_table_info('tasks') WHERE name='reported_at'`).Scan(&n)
+	if n != 1 {
+		t.Error("tasks.reported_at missing after migration")
 	}
 	if _, err := db.ListSchedules(); err != nil {
 		t.Errorf("schedules table: %v", err)

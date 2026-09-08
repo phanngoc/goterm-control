@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // DB is the shared coordination database.
 type DB struct {
@@ -160,7 +160,10 @@ var ddl = []string{
 		continuations     INTEGER NOT NULL DEFAULT 0, -- runs that ended "not done yet" (≠ attempts, which are failures)
 		max_continuations INTEGER NOT NULL DEFAULT 20,
 		blocked_on        TEXT NOT NULL DEFAULT '',   -- '' | children | human
-		fail_reason       TEXT NOT NULL DEFAULT ''    -- exhausted | continuations-exhausted | empty-exhausted
+		fail_reason       TEXT NOT NULL DEFAULT '',   -- exhausted | continuations-exhausted | empty-exhausted
+		-- v5: set once the task's outcome has been reported to whoever asked for
+		-- it. Empty on a terminal task means a report is still owed.
+		reported_at       TEXT NOT NULL DEFAULT ''
 	) STRICT`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(state, lease_until, priority DESC, created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_context   ON tasks(context_id)`,
@@ -311,6 +314,13 @@ var v4Columns = []struct{ table, name, decl string }{
 // the previous version they can only be built after those columns exist — a
 // fresh database gets them from the CREATE TABLE and the ALTERs are no-ops,
 // but an upgraded one would fail with "no such column" if these sat in ddl.
+// v5Columns adds the reporting marker to tasks. Same guarded-ALTER treatment as
+// v3Columns: CREATE TABLE IF NOT EXISTS leaves an existing table alone, and the
+// catalogue check makes it safe for two gateways to open the file at once.
+var v5Columns = []struct{ name, decl string }{
+	{"reported_at", "TEXT NOT NULL DEFAULT ''"},
+}
+
 var v3Indexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id, state)`,
 }
@@ -328,6 +338,11 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v4Columns {
 		if err := db.ensureColumn(c.table, c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v5Columns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
 			return err
 		}
 	}
