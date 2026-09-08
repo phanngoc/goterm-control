@@ -526,3 +526,49 @@ func TestHasPendingTodos(t *testing.T) {
 		t.Error("garbage must not read as pending")
 	}
 }
+
+func TestMissingSessionRetriesFreshWithCheckpointAndAccount(t *testing.T) {
+	db := testDB(t)
+	created, _ := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "Audit games", Body: "Inspect all ten repositories"})
+	llm := &stubLLM{err: errors.New("temporary API failure")}
+	llm.hook = func(_ context.Context, s *session.Session, _ chat.StreamCallbacks) {
+		s.SetAccount("account-one")
+		tk, _ := db.GetTask(created.ID)
+		if err := db.SetCheckpoint(created.ID, "a2", tk.Attempts, "games 1-3 inspected"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newRunner(db, llm)
+	r.claimAndRun(context.Background())
+	task, _ := db.GetTask(created.ID)
+	if coord.ParseSessionRef(task.SessionRef).SessionID != "stub-session" {
+		t.Fatal("generic error discarded session")
+	}
+	llm.hook = nil
+	llm.err = chat.ErrSessionNotFound
+	r.claimAndRun(context.Background())
+	task, _ = db.GetTask(created.ID)
+	ref := coord.ParseSessionRef(task.SessionRef)
+	if ref.SessionID != "" || ref.Account != "account-one" {
+		t.Fatalf("bad recovery ref: %+v", ref)
+	}
+	if task.Checkpoint != "games 1-3 inspected" {
+		t.Fatalf("lost checkpoint: %q", task.Checkpoint)
+	}
+	llm.err = nil
+	llm.reply = "Completed audit."
+	llm.hook = func(_ context.Context, s *session.Session, _ chat.StreamCallbacks) {
+		if s.GetAccount() != "account-one" {
+			t.Fatalf("lost account pin: %s", s.GetAccount())
+		}
+	}
+	r.claimAndRun(context.Background())
+	ids := llm.seenSessions()
+	if len(ids) != 3 || ids[1] != "stub-session" || ids[2] != "" {
+		t.Fatalf("sessions: %v", ids)
+	}
+	prompts := llm.seen()
+	if !strings.Contains(prompts[2], "games 1-3 inspected") || !strings.Contains(prompts[2], "Inspect all ten repositories") || strings.Contains(prompts[2], "has been resumed") {
+		t.Fatalf("bad recovery prompt: %s", prompts[2])
+	}
+}

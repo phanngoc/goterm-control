@@ -252,7 +252,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	sess := session.New(taskChatID)
 	sess.ID = "task_" + task.ID
 	resumed := false
-	if ref := coord.ParseSessionRef(task.SessionRef); ref.SessionID != "" {
+	if ref := coord.ParseSessionRef(task.SessionRef); ref.Provider != "" {
 		// Only the same CLI can resume its own session; a ref from the other
 		// backend (after a provider switch) is simply not used.
 		if ref.Provider == r.llm.Name() {
@@ -261,7 +261,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 			if ref.Account != "" {
 				sess.SetAccount(ref.Account) // the credential pool honours the pin
 			}
-			resumed = true
+			resumed = ref.SessionID != ""
 		}
 	}
 
@@ -328,6 +328,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	outcome := classify(task, after, sendErr, runCtx.Err(), reply.String(), todoPending)
 	outcome.SessionRef = coord.SessionRef{
 		Provider: r.llm.Name(), SessionID: sess.GetSessionID(), Account: sess.GetAccount(),
+	}
+
+	if errors.Is(sendErr, chat.ErrSessionNotFound) {
+		outcome.ResetSession = true
+		outcome.SessionRef.SessionID = ""
 	}
 
 	var spanErr error

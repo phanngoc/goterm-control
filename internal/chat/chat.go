@@ -5,11 +5,15 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
+
+// ErrSessionNotFound means the provider explicitly rejected a saved resume ID.
+var ErrSessionNotFound = errors.New("provider session not found")
 
 // StreamCallbacks lets the bot layer react to provider events as they arrive.
 type StreamCallbacks struct {

@@ -43,12 +43,13 @@ type TaskRun struct {
 
 // RunOutcome is what the runner reports when a run ends.
 type RunOutcome struct {
-	Liveness   string
-	Result     string     // the deliverable (completed) or the partial reply
-	Checkpoint string     // progress note written this run, if any
-	SessionRef SessionRef // the CLI session this run used; recorded for --resume
-	BlockedOn  string     // for RunBlocked: children | human
-	Note       string     // short human-readable reason (error text, cap hit…)
+	Liveness     string
+	Result       string     // the deliverable (completed) or the partial reply
+	Checkpoint   string     // progress note written this run, if any
+	ResetSession bool       // discard an explicitly rejected resume ID, preserving account
+	SessionRef   SessionRef // the CLI session this run used; recorded for --resume
+	BlockedOn    string     // for RunBlocked: children | human
+	Note         string     // short human-readable reason (error text, cap hit…)
 }
 
 // ErrTaskFinished means the task reached a terminal state (canceled by a
@@ -171,7 +172,7 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 	if o.Checkpoint != "" {
 		t.Checkpoint = o.Checkpoint
 	}
-	if o.SessionRef.SessionID != "" {
+	if o.ResetSession || o.SessionRef.SessionID != "" {
 		t.SessionRef = o.SessionRef.String()
 	}
 
