@@ -6,21 +6,24 @@ import TaskBoard from './TaskBoard'
 import MessageStream from './MessageStream'
 import NotesPane from './NotesPane'
 import SchedulesPane from './SchedulesPane'
+import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
 type Call = (method: string, params?: any) => Promise<any>
-type Pane = 'overview' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages'
 
-const PANES: { key: Pane; label: string }[] = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'traces', label: 'Traces' },
-  { key: 'tasks', label: 'Tasks' },
-  { key: 'schedules', label: 'Schedules' },
-  { key: 'notes', label: 'Notes' },
-  { key: 'messages', label: 'Messages' },
-]
+// Keyed by Pane rather than listed, so a pane added to the route table cannot
+// reach the address bar without also getting a tab to click.
+const LABELS: Record<Pane, string> = {
+  overview: 'Overview',
+  traces: 'Traces',
+  tasks: 'Tasks',
+  schedules: 'Schedules',
+  notes: 'Notes',
+  messages: 'Messages',
+}
 
-export default function AdminView({ call }: { call: Call }) {
-  const [pane, setPane] = useState<Pane>('overview')
+const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
+
+export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pane; onPane: (p: Pane) => void }) {
   const [data, setData] = useState<OverviewData | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
@@ -66,7 +69,7 @@ export default function AdminView({ call }: { call: Call }) {
         {PANES.map(p => (
           <button
             key={p.key}
-            onClick={() => setPane(p.key)}
+            onClick={() => onPane(p.key)}
             className={`px-3 py-1 text-sm rounded-md transition-colors ${
               pane === p.key ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
             }`}
