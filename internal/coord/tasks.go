@@ -122,9 +122,10 @@ func ParseSessionRef(raw string) SessionRef {
 	return r
 }
 
-// String encodes the ref for storage.
+// String encodes the ref for storage. An account-only ref keeps the credential
+// pin when a missing conversation must be replaced on the next attempt.
 func (r SessionRef) String() string {
-	if r.SessionID == "" {
+	if r.SessionID == "" && r.Account == "" {
 		return ""
 	}
 	b, _ := json.Marshal(r)

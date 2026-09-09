@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -111,6 +112,7 @@ type streamEvent struct {
 	SessionID string      `json:"session_id,omitempty"`
 	Result    string      `json:"result,omitempty"`
 	IsError   bool        `json:"is_error,omitempty"`
+	Errors    []string    `json:"errors,omitempty"`
 	Usage     *cliUsage   `json:"usage,omitempty"`
 }
 
@@ -204,11 +206,26 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		return fmt.Errorf("start claude: %w", err)
 	}
 
+	// Drain stderr concurrently; join it before examining diagnostics or returning.
+	waited := false
+	var stderrText bytes.Buffer
+	stderrDone := make(chan struct{})
+	defer func() {
+		_ = cmd.Process.Kill()
+		<-stderrDone
+		if !waited {
+			_ = cmd.Wait()
+		}
+	}()
 	// Drain stderr to logs.
 	go func() {
+		defer close(stderrDone)
 		s := bufio.NewScanner(stderr)
 		for s.Scan() {
 			log.Printf("claude stderr: %s", s.Text())
+			if stderrText.Len() < 64*1024 {
+				stderrText.WriteString(s.Text() + "\n")
+			}
 		}
 	}()
 
@@ -304,7 +321,10 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 					ev.Usage.CacheReadInputTokens + ev.Usage.CacheCreationInputTokens)
 			}
 			if ev.IsError {
-				return fmt.Errorf("claude error: %s", ev.Result)
+				// Error results are terminal. Kill/wait even if the CLI leaves pipes open.
+				_ = cmd.Process.Kill()
+				<-stderrDone
+				return cliError(sessionID, ev.Result, ev.Errors, stderrText.String())
 			}
 		}
 	}
@@ -313,7 +333,16 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		return fmt.Errorf("scan: %w", err)
 	}
 
-	return cmd.Wait()
+	<-stderrDone
+	waitErr := cmd.Wait()
+	waited = true
+	if waitErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return cliError(sessionID, waitErr.Error(), nil, stderrText.String())
+	}
+	return nil
 }
 
 // fsGuardPrompt keeps the CLI's own file tools (Glob, Grep, Bash find …)
@@ -399,4 +428,29 @@ func formatInput(raw json.RawMessage) string {
 	}
 	b, _ := json.MarshalIndent(pretty, "", "  ")
 	return string(b)
+}
+
+// Only the exact requested resume ID can invalidate a session. Generic API,
+// authentication and network failures must retain the conversation.
+func cliError(resumeID, result string, details []string, stderr string) error {
+	parts := []string{}
+	for _, part := range append(append([]string{result}, details...), stderr) {
+		if part = strings.TrimSpace(part); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	message := strings.Join(parts, "; ")
+	if message == "" {
+		message = "CLI returned an error without diagnostics"
+	}
+	if resumeID != "" {
+		for _, part := range parts {
+			for _, line := range strings.Split(part, "\n") {
+				if strings.TrimSpace(line) == "No conversation found with session ID: "+resumeID {
+					return fmt.Errorf("%w: %s", chat.ErrSessionNotFound, message)
+				}
+			}
+		}
+	}
+	return fmt.Errorf("claude error: %s", message)
 }
