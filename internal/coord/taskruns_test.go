@@ -76,7 +76,12 @@ func TestAdvancedRunRequeuesWithContextAndAffinity(t *testing.T) {
 	if task.AssignedTo != "a1" {
 		t.Errorf("assigned_to = %q, want a1: the session lives in a1's config dir", task.AssignedTo)
 	}
-	if task.Continuations != 1 || task.Attempts != 1 {
+	// attempts back to 0: ClaimTask charged one, and FinishRun refunds it
+	// because the run advanced. This assertion used to expect 1 while its own
+	// message said otherwise — and the 1 is what stranded tasks in production,
+	// since three continuations exhausted the attempt budget and ClaimTask
+	// needs attempts < max_attempts.
+	if task.Continuations != 1 || task.Attempts != 0 {
 		t.Errorf("continuations=%d attempts=%d; progress must count as a continuation, not a failed attempt", task.Continuations, task.Attempts)
 	}
 	if task.Checkpoint != "sources 1-3 summarised" {
@@ -94,8 +99,10 @@ func TestAdvancedRunRequeuesWithContextAndAffinity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a1 could not continue its own task: %v", err)
 	}
-	if again.Attempts != 2 {
-		t.Errorf("second claim attempts = %d, want 2", again.Attempts)
+	// 1, not 2: the first attempt was refunded when the run advanced, so a
+	// continuation costs nothing from the failure budget.
+	if again.Attempts != 1 {
+		t.Errorf("second claim attempts = %d, want 1 — a continuation must not accumulate attempts", again.Attempts)
 	}
 }
 

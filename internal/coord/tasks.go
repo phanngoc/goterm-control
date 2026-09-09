@@ -506,13 +506,37 @@ func (db *DB) answeredCheckpoint(taskID, byAgent, note string) (string, error) {
 // filters on attempts), yet counted as open and shown as "will be reclaimed".
 // Returns the ids it failed.
 func (db *DB) ReapExhausted() ([]string, error) {
+	// A working task whose lease ran out with its attempts spent: the holder
+	// died and nobody may retry it.
+	ids, err := db.reapExhaustedIn(TaskWorking,
+		"exhausted: every attempt ended without a result")
+	if err != nil {
+		return ids, err
+	}
+
+	// A submitted task with its attempts spent is not waiting, it is stranded.
+	// ClaimTask requires attempts < max_attempts, so nothing will ever pick it
+	// up; and while this sweep ignored it, no other path moved it either —
+	// RelaxDeadAssignments only lifts the agent pin, and ResumeTask accepts a
+	// failed task only. One such row held eight more tasks blocked behind it.
+	//
+	// Failing it is what makes it recoverable: `task resume` grants more
+	// attempts to a failed task, so this hands a stuck queue back to a person
+	// instead of leaving it invisible.
+	stranded, err := db.reapExhaustedIn(TaskSubmitted,
+		"stranded: requeued with no attempts left; nothing could claim it")
+	return append(ids, stranded...), err
+}
+
+// reapExhaustedIn fails the tasks in one state whose attempts are spent.
+func (db *DB) reapExhaustedIn(state, note string) ([]string, error) {
 	now := ts(time.Now())
 	rows, err := db.conn.Query(`UPDATE tasks SET state = ?, fail_reason = ?, updated_at = ?
 		WHERE state = ? AND lease_until <= ? AND attempts >= max_attempts
 		RETURNING id`,
-		TaskFailed, FailExhausted, now, TaskWorking, now)
+		TaskFailed, FailExhausted, now, state, now)
 	if err != nil {
-		return nil, fmt.Errorf("reap exhausted: %w", err)
+		return nil, fmt.Errorf("reap exhausted (%s): %w", state, err)
 	}
 	defer rows.Close()
 	var ids []string
@@ -523,9 +547,11 @@ func (db *DB) ReapExhausted() ([]string, error) {
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		return ids, err
+	}
 	for _, id := range ids {
-		_ = db.appendEvent(id, "system", TaskWorking, TaskFailed,
-			"exhausted: every attempt ended without a result")
+		_ = db.appendEvent(id, "system", state, TaskFailed, note)
 	}
 	return ids, rows.Err()
 }
@@ -572,9 +598,17 @@ func (db *DB) ResumeTask(taskID, byAgent string, more int) error {
 	if err != nil {
 		return err
 	}
-	if t.State != TaskFailed {
-		return fmt.Errorf("coord: task %s is %s, only a failed task can be resumed", taskID, t.State)
+	// A submitted task with its attempts spent is accepted too. It is
+	// unclaimable — ClaimTask needs attempts < max_attempts — so it is stuck in
+	// exactly the way resume exists to fix, and refusing it sent people to a
+	// command that could not help either. ReapExhausted now fails such a row on
+	// its next sweep, but a person should not have to wait for one.
+	stranded := t.State == TaskSubmitted && t.Attempts >= t.MaxAttempts
+	if t.State != TaskFailed && !stranded {
+		return fmt.Errorf("coord: task %s is %s with %d/%d attempts — resume takes a failed task, "+
+			"or a submitted one that has run out of attempts", taskID, t.State, t.Attempts, t.MaxAttempts)
 	}
+	fromState := t.State
 	set := "max_attempts = max_attempts + ?"
 	switch t.FailReason {
 	case FailContinuationsExhausted:
@@ -584,12 +618,18 @@ func (db *DB) ResumeTask(taskID, byAgent string, more int) error {
 		// counter start over from this point.
 		set = "max_continuations = max_continuations + ?"
 	}
-	_, err = db.conn.Exec(`UPDATE tasks SET state = ?, fail_reason = '', lease_until = ?, updated_at = ?, `+set+`
-		WHERE id = ?`, TaskSubmitted, ts(time.Now()), ts(time.Now()), more, taskID)
+	// Guarded on the state we read, so two operators clicking Resume grant the
+	// allowance once rather than twice.
+	now := ts(time.Now())
+	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, fail_reason = '', lease_until = ?, updated_at = ?, `+set+`
+		WHERE id = ? AND state = ?`, TaskSubmitted, now, now, more, taskID, fromState)
 	if err != nil {
 		return fmt.Errorf("resume task: %w", err)
 	}
-	return db.appendEvent(taskID, byAgent, TaskFailed, TaskSubmitted,
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("coord: task %s moved on before the resume applied — check its state and retry", taskID)
+	}
+	return db.appendEvent(taskID, byAgent, fromState, TaskSubmitted,
 		fmt.Sprintf("resumed by %s (+%d)", byAgent, more))
 }
 

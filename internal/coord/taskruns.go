@@ -187,6 +187,24 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 			event(TaskWorking, TaskFailed, fmt.Sprintf("continuations exhausted after %d runs; last checkpoint kept", t.Continuations))
 			return nil
 		}
+		// Give the attempt back. ClaimTask increments attempts on every claim,
+		// but the two counters mean different things — §5.3: "attempts là lỗi,
+		// continuation là chưa xong" — and none of the runs that land here
+		// failed: they advanced, planned, came back empty, or hit the time cap
+		// with progress recorded.
+		//
+		// Without the refund a task making steady progress spent one of its
+		// three attempts per continuation, so MaxContinuations (20, ~5 hours of
+		// work) was unreachable and the fourth continuation requeued a task
+		// with attempts == max_attempts. That state is a dead end: ClaimTask
+		// needs attempts < max_attempts, so it is never claimed again, and
+		// nothing else moved it either. RunCanceled already refunds for the
+		// same reason, and this shares its one caveat — attempts doubles as the
+		// fencing token, so a stale holder's write can match a later claim.
+		// Bounded either way: continuations cap this path, empties cap theirs.
+		if t.Attempts > 0 {
+			t.Attempts--
+		}
 		t.State, t.AssignedTo, t.LeaseUntil = TaskSubmitted, run.AgentID, now
 		event(TaskWorking, TaskSubmitted, reason)
 		return nil
