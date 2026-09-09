@@ -291,7 +291,10 @@ func TestRunThatTimesOutWithProgressContinuesAndResumes(t *testing.T) {
 	if task.State != coord.TaskSubmitted {
 		t.Fatalf("state = %s, want submitted (call me back)", task.State)
 	}
-	if task.Continuations != 1 || task.Attempts != 1 {
+	// 0, not 1 — which is what the message here always claimed. A timed-out run
+	// that recorded a checkpoint is progress, so FinishRun refunds the attempt
+	// ClaimTask charged.
+	if task.Continuations != 1 || task.Attempts != 0 {
 		t.Errorf("continuations=%d attempts=%d — progress must not spend an attempt", task.Continuations, task.Attempts)
 	}
 	if task.AssignedTo != "a2" {

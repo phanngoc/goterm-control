@@ -2,6 +2,7 @@ package coord
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -308,5 +309,201 @@ func TestUnblockIsNotRepeatable(t *testing.T) {
 	got, _ := db.GetTask(task.ID)
 	if strings.Contains(got.Checkpoint, "second") {
 		t.Errorf("the refused answer leaked into the checkpoint:\n%s", got.Checkpoint)
+	}
+}
+
+// The deadlock seen in production: a task requeued as submitted with its
+// attempts spent could not be claimed (ClaimTask needs attempts <
+// max_attempts), could not be reaped (the sweep only looked at working), and
+// could not be resumed (resume took a failed task only). Eight more tasks sat
+// blocked behind it.
+//
+// This drives the state through the real path that created it — a run that
+// advanced, repeatedly — rather than writing the row by hand.
+func TestProgressDoesNotSpendTheFailureBudget(t *testing.T) {
+	db := testDB(t)
+	task, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "long job"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Six continuations — twice the three-attempt budget.
+	for i := range 6 {
+		c, err := db.ClaimTask("a1")
+		if err != nil {
+			t.Fatalf("claim %d: %v (a progressing task became unclaimable)", i+1, err)
+		}
+		run, err := db.StartRun(c.ID, "a1", c.Attempts, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.FinishRun(run.ID, RunOutcome{
+			Liveness: RunAdvanced, Checkpoint: fmt.Sprintf("step %d done", i+1),
+		}); err != nil {
+			t.Fatalf("finish %d: %v", i+1, err)
+		}
+	}
+
+	got, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != TaskSubmitted {
+		t.Fatalf("state = %s, want submitted and claimable", got.State)
+	}
+	if got.Attempts >= got.MaxAttempts {
+		t.Errorf("attempts = %d/%d — progress spent the failure budget, which strands the task",
+			got.Attempts, got.MaxAttempts)
+	}
+	if got.Continuations != 6 {
+		t.Errorf("continuations = %d, want 6 — progress is what should be counted", got.Continuations)
+	}
+	// The proof: it can still be picked up.
+	if _, err := db.ClaimTask("a1"); err != nil {
+		t.Errorf("still unclaimable after 6 continuations: %v", err)
+	}
+}
+
+// strandTask forces the dead-end state directly, standing in for the rows that
+// already exist in a live database from before the refund above.
+func strandTask(t *testing.T, db *DB) *Task {
+	t.Helper()
+	task, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "stranded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Conn().Exec(
+		`UPDATE tasks SET state = ?, attempts = max_attempts WHERE id = ?`,
+		TaskSubmitted, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+func TestStrandedTaskIsUnclaimable(t *testing.T) {
+	db := testDB(t)
+	strandTask(t, db)
+	if _, err := db.ClaimTask("a1"); !errors.Is(err, ErrNoTask) {
+		t.Errorf("claim = %v, want ErrNoTask — this is the dead end, and the premise of the rest", err)
+	}
+}
+
+// The sweep is what hands a stuck queue back to a person: once the row is
+// failed, `task resume` can grant it more attempts.
+func TestReapExhaustedRescuesAStrandedTask(t *testing.T) {
+	db := testDB(t)
+	task := strandTask(t, db)
+
+	ids, err := db.ReapExhausted()
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != task.ID {
+		t.Fatalf("reaped %v, want the stranded task", ids)
+	}
+
+	got, _ := db.GetTask(task.ID)
+	if got.State != TaskFailed || got.FailReason != FailExhausted {
+		t.Errorf("state=%s reason=%s, want failed/exhausted", got.State, got.FailReason)
+	}
+	// And the audit says which state it came from, not a guess.
+	events, _ := db.TaskEvents(task.ID)
+	last := events[len(events)-1]
+	if last.FromState != TaskSubmitted || !strings.Contains(last.Note, "stranded") {
+		t.Errorf("event = %s→%s %q, want it to record the stranding", last.FromState, last.ToState, last.Note)
+	}
+}
+
+// A working task with an expired lease is the case the sweep already handled;
+// it must keep working.
+func TestReapExhaustedStillFailsADeadHolder(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "held"}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := db.ClaimTask("a1")
+	if _, err := db.Conn().Exec(
+		`UPDATE tasks SET attempts = max_attempts, lease_until = ? WHERE id = ?`,
+		"2000-01-01T00:00:00Z", c.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := db.ReapExhausted()
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("reap = %v, %v; want the dead holder failed", ids, err)
+	}
+	events, _ := db.TaskEvents(c.ID)
+	if last := events[len(events)-1]; last.FromState != TaskWorking {
+		t.Errorf("from-state = %s, want working for a dead holder", last.FromState)
+	}
+}
+
+// A submitted task with attempts left is simply waiting its turn, and must not
+// be touched.
+func TestReapExhaustedLeavesClaimableWorkAlone(t *testing.T) {
+	db := testDB(t)
+	task, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := db.ReapExhausted(); err != nil || len(ids) != 0 {
+		t.Fatalf("reap = %v, %v; a fresh task must be left alone", ids, err)
+	}
+	if got, _ := db.GetTask(task.ID); got.State != TaskSubmitted {
+		t.Errorf("state = %s, want submitted", got.State)
+	}
+}
+
+// Resume is the escape hatch, and a person should not have to wait for a sweep.
+func TestResumeAcceptsAStrandedTask(t *testing.T) {
+	db := testDB(t)
+	task := strandTask(t, db)
+	before, _ := db.GetTask(task.ID)
+
+	if err := db.ResumeTask(task.ID, "human", 5); err != nil {
+		t.Fatalf("resume: %v — this is the state resume exists for", err)
+	}
+	got, _ := db.GetTask(task.ID)
+	if got.MaxAttempts != before.MaxAttempts+5 {
+		t.Errorf("max_attempts = %d, want %d", got.MaxAttempts, before.MaxAttempts+5)
+	}
+	if _, err := db.ClaimTask("a1"); err != nil {
+		t.Errorf("still unclaimable after resume: %v", err)
+	}
+}
+
+// The old message named the state and stopped; it now says what resume accepts,
+// because the previous one sent people to a command that could not help.
+func TestResumeStillRefusesWorkInFlight(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "busy"}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := db.ClaimTask("a1") // now working, attempts 1/3
+
+	err := db.ResumeTask(c.ID, "human", 5)
+	if err == nil {
+		t.Fatal("a working task with attempts left must not be resumable")
+	}
+	if !strings.Contains(err.Error(), "1/3") {
+		t.Errorf("error should show the attempt count that explains the refusal: %v", err)
+	}
+}
+
+// Two operators clicking Resume must grant the allowance once.
+func TestResumeIsGuardedAgainstADoubleClick(t *testing.T) {
+	db := testDB(t)
+	task := strandTask(t, db)
+	before, _ := db.GetTask(task.ID)
+
+	if err := db.ResumeTask(task.ID, "human", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ResumeTask(task.ID, "human", 5); err == nil {
+		t.Error("the second resume must be refused, not stack another +5")
+	}
+	got, _ := db.GetTask(task.ID)
+	if got.MaxAttempts != before.MaxAttempts+5 {
+		t.Errorf("max_attempts = %d, want a single +5 (%d)", got.MaxAttempts, before.MaxAttempts+5)
 	}
 }
