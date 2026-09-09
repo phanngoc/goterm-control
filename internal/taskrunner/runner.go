@@ -42,6 +42,10 @@ type Config struct {
 	Model    string
 	Interval time.Duration // how often to look for work; 0 disables polling
 	Timeout  time.Duration // hard cap on ONE run; the task itself has no cap
+	// Concurrency is how many tasks this agent runs at once (default 1). Chat
+	// keeps its own lane regardless; this only widens the task lane, so a long
+	// task no longer holds up a short one queued behind it (design P3).
+	Concurrency int
 }
 
 // Event announces a task run starting or finishing, so the gateway can push
@@ -68,7 +72,12 @@ type Runner struct {
 	// mode let the Mac sleep in the middle of a task.
 	live sync.Map
 
+	// slots bounds concurrent runs; runs lets Wait join the ones in flight.
+	slots chan struct{}
+	runs  sync.WaitGroup
+
 	onEvent func(Event)
+	onWake  func(coord.WokenParent)
 }
 
 // New builds a Runner. A nil db or llm returns nil, which is a working no-op —
@@ -80,10 +89,23 @@ func New(db *coord.DB, llm chat.Client, rec *trace.Recorder, cfg Config) *Runner
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 15 * time.Minute
 	}
+	if cfg.Concurrency <= 0 {
+		cfg.Concurrency = 1
+	}
 	return &Runner{
 		db: db, llm: llm, rec: rec, cfg: cfg,
-		poke: make(chan struct{}, 1),
-		done: make(chan struct{}),
+		poke:  make(chan struct{}, 1),
+		done:  make(chan struct{}),
+		slots: make(chan struct{}, cfg.Concurrency),
+	}
+}
+
+// SetWakeListener registers the listener told when a parent task, blocked on
+// its children, is put back in the queue by this runner's sweep. The gateway
+// uses it to ring the agent the parent is pinned to; this runner pokes itself.
+func (r *Runner) SetWakeListener(fn func(coord.WokenParent)) {
+	if r != nil {
+		r.onWake = fn
 	}
 }
 
@@ -132,7 +154,8 @@ func (r *Runner) Start(ctx context.Context) {
 	if r == nil {
 		return
 	}
-	log.Printf("taskrunner: claiming tasks for %s every %s (run cap %s)", r.cfg.AgentID, r.cfg.Interval, r.cfg.Timeout)
+	log.Printf("taskrunner: claiming tasks for %s every %s (run cap %s, %d at a time)",
+		r.cfg.AgentID, r.cfg.Interval, r.cfg.Timeout, r.cfg.Concurrency)
 	go func() {
 		defer close(r.done)
 		ticker := time.NewTicker(r.cfg.Interval)
@@ -140,8 +163,10 @@ func (r *Runner) Start(ctx context.Context) {
 		for {
 			r.sweep()
 			// Drain the queue before sleeping again: a peer may have left
-			// several tasks at once.
-			for r.claimAndRun(ctx) {
+			// several tasks at once. Each claim runs in its own goroutine up
+			// to Concurrency; a run ending pokes the loop so the next queued
+			// task is picked up at once, not at the next tick.
+			for r.claimAndStart(ctx) {
 				if ctx.Err() != nil {
 					return
 				}
@@ -156,12 +181,13 @@ func (r *Runner) Start(ctx context.Context) {
 	}()
 }
 
-// Wait blocks until the loop has stopped. Used by tests.
+// Wait blocks until the loop has stopped and every run in flight has ended.
 func (r *Runner) Wait() {
 	if r == nil {
 		return
 	}
 	<-r.done
+	r.runs.Wait()
 }
 
 // sweep does the housekeeping the queue needs but no single run owns: fail
@@ -185,6 +211,61 @@ func (r *Runner) sweep() {
 	} else if len(ids) > 0 {
 		log.Printf("taskrunner: closed %d orphan run(s) as lost: %v", len(ids), ids)
 	}
+	r.wakeParents()
+}
+
+// wakeParents returns parents whose children have all finished to the queue
+// and rings whoever should run them next. Called from the sweep and right
+// after each run this agent finishes, so a child completing here wakes its
+// parent now rather than at the next tick.
+func (r *Runner) wakeParents() {
+	woken, err := r.db.WakeParents(time.Now())
+	if err != nil {
+		log.Printf("taskrunner: wake parents: %v", err)
+		return
+	}
+	for _, w := range woken {
+		log.Printf("taskrunner: %s: children finished — back in the queue for %s", w.TaskID, orAny(w.AssignedTo, "any agent"))
+		if w.AssignedTo == "" || w.AssignedTo == r.cfg.AgentID {
+			r.Poke()
+		}
+		if r.onWake != nil {
+			go r.onWake(w)
+		}
+	}
+}
+
+// claimAndStart takes one task if a slot is free and runs it in the
+// background. It reports whether it started something, so the loop can keep
+// draining while slots remain.
+func (r *Runner) claimAndStart(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case r.slots <- struct{}{}:
+	default:
+		return false // every slot busy; a run ending pokes us
+	}
+	task, err := r.db.ClaimTask(r.cfg.AgentID)
+	if err != nil {
+		<-r.slots
+		if err != coord.ErrNoTask {
+			log.Printf("taskrunner: claim: %v", err)
+		}
+		return false
+	}
+	log.Printf("taskrunner: claimed %s (attempt %d, run %d): %s", task.ID, task.Attempts, task.Continuations+1, task.Title)
+	r.runs.Add(1)
+	go func() {
+		defer func() {
+			<-r.slots
+			r.runs.Done()
+			r.Poke() // a slot opened; look for the next task now
+		}()
+		r.execute(ctx, task)
+	}()
+	return true
 }
 
 // withRetry runs a ledger write that must not be dropped on a transient
@@ -239,6 +320,13 @@ func (r *Runner) claimAndRun(ctx context.Context) bool {
 	return true
 }
 
+func orAny(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
 func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	runCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
 	defer cancel()
@@ -270,7 +358,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		Model:     r.cfg.Model,
 		Provider:  r.llm.Name(),
 	})
-	prompt := taskPrompt(task, r.cfg.Timeout, resumed)
+	// What the parent's children came back with, and what a peer said about
+	// this task while nobody was running it, both belong in front of the model.
+	children, _ := r.db.Children(task.ID)
+	inbox := r.taskMail(task.ID)
+	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox)
 	span.SetInputs(prompt)
 	if tid := span.TraceID(); tid != "" {
 		if err := r.db.AttachTrace(task.ID, tid); err != nil {
@@ -349,6 +441,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		final, e = r.db.FinishRun(run.ID, outcome)
 		return e
 	})
+	// A child finishing may complete its parent's set; check now so the parent
+	// does not wait for the next tick.
+	if task.ParentID != "" {
+		r.wakeParents()
+	}
 	switch {
 	case errors.Is(finishErr, coord.ErrLostLease):
 		// Another agent took over and already answered; discarding this
@@ -471,7 +568,29 @@ func (r *Runner) renewLease(ctx context.Context, taskID string) func() {
 // it chats with; that its reply is the deliverable rather than conversation;
 // that the run has a time budget and what to do about it; and, on a later run,
 // where the previous one stopped.
-func taskPrompt(t *coord.Task, budget time.Duration, resumed bool) string {
+// taskMail returns the unread messages peers attached to this task (`bomclaw
+// msg --task T`) and marks them read — the "comment" wake source of §5.4. Only
+// mail addressed to the task is taken: general messages belong to the chat.
+func (r *Runner) taskMail(taskID string) []coord.Message {
+	all, err := r.db.Inbox(r.cfg.AgentID, true, 50)
+	if err != nil {
+		return nil
+	}
+	var mine []coord.Message
+	var ids []string
+	for _, m := range all {
+		if m.TaskID == taskID {
+			mine = append(mine, m)
+			ids = append(ids, m.ID)
+		}
+	}
+	if len(ids) > 0 {
+		_, _ = r.db.MarkRead(ids)
+	}
+	return mine
+}
+
+func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message) string {
 	var b strings.Builder
 	if t.Continuations > 0 || resumed {
 		fmt.Fprintf(&b, "You are continuing a task from the shared queue (run %d).\n\n", t.Continuations+1)
@@ -480,7 +599,7 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool) string {
 	}
 	fmt.Fprintf(&b, "Task id: %s\nRequested by: %s\n", t.ID, t.CreatedBy)
 	if t.ParentID != "" {
-		fmt.Fprintf(&b, "Parent task: %s\n", t.ParentID)
+		fmt.Fprintf(&b, "Parent task: %s (your result is gathered by it — state findings, not plans)\n", t.ParentID)
 	}
 	fmt.Fprintf(&b, "Context: %s (depth %d of %d)\n\n", t.ContextID, t.Depth, coord.MaxDepth)
 	fmt.Fprintf(&b, "## %s\n", t.Title)
@@ -502,6 +621,26 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool) string {
 		}
 	}
 
+	if len(children) > 0 {
+		b.WriteString("\n## Your child tasks\n\n")
+		for i, c := range children {
+			fmt.Fprintf(&b, "%d. [%s] %s (%s)", i+1, c.State, c.Title, c.ID)
+			if c.FailReason != "" {
+				fmt.Fprintf(&b, " — %s", c.FailReason)
+			}
+			b.WriteString("\n")
+			if res := strings.TrimSpace(c.Result); res != "" {
+				b.WriteString("   " + strings.ReplaceAll(truncate(res, 1500), "\n", "\n   ") + "\n")
+			}
+		}
+	}
+	if len(inbox) > 0 {
+		b.WriteString("\n## Messages about this task\n\n")
+		for _, m := range inbox {
+			fmt.Fprintf(&b, "- from %s: %s\n", m.FromAgent, strings.TrimSpace(m.Body))
+		}
+	}
+
 	minutes := int(budget.Round(time.Minute) / time.Minute)
 	if minutes < 1 {
 		minutes = 1
@@ -512,12 +651,16 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool) string {
 		"    bomclaw task progress --id %s --note \"<what is done, what is left, anything the next run must know>\"\n\n"+
 		"and stop. The system will call you back with that note and your conversation. Do NOT loop on your "+
 		"own, and do NOT create a task to continue your own work — write progress and return.\n\n"+
+		"Work a peer could do in parallel can be split off: `bomclaw task sub --parent %s --title \"<piece>\" "+
+		"[--body ...] [--to <agent>]` (at most %d unfinished at once, depth %d of %d here), then "+
+		"`bomclaw task block --id %s --on children` and stop. You are called back with every child's result "+
+		"once they have all finished. Sub-tasks are for parallel work only, never for continuing your own.\n\n"+
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+
 		"the requesting agent reads, so state what you did and what you found. If you cannot proceed without "+
 		"a person: `bomclaw task block --id %s --on human --note \"<exactly what you need>\"` and stop.\n\n"+
 		"The final reply is the deliverable, not a plan — do not ask follow-up questions, there is nobody "+
 		"waiting to answer them; use `task block` instead.",
-		minutes, t.ID, t.ID, t.ID)
+		minutes, t.ID, t.ID, coord.MaxOpenChildren, t.Depth, coord.MaxDepth, t.ID, t.ID, t.ID)
 	return b.String()
 }
 

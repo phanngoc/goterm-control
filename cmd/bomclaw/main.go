@@ -385,6 +385,14 @@ func runGateway(args []string) {
 			Model:    resolver.Default(),
 			Interval: time.Duration(cfg.Tasks.PollIntervalSeconds) * time.Second,
 			Timeout:  time.Duration(cfg.Tasks.TimeoutMinutes) * time.Minute,
+			// P3: how many tasks this agent runs side by side. Chat keeps its
+			// own lane; this only stops a long task from blocking a short one.
+			Concurrency: cfg.Tasks.Concurrency,
+		})
+		// A parent whose children all finished goes back in the queue pinned
+		// to whoever held it; ring that agent so it resumes at once.
+		runner.SetWakeListener(func(w coord.WokenParent) {
+			gateway.NotifyAgents(coordDB, w.AssignedTo, cfg.Agent.ID, "about parent "+w.TaskID)
 		})
 		runner.Start(ctx)
 	} else if coordDB != nil {

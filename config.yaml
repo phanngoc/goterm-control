@@ -28,6 +28,7 @@ tasks:
   auto_claim: false
   poll_interval_seconds: 60
   timeout_minutes: 15
+  concurrency: 1                # tasks this agent runs at once; chat has its own lane
 
 # Timed work (docs/design/scheduling-and-long-tasks.md §5.5). `bomclaw schedule
 # add` writes rows to the shared database; a gateway with this on fires them.

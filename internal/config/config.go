@@ -80,6 +80,7 @@ type TasksConfig struct {
 	AutoClaim           bool `yaml:"auto_claim"`
 	PollIntervalSeconds int  `yaml:"poll_interval_seconds"` // default 60
 	TimeoutMinutes      int  `yaml:"timeout_minutes"`       // default 15
+	Concurrency         int  `yaml:"concurrency"`           // default 1: tasks run at once (chat has its own lane)
 }
 
 // SchedulesConfig tunes the scheduler (docs/design/scheduling-and-long-tasks.md
@@ -291,6 +292,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tasks.TimeoutMinutes == 0 {
 		cfg.Tasks.TimeoutMinutes = 15
+	}
+	if cfg.Tasks.Concurrency == 0 {
+		cfg.Tasks.Concurrency = 1
 	}
 	if cfg.Schedules.TickSeconds == 0 {
 		cfg.Schedules.TickSeconds = 30

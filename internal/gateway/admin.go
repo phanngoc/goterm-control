@@ -129,9 +129,10 @@ type taskIDParams struct {
 // TaskDetail is a task together with its audit trail and its run ledger: one
 // row per claim, each saying how that bounded attempt ended.
 type TaskDetail struct {
-	Task   *coord.Task       `json:"task"`
-	Events []coord.TaskEvent `json:"events"`
-	Runs   []coord.TaskRun   `json:"runs"`
+	Task     *coord.Task       `json:"task"`
+	Events   []coord.TaskEvent `json:"events"`
+	Runs     []coord.TaskRun   `json:"runs"`
+	Children []coord.Task      `json:"children"` // the tasks it split off; empty for a leaf
 }
 
 func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -154,7 +155,11 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(TaskDetail{Task: task, Events: events, Runs: runs})
+	children, err := deps.Coord.Children(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(TaskDetail{Task: task, Events: events, Runs: runs, Children: children})
 }
 
 type taskResumeParams struct {
