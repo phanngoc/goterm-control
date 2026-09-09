@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from './stores/store'
 import { useGateway } from './hooks/useGateway'
 import { eventsToMessages } from './lib/transcript'
@@ -7,6 +7,7 @@ import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
 import AdminView from './admin/AdminView'
 import type { Me } from './Root'
+import { parseRoute, pathFor, type AdminPane } from './lib/route'
 
 export default function App({ me, onLogout }: { me: Me; onLogout?: () => void }) {
   const { call } = useGateway()
@@ -21,6 +22,10 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   const sessions = useStore(s => s.sessions)
   const externalTurn = useStore(s => s.externalTurn)
   const sending = useStore(s => s.sending)
+
+  // Which admin pane is on screen. Lifted out of AdminView so that one place
+  // owns the address bar; AdminView is now told which pane to show.
+  const [adminPane, setAdminPane] = useState<AdminPane>('overview')
 
   // Another channel wrote to a session — Telegram, or an agent that claimed a
   // task. Refresh the list (labels, counts), and if that session is the one on
@@ -43,39 +48,37 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
     return () => clearInterval(t)
   }, [externalTurn, activeSessionId, sending, call, setSessions, setMessages])
 
-  // Sync URL ↔ state: read on load, write on change
+  // Sync URL → state, on load and whenever the browser navigates. The popstate
+  // half is new: without it Back and Forward changed the address bar and left
+  // the view where it was.
   useEffect(() => {
-    const path = location.pathname
-    if (path.startsWith('/chat/')) {
-      const id = path.slice(6)
-      if (id) {
-        setActiveSessionId(id)
-        setTab('chat')
-      }
-    } else if (path === '/chat') {
-      setTab('chat')
-    } else if (path === '/status') {
-      setTab('status')
-    } else if (path === '/admin') {
-      setTab('admin')
+    const apply = () => {
+      const r = parseRoute(location.pathname)
+      setTab(r.tab)
+      if (r.sessionId) setActiveSessionId(r.sessionId)
+      if (r.adminPane) setAdminPane(r.adminPane)
     }
+    apply()
+    window.addEventListener('popstate', apply)
+    return () => window.removeEventListener('popstate', apply)
   }, [setActiveSessionId, setTab])
 
-  // Update URL when session/tab changes
+  // State → URL. pushState rather than replaceState, so moving between tabs
+  // leaves history to go back through; and only when the path actually differs,
+  // which keeps the effect from stacking an entry per render (including the one
+  // right after the read above).
+  //
+  // The exception is filling in a detail on the tab already showing — /chat
+  // becoming /chat/<id> when the newest session is auto-selected. That is the
+  // same navigation, not a second one: pushing it would leave a /chat entry
+  // that Back returns to and the auto-select immediately leaves again.
   useEffect(() => {
-    if (tab === 'chat') {
-      // A chat with no session picked still needs its own URL — without this
-      // branch the address bar kept showing the tab you arrived from.
-      const path = activeSessionId && activeSessionId !== 'new' ? `/chat/${activeSessionId}` : '/chat'
-      history.replaceState(null, '', path)
-    } else if (tab === 'status') {
-      history.replaceState(null, '', '/status')
-    } else if (tab === 'admin') {
-      history.replaceState(null, '', '/admin')
-    } else if (tab === 'sessions') {
-      history.replaceState(null, '', '/')
-    }
-  }, [tab, activeSessionId])
+    const path = pathFor({ tab, sessionId: activeSessionId ?? undefined, adminPane })
+    const here = location.pathname
+    if (path === here) return
+    const refines = here !== '/' && path.startsWith(here + '/')
+    history[refines ? 'replaceState' : 'pushState'](null, '', path)
+  }, [tab, activeSessionId, adminPane])
 
   // Load sessions + status on connect
   useEffect(() => {
@@ -168,7 +171,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         {tab === 'sessions' && <SessionList call={call} />}
         {tab === 'chat' && <ChatView call={call} />}
         {tab === 'status' && <StatusBar />}
-        {tab === 'admin' && <AdminView call={call} />}
+        {tab === 'admin' && <AdminView call={call} pane={adminPane} onPane={setAdminPane} />}
       </main>
     </div>
   )

@@ -42,22 +42,159 @@ function TraceRow({ t, active, onClick }: { t: TraceSummary; active: boolean; on
   )
 }
 
-function Payload({ label, body }: { label: string; body?: string }) {
+// A tool's payload reaches the page as a JSON *string*, so rendering it raw
+// shows the escapes rather than the content: `&&` arrives as &&,
+// quotes as \", and a heredoc as one line of literal \n. Parsing it back is most
+// of the readability win; lifting the one field that matters out of the wrapper
+// is the rest — for a Bash span that field is the command someone actually ran.
+const PRIMARY_FIELD: Record<string, string> = {
+  Bash: 'command',
+  PowerShell: 'command',
+  run_shell: 'command',
+  Read: 'file_path',
+  Write: 'file_path',
+  Edit: 'file_path',
+  NotebookEdit: 'notebook_path',
+  Grep: 'pattern',
+  Glob: 'pattern',
+  WebFetch: 'url',
+  browse_url: 'url',
+  browser_navigate: 'url',
+  Task: 'prompt',
+}
+
+// Tried in order when the span name is not one we know — the shapes above
+// cover the tools that actually appear, and this catches the rest.
+const FALLBACK_FIELDS = [
+  'command', 'script', 'prompt', 'file_path', 'pattern', 'url', 'query',
+  // Result-side shapes. PRIMARY_FIELD names the field a *call* is about, so the
+  // output payload is matched by these instead.
+  'stdout', 'output', 'result', 'content', 'text',
+]
+
+type Decoded = { primary?: { key: string; text: string }; rest: [string, unknown][] }
+
+function decodePayload(body: string, name?: string): Decoded | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null // not JSON — the caller renders it as it arrived
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+
+  const obj = parsed as Record<string, unknown>
+  const wanted = (name && PRIMARY_FIELD[name]) || FALLBACK_FIELDS.find(f => typeof obj[f] === 'string')
+
+  let primary: Decoded['primary']
+  if (wanted && typeof obj[wanted] === 'string') {
+    primary = { key: wanted, text: obj[wanted] as string }
+  }
+  return { primary, rest: Object.entries(obj).filter(([k]) => k !== primary?.key) }
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(
+          () => { setDone(true); setTimeout(() => setDone(false), 1200) },
+          () => {},
+        )
+      }}
+      className="text-[11px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+      title="Copy so you can run it yourself"
+    >
+      {done ? 'copied' : 'copy'}
+    </button>
+  )
+}
+
+function Payload({ label, body, name }: { label: string; body?: string; name?: string }) {
   if (!body) return null
+  const decoded = decodePayload(body, name)
+
+  // Unparseable, or an object with nothing worth lifting out: show it whole,
+  // but re-serialised so at least the escapes are resolved.
+  if (!decoded) {
+    let text = body
+    try {
+      text = JSON.stringify(JSON.parse(body), null, 2)
+    } catch {
+      /* genuinely not JSON; the raw string is the best we have */
+    }
+    return (
+      <div className="mt-2">
+        <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-1">{label}</div>
+        <pre className="text-xs text-gray-300 bg-gray-950 rounded p-2 ring-1 ring-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+          {text}
+        </pre>
+      </div>
+    )
+  }
+
   return (
     <div className="mt-2">
-      <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-1">{label}</div>
-      <pre className="text-xs text-gray-300 bg-gray-950 rounded p-2 ring-1 ring-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
-        {body}
-      </pre>
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[11px] uppercase tracking-wider text-gray-600">{label}</span>
+        {decoded.primary && (
+          <>
+            <span className="text-[11px] font-mono text-gray-500">{decoded.primary.key}</span>
+            <CopyButton text={decoded.primary.text} />
+          </>
+        )}
+      </div>
+
+      {decoded.primary && (
+        <pre className="text-xs text-gray-200 bg-gray-950 rounded p-2 ring-1 ring-gray-800 whitespace-pre-wrap break-words max-h-80 overflow-y-auto font-mono">
+          {decoded.primary.text}
+        </pre>
+      )}
+
+      {/* Everything else as one line each: a description or a timeout is worth
+          seeing, but it should not compete with the command for attention. */}
+      {decoded.rest.length > 0 && (
+        <dl className="mt-1.5 space-y-0.5">
+          {decoded.rest.map(([k, v]) => (
+            <div key={k} className="flex gap-2 text-[11px]">
+              <dt className="font-mono text-gray-600 shrink-0">{k}</dt>
+              <dd className="text-gray-400 break-words min-w-0">
+                {typeof v === 'string' ? v : JSON.stringify(v)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   )
+}
+
+// summarise is the one line a collapsed span gets. Without it a trace of twelve
+// Bash calls renders as twelve rows saying "Bash", which tells you something ran
+// but never what — the difference this closes.
+//
+// description wins when the caller supplied one: it is a human summary of the
+// command's intent, which is what you want at a glance. Otherwise the command
+// itself, flattened, because a heredoc's newlines would otherwise break the row.
+function summarise(run: Run): string | null {
+  if (!run.inputs) return null
+  const d = decodePayload(run.inputs, run.name)
+  if (!d) return null
+
+  const desc = d.rest.find(([k]) => k === 'description')?.[1]
+  const text = typeof desc === 'string' && desc.trim() ? desc : d.primary?.text
+  if (!text) return null
+
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat || null
 }
 
 function WaterfallRow({ run, t0, span, expanded, onToggle }: {
   run: Run; t0: number; span: number; expanded: boolean; onToggle: () => void
 }) {
   const color = runColor(run.run_type)
+  const summary = summarise(run)
   const start = new Date(run.started_at).getTime()
   // A pending run has no end yet; show it running to "now" rather than as a
   // zero-width sliver that looks like it never happened.
@@ -94,6 +231,18 @@ function WaterfallRow({ run, t0, span, expanded, onToggle }: {
             {run.input_tokens + run.output_tokens > 0 ? tokens(run.input_tokens + run.output_tokens) : ''}
           </span>
         </div>
+
+        {/* Second line rather than a column, so the waterfall bar keeps its
+            width — the same shape the trace list already uses. */}
+        {summary && !expanded && (
+          <div
+            className="mt-0.5 text-[11px] text-gray-500 truncate font-mono"
+            style={{ paddingLeft: run.depth * 14 + 20 }}
+            title={summary}
+          >
+            {summary}
+          </div>
+        )}
       </button>
 
       {expanded && (
@@ -110,7 +259,9 @@ function WaterfallRow({ run, t0, span, expanded, onToggle }: {
               {run.error}
             </div>
           )}
-          <Payload label="input" body={run.inputs} />
+          <Payload label="input" body={run.inputs} name={run.name} />
+          {/* No name for the output: PRIMARY_FIELD maps a tool to the field its
+              call is about, which a result does not have. */}
           <Payload label="output" body={run.outputs} />
         </div>
       )}
