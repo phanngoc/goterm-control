@@ -20,7 +20,16 @@ const FAIL_REASON: Record<string, string> = {
   'empty-exhausted': 'kept returning nothing',
 }
 
-function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
+// childCounts summarises a parent's children for its card: how many, how many
+// finished. Built from the flat task list, so the board needs no extra call.
+function childCounts(tasks: Task[], id: string): { total: number; done: number } | null {
+  const kids = tasks.filter(t => t.parent_id === id)
+  if (kids.length === 0) return null
+  const done = kids.filter(t => ['completed', 'failed', 'canceled', 'rejected'].includes(t.state)).length
+  return { total: kids.length, done }
+}
+
+function TaskCard({ task, kids, onOpen }: { task: Task; kids: { total: number; done: number } | null; onOpen: () => void }) {
   // A lapsed lease on a task that still has attempts WILL be reclaimed. One
   // that has none is failed by the reaper and shows up as failed — the old
   // "will be reclaimed" on an exhausted task was a lie.
@@ -40,7 +49,16 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
           </span>
         )}
       </div>
-      <div className="mt-2 text-sm text-gray-100 leading-snug">{truncate(task.title, 90)}</div>
+      <div className="mt-2 text-sm text-gray-100 leading-snug">
+        {task.parent_id && <span className="text-gray-500 mr-1" title={`sub-task of ${task.parent_id}`}>↳</span>}
+        {truncate(task.title, 90)}
+      </div>
+      {kids && (
+        <div className="mt-1 text-[11px] text-gray-500" title="child tasks split off this one">
+          {kids.done}/{kids.total} children finished
+          {task.state === 'blocked' && task.blocked_on === 'children' && kids.done < kids.total && ' — wakes when they all have'}
+        </div>
+      )}
       <div className="mt-2 flex items-center gap-2 text-[11px] text-gray-500">
         <span className="font-mono">{task.created_by}</span>
         <span>→</span>
@@ -73,8 +91,8 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
   )
 }
 
-function TaskDrawer({ call, id, onClose, onChanged }: {
-  call: Call; id: string; onClose: () => void; onChanged: () => void
+function TaskDrawer({ call, id, onClose, onChanged, onOpenTask }: {
+  call: Call; id: string; onClose: () => void; onChanged: () => void; onOpenTask: (id: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
@@ -208,6 +226,34 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
                 <div><dt className="text-gray-600">assigned to</dt><dd className="font-mono text-gray-300">{t.assigned_to || 'any'}</dd></div>
                 <div><dt className="text-gray-600">context</dt><dd className="font-mono text-gray-300 truncate">{t.context_id}</dd></div>
               </dl>
+
+              {t.parent_id && (
+                <div className="text-xs text-gray-500">
+                  ↳ sub-task of{' '}
+                  <button onClick={() => onOpenTask(t.parent_id!)} className="font-mono text-gray-300 hover:underline">{t.parent_id}</button>
+                </div>
+              )}
+
+              {detail!.children?.length > 0 && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">
+                    Children · {detail!.children.filter(c => ['completed', 'failed', 'canceled', 'rejected'].includes(c.state)).length}/{detail!.children.length} finished
+                  </div>
+                  <ol className="space-y-1.5">
+                    {detail!.children.map(c => (
+                      <li key={c.id} className="flex items-baseline gap-2 text-xs">
+                        <span className="text-gray-600 shrink-0">↳</span>
+                        <span className={`px-1.5 rounded ring-1 shrink-0 ${taskStateStyle(c.state)}`}>{c.state}</span>
+                        <button onClick={() => onOpenTask(c.id)} className="text-left text-gray-200 hover:underline truncate">{c.title}</button>
+                        <span className="ml-auto font-mono text-gray-500 shrink-0">{c.claimed_by || c.assigned_to || 'any'}</span>
+                      </li>
+                    ))}
+                  </ol>
+                  {t.state === 'blocked' && t.blocked_on === 'children' && (
+                    <div className="mt-1.5 text-[11px] text-violet-300">it resumes, with their results, when the last one finishes</div>
+                  )}
+                </div>
+              )}
 
               {detail!.runs?.length > 0 && (
                 <div>
@@ -412,7 +458,7 @@ export default function TaskBoard({ call, agents }: { call: Call; agents: string
                   {rows.length === 0 && (
                     <div className="rounded-lg ring-1 ring-dashed ring-gray-800 p-4 text-xs text-gray-600">empty</div>
                   )}
-                  {rows.map(t => <TaskCard key={t.id} task={t} onOpen={() => setOpenID(t.id)} />)}
+                  {rows.map(t => <TaskCard key={t.id} task={t} kids={childCounts(tasks, t.id)} onOpen={() => setOpenID(t.id)} />)}
                 </div>
               </div>
             )
@@ -421,7 +467,7 @@ export default function TaskBoard({ call, agents }: { call: Call; agents: string
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} onClose={() => setOpenID(null)} onChanged={load} />
+        <TaskDrawer call={call} id={openID} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} />
       )}
     </div>
   )

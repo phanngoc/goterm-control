@@ -93,6 +93,34 @@ func runTask(args []string) {
 		gateway.NotifyTaskCreated(db, task)
 		fmt.Println(task.ID)
 
+	case "sub":
+		// A child of a task this agent holds: inherits context, one level deeper.
+		fs := flag.NewFlagSet("task sub", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		parent := fs.String("parent", "", "The task you are splitting (required)")
+		title := fs.String("title", "", "Short summary of the piece (required)")
+		body := fs.String("body", "", "Full description")
+		to := fs.String("to", "", "Assign to a specific agent (default: any agent may claim)")
+		priority := fs.Int("priority", 0, "Higher is claimed first")
+		fs.Parse(rest)
+		if *parent == "" {
+			fmt.Fprintln(os.Stderr, "task sub: --parent is required")
+			os.Exit(1)
+		}
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		child, err := db.CreateSubTask(*parent, requireAgent(*agent), coord.NewTask{
+			AssignedTo: *to, Title: *title, Body: *body, Priority: *priority,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task sub: %v\n", err)
+			os.Exit(1)
+		}
+		gateway.NotifyTaskCreated(db, child)
+		fmt.Println(child.ID)
+		fmt.Fprintf(os.Stderr, "(when every child is done, `bomclaw task block --id %s --on children` wakes you with their results)\n", *parent)
+
 	case "claim":
 		fs := flag.NewFlagSet("task claim", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
@@ -338,6 +366,19 @@ func runTask(args []string) {
 				fmt.Println(line)
 			}
 		}
+		if children, _ := db.Children(*id); len(children) > 0 {
+			fmt.Printf("\nchildren (%d):\n", len(children))
+			for _, c := range children {
+				line := fmt.Sprintf("  ↳ %s  [%s]  %s", c.ID, c.State, c.Title)
+				if c.ClaimedBy != "" {
+					line += "  by " + c.ClaimedBy
+				}
+				if c.FailReason != "" {
+					line += "  (" + c.FailReason + ")"
+				}
+				fmt.Println(line)
+			}
+		}
 		if len(events) > 0 {
 			fmt.Println("\nhistory:")
 			for _, e := range events {
@@ -381,6 +422,7 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: bomclaw task <command>
 
   new    --title T [--body B] [--to agent] [--priority N]   create work
+  sub    --parent ID --title T [--body B] [--to agent]      split a piece off a task you hold (max 8 open)
   claim  [--json]                                           take the next claimable task
   done   --id ID [--result R] [--attempts N]                finish it
   fail   --id ID [--result R] [--attempts N]                give up on it
@@ -597,6 +639,11 @@ func runMsg(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "msg: %v\n", err)
 		os.Exit(1)
+	}
+	// A message about a task is read by the task's next run; ring the
+	// recipient so that run starts now if the task is waiting (§5.4 comment).
+	if *taskID != "" {
+		gateway.NotifyAgents(db, *to, "", "about a message on "+*taskID)
 	}
 	fmt.Println(m.ID)
 }

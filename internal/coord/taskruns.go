@@ -146,9 +146,19 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 
 	// The agent parked the task itself with `bomclaw task block` during this
 	// run: the task is already where it should be, only the run needs closing.
+	// The session is still worth keeping: a parent that fanned out and blocked
+	// on its children resumes THIS conversation when they finish (§5.2), and a
+	// task waiting on a person picks up where it asked.
 	if t.State == TaskBlocked && t.ClaimedBy == run.AgentID && t.Attempts == run.Attempt {
 		if err := closeRun(RunBlocked, "blocked on "+t.BlockedOn); err != nil {
 			return nil, err
+		}
+		if o.ResetSession || o.SessionRef.SessionID != "" {
+			t.SessionRef = o.SessionRef.String()
+			if _, err := tx.Exec(`UPDATE tasks SET session_ref = ?, updated_at = ? WHERE id = ?`,
+				t.SessionRef, ts(now), t.ID); err != nil {
+				return nil, fmt.Errorf("finish run: keep session: %w", err)
+			}
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, err
