@@ -5,14 +5,16 @@ import TraceExplorer from './TraceExplorer'
 import TaskBoard from './TaskBoard'
 import MessageStream from './MessageStream'
 import NotesPane from './NotesPane'
+import SchedulesPane from './SchedulesPane'
 
 type Call = (method: string, params?: any) => Promise<any>
-type Pane = 'overview' | 'traces' | 'tasks' | 'notes' | 'messages'
+type Pane = 'overview' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages'
 
 const PANES: { key: Pane; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'traces', label: 'Traces' },
   { key: 'tasks', label: 'Tasks' },
+  { key: 'schedules', label: 'Schedules' },
   { key: 'notes', label: 'Notes' },
   { key: 'messages', label: 'Messages' },
 ]
@@ -88,6 +90,7 @@ export default function AdminView({ call }: { call: Call }) {
         {pane === 'overview' && <Overview data={data} />}
         {pane === 'traces' && <TraceExplorer call={call} agents={agentIDs} />}
         {pane === 'tasks' && <TaskBoard call={call} agents={agentIDs} />}
+        {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
         {pane === 'messages' && <MessageStream call={call} agents={agentIDs} selfID={selfID} />}
       </div>
