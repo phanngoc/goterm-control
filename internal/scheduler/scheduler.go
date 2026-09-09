@@ -63,6 +63,7 @@ type Scheduler struct {
 
 	notify    func(text string)   // deliver a line to the owner (Telegram); nil = log only
 	wake      func(t *coord.Task) // ring the runner(s) for a task just created
+	busy      func() bool         // is this agent mid-run? a heartbeat waits for idle
 	now       func() time.Time    // test seam
 	poke      chan struct{}       // Poke → run a tick now
 	fires     sync.WaitGroup      // in-flight firings and the loop itself
@@ -87,6 +88,10 @@ func (s *Scheduler) SetNotify(fn func(text string)) { s.notify = fn }
 
 // SetWake installs the doorbell rung after an agent task is materialised.
 func (s *Scheduler) SetWake(fn func(t *coord.Task)) { s.wake = fn }
+
+// SetBusy installs the "is the agent running something" probe the heartbeat
+// consults before spending a model call.
+func (s *Scheduler) SetBusy(fn func() bool) { s.busy = fn }
 
 // Poke asks for a tick now (a `schedule run-now` from the CLI, for example).
 func (s *Scheduler) Poke() {
@@ -186,6 +191,8 @@ func (s *Scheduler) fire(ctx context.Context, sc *coord.Schedule, now time.Time,
 		s.fireAgent(sc, now)
 	case coord.PayloadCommand:
 		s.fireCommand(ctx, sc, now)
+	case coord.PayloadHeartbeat:
+		s.fireHeartbeat(sc, now)
 	default:
 		s.failed(sc, now, fmt.Sprintf("unknown payload kind %q", sc.PayloadKind))
 	}
@@ -353,7 +360,11 @@ func (s *Scheduler) settle(ctx context.Context, now time.Time) {
 		}
 		if status == coord.ScheduleRunOK {
 			_ = s.db.ScheduleSucceeded(sc.ID, coord.ScheduleRunOK, now)
-			s.deliver(sc, task)
+			if sc.PayloadKind == coord.PayloadHeartbeat {
+				s.deliverHeartbeat(sc, task)
+			} else {
+				s.deliver(sc, task)
+			}
 			continue
 		}
 		reason := task.State

@@ -110,6 +110,8 @@ func main() {
 		runTask(os.Args[2:])
 	case "schedule":
 		runSchedule(os.Args[2:])
+	case "heartbeat":
+		runHeartbeat(os.Args[2:])
 	case "note":
 		runNote(os.Args[2:])
 	case "inbox":
@@ -158,6 +160,7 @@ Commands:
   agents             List agents registered in the shared database
   task               Create, claim and finish work shared between agents
   schedule           Timed work: run a task or a command on a cron, interval or one-shot
+  heartbeat          This agent's scratchpad and its periodic look at it
   note               Record and search what the agents have learned
   inbox              Read messages other agents sent to this one
   msg                Send a message to another agent
@@ -422,9 +425,29 @@ func runGateway(args []string) {
 			}
 			gateway.NotifyTaskCreated(coordDB, t)
 		})
-		sched.Start(ctx)
+		// Started below, once deps.Runs exists: the heartbeat asks it whether
+		// the agent is mid-run before it spends a model call.
 	} else if coordDB != nil {
 		log.Printf("scheduler: disabled (schedules.enabled=false) — `bomclaw schedule add` rows wait for a gateway that runs it")
+	}
+
+	// Heartbeat — a system schedule this gateway owns. Kept in line with config
+	// on every start, whether or not the loop runs here, so turning it off in
+	// config actually turns the row off.
+	if coordDB != nil {
+		if err := scheduler.EnsureHeartbeat(coordDB, cfg.Agent.ID, scheduler.HeartbeatConfig{
+			Enabled: cfg.Heartbeat.Enabled, Every: cfg.Heartbeat.Every,
+			ActiveHours: cfg.Heartbeat.ActiveHours, TZ: cfg.Heartbeat.TZ,
+		}); err != nil {
+			log.Printf("heartbeat: not configured — %v", err)
+		} else if cfg.Heartbeat.Enabled {
+			if !cfg.Schedules.Enabled {
+				log.Printf("heartbeat: WARNING heartbeat.enabled=true but schedules.enabled=false — nothing on this gateway will fire it")
+			}
+			if !cfg.Tasks.AutoClaim {
+				log.Printf("heartbeat: WARNING heartbeat.enabled=true but tasks.auto_claim=false — its task would never be claimed here")
+			}
+		}
 	}
 
 	deps := gateway.Deps{
@@ -490,6 +513,10 @@ func runGateway(args []string) {
 			})
 		}
 		return out
+	}
+	if sched != nil {
+		sched.SetBusy(func() bool { return len(deps.Runs()) > 0 })
+		sched.Start(ctx)
 	}
 
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), gateway.NewStreamSendHandler(deps), resolveDashboardDir(), authMgr)
