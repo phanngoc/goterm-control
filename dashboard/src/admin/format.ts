@@ -87,3 +87,28 @@ export function truncate(s: string | undefined, n: number): string {
   if (!s) return ''
   return s.length <= n ? s : s.slice(0, n - 1) + '…'
 }
+
+// Go marshals a zero time.Time as 0001-01-01T00:00:00Z — `omitempty` does not
+// drop struct zero values — so an "unset" timestamp arrives looking like a
+// date 2000 years ago. Treat it as absent.
+export function isZeroTime(iso?: string): boolean {
+  return !iso || iso.startsWith('0001-')
+}
+
+// rel renders a timestamp relative to now in either direction: "3m ago" for
+// the past, "in 3m" for the future. ago() is past-only and its future branch
+// reads "in 3m ago", which is fine for things that are always past (created_at)
+// and wrong for a next-run column.
+export function rel(iso?: string): string {
+  if (isZeroTime(iso)) return '—'
+  const t = new Date(iso!).getTime()
+  if (Number.isNaN(t)) return '—'
+  const d = Date.now() - t
+  const abs = Math.abs(d)
+  let span: string
+  if (abs < 60_000) span = `${Math.max(0, Math.floor(abs / 1000))}s`
+  else if (abs < 3_600_000) span = `${Math.floor(abs / 60_000)}m`
+  else if (abs < 86_400_000) span = `${Math.floor(abs / 3_600_000)}h`
+  else span = `${Math.floor(abs / 86_400_000)}d`
+  return d >= 0 ? `${span} ago` : `in ${span}`
+}

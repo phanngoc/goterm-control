@@ -154,3 +154,55 @@ export interface Note {
   superseded_by?: string
   created_at: string
 }
+
+// --- schedules (design §5.5/§5.6) -------------------------------------------
+// A schedule decides WHEN; a schedule run records WHAT happened. `agent`
+// payloads materialise a task; `command` payloads run a shell command inside
+// the gateway; `heartbeat` is the gateway's own row for one agent.
+
+export type ScheduleKind = 'at' | 'every' | 'cron'
+export type PayloadKind = 'agent' | 'command' | 'heartbeat'
+export type ScheduleRunStatus = 'pending' | 'ok' | 'failed' | 'skipped'
+
+export interface AgentPayload { title: string; body?: string; to?: string; quiet?: boolean }
+export interface CommandPayload { cmd: string; cwd?: string; timeout_s?: number }
+export interface HeartbeatPayload { active_hours?: string }
+
+export interface Schedule {
+  id: string
+  name: string
+  created_by: string
+  owner_agent?: string
+  kind: ScheduleKind
+  spec: string
+  tz: string
+  payload_kind: PayloadKind
+  payload: AgentPayload | CommandPayload | HeartbeatPayload
+  enabled: boolean
+  system: boolean
+  skip_missed: boolean
+  next_run_at: string
+  last_run_at?: string
+  last_status?: ScheduleRunStatus | ''
+  consecutive_failures: number
+  created_at: string
+  updated_at: string
+  when: string // "every 10m", "cron 0 8 * * 1-5 (Asia/Ho_Chi_Minh)" — rendered by the gateway
+}
+
+export interface ScheduleRun {
+  id: string
+  schedule_id: string
+  task_id?: string
+  started_at: string
+  ended_at?: string
+  status: ScheduleRunStatus
+  exit_code: number
+  output?: string
+}
+
+export interface ScheduleView {
+  schedule: Schedule
+  runs: ScheduleRun[]
+  when: string
+}
