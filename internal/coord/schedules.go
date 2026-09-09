@@ -20,8 +20,9 @@ const (
 
 // Payload kinds: what a firing does. Neither runs a model in the scheduler.
 const (
-	PayloadAgent   = "agent"   // materialise one task row; the task runner does the rest
-	PayloadCommand = "command" // run a shell command inside the gateway
+	PayloadAgent     = "agent"     // materialise one task row; the task runner does the rest
+	PayloadCommand   = "command"   // run a shell command inside the gateway
+	PayloadHeartbeat = "heartbeat" // an agent task, but only if the scratchpad asks for one (system rows)
 )
 
 // Schedule run statuses.
@@ -98,6 +99,12 @@ type CommandPayload struct {
 	Cmd      string `json:"cmd"`
 	Cwd      string `json:"cwd,omitempty"`
 	TimeoutS int    `json:"timeout_s,omitempty"`
+}
+
+// HeartbeatPayload is what a system heartbeat row carries. The cadence is the
+// schedule's own spec; this is the rest of the config it needs at fire time.
+type HeartbeatPayload struct {
+	ActiveHours string `json:"active_hours,omitempty"` // "HH:MM-HH:MM" in the schedule's tz; "" = always
 }
 
 // ScheduleRun is one firing.
@@ -226,10 +233,74 @@ func encodePayload(kind string, payload any) (json.RawMessage, error) {
 		if strings.TrimSpace(p.Cmd) == "" {
 			return nil, fmt.Errorf("coord: command payload needs cmd")
 		}
+	case PayloadHeartbeat:
+		var p HeartbeatPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("coord: heartbeat payload: %w", err)
+		}
 	default:
-		return nil, fmt.Errorf("coord: payload kind %q must be agent or command", kind)
+		return nil, fmt.Errorf("coord: payload kind %q must be agent, command or heartbeat", kind)
 	}
 	return json.RawMessage(raw), nil
+}
+
+// UpsertSystemSchedule creates or realigns a gateway-owned row (a heartbeat)
+// with config. A new row, or one whose cadence, zone, payload or enabled flag
+// differs, is (re)armed from n.NextRunAt with its failure streak cleared; a row
+// already matching is left alone so a restart does not reset its clock.
+// Returns whether anything was written.
+func (db *DB) UpsertSystemSchedule(n NewSchedule) (*Schedule, bool, error) {
+	n.System = true
+	existing, err := db.FindSchedule(n.Name)
+	if err != nil {
+		s, err := db.CreateSchedule(n)
+		return s, true, err
+	}
+	payload, err := encodePayload(n.PayloadKind, n.Payload)
+	if err != nil {
+		return nil, false, err
+	}
+	same := existing.Enabled && existing.Kind == n.Kind && existing.Spec == strings.TrimSpace(n.Spec) &&
+		existing.TZ == n.TZ && existing.PayloadKind == n.PayloadKind &&
+		string(existing.Payload) == string(payload) && existing.OwnerAgent == n.OwnerAgent &&
+		existing.SkipMissed == n.SkipMissed
+	if same {
+		return existing, false, nil
+	}
+	if n.NextRunAt.IsZero() {
+		return nil, false, fmt.Errorf("coord: schedule has no first run time")
+	}
+	now := time.Now()
+	_, err = db.conn.Exec(`UPDATE schedules SET
+			owner_agent = ?, kind = ?, spec = ?, tz = ?, payload_kind = ?, payload = ?,
+			enabled = 1, system = 1, skip_missed = ?, next_run_at = ?,
+			consecutive_failures = 0, updated_at = ?
+		WHERE id = ?`,
+		n.OwnerAgent, n.Kind, strings.TrimSpace(n.Spec), n.TZ, n.PayloadKind, string(payload),
+		b2i(n.SkipMissed), ts(n.NextRunAt), ts(now), existing.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("upsert system schedule %s: %w", n.Name, err)
+	}
+	s, err := db.GetSchedule(existing.ID)
+	return s, true, err
+}
+
+// OpenScheduledTask returns a task this schedule created that has not reached
+// a terminal state, or nil. A heartbeat uses it to avoid stacking looks: one
+// open heartbeat task is enough, whether it is waiting to be claimed (the
+// runner is off) or still running.
+func (db *DB) OpenScheduledTask(scheduleID string) (*Task, error) {
+	t, err := scanTask(db.conn.QueryRow(`SELECT `+taskCols+` FROM tasks
+		WHERE schedule_id = ? AND state IN (?, ?, ?, ?)
+		ORDER BY created_at DESC LIMIT 1`,
+		scheduleID, TaskSubmitted, TaskWorking, TaskBlocked, TaskInputRequired))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open scheduled task: %w", err)
+	}
+	return t, nil
 }
 
 const scheduleCols = `id, name, created_by, owner_agent, kind, spec, tz, payload_kind, payload,

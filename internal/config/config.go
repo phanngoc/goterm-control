@@ -30,6 +30,10 @@ type Config struct {
 	// or runs commands without a person typing.
 	Schedules SchedulesConfig `yaml:"schedules"`
 
+	// Heartbeat is this agent's periodic look at its own scratchpad. Off until
+	// enabled; needs schedules.enabled and tasks.auto_claim on this gateway.
+	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
+
 	Telegram TelegramConfig `yaml:"telegram"`
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Models   ModelsConfig   `yaml:"models"`
@@ -85,6 +89,17 @@ type SchedulesConfig struct {
 	Enabled               bool `yaml:"enabled"`
 	TickSeconds           int  `yaml:"tick_seconds"`            // default 30
 	CommandTimeoutSeconds int  `yaml:"command_timeout_seconds"` // default 60; a payload's timeout_s overrides
+}
+
+// HeartbeatConfig (docs/design/scheduling-and-long-tasks.md §5.6). The
+// heartbeat is a system-owned schedule: it fires only when the scratchpad is
+// non-empty, the agent is idle and the clock is inside active_hours, and a
+// look that finds nothing (NO_REPLY) is delivered to nobody.
+type HeartbeatConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Every       string `yaml:"every"`        // default "30m"
+	ActiveHours string `yaml:"active_hours"` // "08:00-23:00"; "" = always; overnight ranges wrap
+	TZ          string `yaml:"tz"`           // IANA zone; default: the machine's
 }
 
 // GatewayConfig holds gateway HTTP server settings.
@@ -282,6 +297,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Schedules.CommandTimeoutSeconds == 0 {
 		cfg.Schedules.CommandTimeoutSeconds = 60
+	}
+	if cfg.Heartbeat.Every == "" {
+		cfg.Heartbeat.Every = "30m"
 	}
 	if cfg.Telegram.Timeout == 0 {
 		cfg.Telegram.Timeout = 60

@@ -163,6 +163,9 @@ type NewTask struct {
 	ParentID   string // set for a child task; see KindSub
 	Kind       string // "" = KindManual
 	ScheduleID string
+	// MaxContinuations caps how many "not done yet" runs this task may take;
+	// 0 = DefaultMaxContinuations. A heartbeat sets it low: one look, not a job.
+	MaxContinuations int
 }
 
 // CreateTask records new work. It refuses to go past MaxDepth so a pair of
@@ -200,6 +203,9 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 	}
 	if t.Kind == "" {
 		t.Kind = KindManual
+	}
+	if n.MaxContinuations > 0 {
+		t.MaxContinuations = n.MaxContinuations
 	}
 
 	_, err := db.conn.Exec(`INSERT INTO tasks

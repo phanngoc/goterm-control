@@ -37,7 +37,7 @@ func TestCreateScheduleValidatesShape(t *testing.T) {
 		{"no next", NewSchedule{Name: "a", Kind: ScheduleEvery, Spec: "1m", TZ: "UTC", PayloadKind: PayloadCommand, Payload: CommandPayload{Cmd: "x"}}, "no first run time"},
 		{"agent without title", NewSchedule{Name: "a", Kind: ScheduleEvery, Spec: "1m", TZ: "UTC", PayloadKind: PayloadAgent, Payload: AgentPayload{}, NextRunAt: now}, "needs a title"},
 		{"command without cmd", NewSchedule{Name: "a", Kind: ScheduleEvery, Spec: "1m", TZ: "UTC", PayloadKind: PayloadCommand, Payload: CommandPayload{}, NextRunAt: now}, "needs cmd"},
-		{"bad payload kind", NewSchedule{Name: "a", Kind: ScheduleEvery, Spec: "1m", TZ: "UTC", PayloadKind: "webhook", Payload: `{}`, NextRunAt: now}, "must be agent or command"},
+		{"bad payload kind", NewSchedule{Name: "a", Kind: ScheduleEvery, Spec: "1m", TZ: "UTC", PayloadKind: "webhook", Payload: `{}`, NextRunAt: now}, "must be agent, command or heartbeat"},
 	}
 	for _, c := range cases {
 		_, err := db.CreateSchedule(c.n)
