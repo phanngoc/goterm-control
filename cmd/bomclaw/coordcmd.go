@@ -214,18 +214,9 @@ func runTask(args []string) {
 		if strings.TrimSpace(by) == "" {
 			by = "human"
 		}
-		if *note != "" {
-			// Append the answer under the agent's own checkpoint rather than
-			// replacing it: the next run needs both.
-			if t, err := db.GetTask(*id); err == nil {
-				merged := strings.TrimSpace(t.Checkpoint)
-				if merged != "" {
-					merged += "\n\n"
-				}
-				merged += "Answer from " + by + ": " + *note
-				_, _ = db.Conn().Exec(`UPDATE tasks SET checkpoint = ? WHERE id = ?`, merged, *id)
-			}
-		}
+		// The answer is merged into the checkpoint by UnblockTask itself, in the
+		// same guarded statement — so it cannot land on a task that turns out
+		// not to be blocked, and the admin API gets the same behaviour for free.
 		if err := db.UnblockTask(*id, by, *note); err != nil {
 			fmt.Fprintf(os.Stderr, "task %s: %v\n", sub, err)
 			os.Exit(1)

@@ -451,10 +451,28 @@ func (db *DB) BlockTask(taskID, agentID string, attempts int, on, note string) e
 
 // UnblockTask returns a blocked task to the queue — a person answering, or the
 // last child finishing. Not fenced: nobody holds a blocked task.
+//
+// A non-empty note is the answer to whatever the agent asked, and it is
+// appended under the agent's own checkpoint rather than replacing it: the next
+// run needs both the question it wrote down and the reply. checkpoint is what
+// taskPrompt feeds back into the run, so this is the only path by which a
+// person's instruction actually reaches the agent — recording it as an audit
+// event alone would look right and change nothing.
+//
+// The merge happens in the same guarded statement as the unblock. Doing it
+// beforehand, as the CLI used to, left the answer written onto a task that
+// then turned out not to be blocked.
 func (db *DB) UnblockTask(taskID, byAgent, note string) error {
+	checkpoint, err := db.answeredCheckpoint(taskID, byAgent, note)
+	if err != nil {
+		return err
+	}
+
 	now := time.Now()
-	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', lease_until = ?, updated_at = ?
-		WHERE id = ? AND state = ?`, TaskSubmitted, ts(now), ts(now), taskID, TaskBlocked)
+	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', checkpoint = ?,
+			lease_until = ?, updated_at = ?
+		WHERE id = ? AND state = ?`,
+		TaskSubmitted, checkpoint, ts(now), ts(now), taskID, TaskBlocked)
 	if err != nil {
 		return fmt.Errorf("unblock task: %w", err)
 	}
@@ -462,6 +480,24 @@ func (db *DB) UnblockTask(taskID, byAgent, note string) error {
 		return fmt.Errorf("coord: task %s is not blocked", taskID)
 	}
 	return db.appendEvent(taskID, byAgent, TaskBlocked, TaskSubmitted, "unblocked: "+truncateNote(note))
+}
+
+// answeredCheckpoint returns the checkpoint the task should carry into its next
+// run: unchanged when there is no answer, otherwise the agent's own note with
+// the reply appended and attributed.
+func (db *DB) answeredCheckpoint(taskID, byAgent, note string) (string, error) {
+	t, err := db.GetTask(taskID)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(note) == "" {
+		return t.Checkpoint, nil
+	}
+	merged := strings.TrimSpace(t.Checkpoint)
+	if merged != "" {
+		merged += "\n\n"
+	}
+	return merged + "Answer from " + byAgent + ": " + note, nil
 }
 
 // ReapExhausted moves tasks that have used every attempt into failed. Until

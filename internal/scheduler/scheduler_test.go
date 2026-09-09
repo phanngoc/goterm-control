@@ -188,7 +188,7 @@ func TestCommandTimeoutFails(t *testing.T) {
 	start := time.Now()
 	s.Tick(context.Background())
 	s.Wait()
-	if time.Since(start) > 3*time.Second {
+	if time.Since(start) > cancelBudget {
 		t.Fatalf("timeout not enforced: took %s", time.Since(start))
 	}
 	runs, _ := db.ScheduleRuns(sc.ID, 10)

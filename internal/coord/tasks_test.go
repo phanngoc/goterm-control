@@ -3,6 +3,7 @@ package coord
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -202,5 +203,110 @@ func TestEventsRecordTheLifecycle(t *testing.T) {
 	if events[0].ToState != TaskSubmitted || events[1].ToState != TaskWorking || events[2].ToState != TaskCompleted {
 		t.Errorf("unexpected lifecycle: %v → %v → %v",
 			events[0].ToState, events[1].ToState, events[2].ToState)
+	}
+}
+
+// blockedOnPerson parks a claimed task on a human, with the agent's own note as
+// the checkpoint — the shape the admin board shows as "waiting on you".
+func blockedOnPerson(t *testing.T, db *DB, question string) *Task {
+	t.Helper()
+	task, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "needs a decision"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := db.ClaimTask("a1")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := db.BlockTask(c.ID, "a1", c.Attempts, BlockedOnHuman, question); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	return task
+}
+
+// The answer has to reach the agent, and checkpoint is the only field that does
+// — taskPrompt feeds it into the next run. Recording it as an audit event alone
+// would look correct and change nothing about what the agent reads.
+func TestUnblockPutsTheAnswerWhereTheAgentReadsIt(t *testing.T) {
+	db := testDB(t)
+	task := blockedOnPerson(t, db, "Which of the two layouts should I ship?")
+
+	if err := db.UnblockTask(task.ID, "human", "Ship the second one."); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+
+	got, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != TaskSubmitted || got.BlockedOn != "" {
+		t.Errorf("state=%s blocked_on=%q, want submitted and cleared", got.State, got.BlockedOn)
+	}
+	// Both halves survive: the question the agent wrote, and the reply.
+	if !strings.Contains(got.Checkpoint, "Which of the two layouts") {
+		t.Errorf("the agent's own note was lost:\n%s", got.Checkpoint)
+	}
+	if !strings.Contains(got.Checkpoint, "Ship the second one.") {
+		t.Errorf("the answer never reached the checkpoint:\n%s", got.Checkpoint)
+	}
+	if !strings.Contains(got.Checkpoint, "Answer from human") {
+		t.Errorf("the answer should be attributed:\n%s", got.Checkpoint)
+	}
+}
+
+func TestUnblockWithoutAnAnswerLeavesTheCheckpointAlone(t *testing.T) {
+	db := testDB(t)
+	task := blockedOnPerson(t, db, "original note")
+
+	if err := db.UnblockTask(task.ID, "human", ""); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+	got, _ := db.GetTask(task.ID)
+	if got.Checkpoint != "original note" {
+		t.Errorf("checkpoint = %q, want it untouched", got.Checkpoint)
+	}
+	if strings.Contains(got.Checkpoint, "Answer from") {
+		t.Error("an empty answer must not be attributed to anyone")
+	}
+}
+
+// The merge and the unblock are one guarded statement. Doing the merge first, as
+// the CLI used to, wrote the answer onto a task that then turned out not to be
+// blocked — leaving a reply to a question nobody had asked.
+func TestUnblockingAnUnblockedTaskChangesNothing(t *testing.T) {
+	db := testDB(t)
+	task, err := db.CreateTask(NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "not blocked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.UnblockTask(task.ID, "human", "an answer to nothing"); err == nil {
+		t.Fatal("unblocking a task that is not blocked must fail")
+	}
+
+	got, _ := db.GetTask(task.ID)
+	if got.Checkpoint != "" {
+		t.Errorf("checkpoint was written despite the failure: %q", got.Checkpoint)
+	}
+	if got.State != TaskSubmitted {
+		t.Errorf("state = %s, want it unchanged", got.State)
+	}
+}
+
+// Answering twice is a person clicking twice; the second one must not reopen
+// work that is already back in the queue and possibly running.
+func TestUnblockIsNotRepeatable(t *testing.T) {
+	db := testDB(t)
+	task := blockedOnPerson(t, db, "question")
+
+	if err := db.UnblockTask(task.ID, "human", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UnblockTask(task.ID, "human", "second"); err == nil {
+		t.Error("the second answer must be refused")
+	}
+	got, _ := db.GetTask(task.ID)
+	if strings.Contains(got.Checkpoint, "second") {
+		t.Errorf("the refused answer leaked into the checkpoint:\n%s", got.Checkpoint)
 	}
 }

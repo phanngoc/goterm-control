@@ -51,7 +51,13 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
         <div className="mt-1.5 text-[11px] text-red-400">{FAIL_REASON[task.fail_reason] ?? task.fail_reason}</div>
       )}
       {task.state === 'blocked' && (
-        <div className="mt-1.5 text-[11px] text-violet-300">waiting on {task.blocked_on || 'a person'}</div>
+        <div className="mt-1.5 text-[11px] text-violet-300">
+          {task.blocked_on === 'human'
+            ? /* Says what to do, not just what is true — this is the one state
+                 on the board that needs a person and can be cleared by one. */
+              'waiting on you — click to answer'
+            : `waiting on ${task.blocked_on || 'a person'}`}
+        </div>
       )}
       {task.state !== 'failed' && (task.attempts > 1 || task.continuations > 0 || leaseExpired) && (
         <div className="mt-1.5 text-[11px] text-amber-400">
@@ -73,6 +79,7 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [answer, setAnswer] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -108,9 +115,31 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
     }
   }
 
+  // The answer is an instruction, not a comment: the gateway appends it to the
+  // task's checkpoint, which is what the agent reads when it picks the work
+  // back up. So an empty box is a no-op worth preventing.
+  const sendAnswer = async () => {
+    if (!answer.trim()) return
+    setBusy(true)
+    try {
+      await call('tasks.unblock', { id, note: answer.trim() })
+      setAnswer('')
+      onChanged()
+      onClose()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const t = detail?.task
   const open = t && !['completed', 'failed', 'canceled', 'rejected'].includes(t.state)
   const resumable = t && t.state === 'failed' && !!t.fail_reason
+  const awaitingPerson = t?.state === 'blocked' && t.blocked_on === 'human'
+  // Blocked on its children is the system's business, not the operator's —
+  // offering an answer box there would invite unblocking work that is not done.
+  const blockedOnChildren = t?.state === 'blocked' && t.blocked_on === 'children'
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onClick={onClose}>
@@ -144,7 +173,7 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
                 {t.state === 'blocked' && (
                   <div className="mt-1 text-xs text-violet-300">
                     waiting on {t.blocked_on || 'a person'}
-                    {t.blocked_on === 'human' && <> — answer with <code className="text-gray-400">bomclaw task answer --id {t.id} --note "…"</code></>}
+                    {blockedOnChildren && <> — it resumes when its child tasks finish</>}
                   </div>
                 )}
                 <h3 className="mt-2 text-base text-gray-100">{t.title}</h3>
@@ -199,6 +228,48 @@ function TaskDrawer({ call, id, onClose, onChanged }: {
                       )
                     })}
                   </ol>
+                </div>
+              )}
+
+              {awaitingPerson && (
+                <div className="rounded ring-1 ring-violet-500/40 bg-violet-500/5 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-violet-300/80 mb-2">
+                    The agent is waiting on you
+                  </div>
+                  {t.checkpoint ? (
+                    <pre className="text-xs text-gray-300 whitespace-pre-wrap font-sans mb-3">{t.checkpoint}</pre>
+                  ) : (
+                    <div className="text-xs text-gray-500 mb-3">
+                      It parked without writing down what it needs. Say what to do next.
+                    </div>
+                  )}
+                  <textarea
+                    value={answer}
+                    onChange={e => setAnswer(e.target.value)}
+                    onKeyDown={e => {
+                      // Enter sends; the box is one instruction, not a document.
+                      // Shift+Enter still makes a newline.
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        void sendAnswer()
+                      }
+                    }}
+                    rows={3}
+                    placeholder="Answer, or tell it what to do next…"
+                    className="w-full bg-gray-900 ring-1 ring-gray-800 rounded px-2 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-violet-500/50 resize-y"
+                  />
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={sendAnswer}
+                      disabled={busy || !answer.trim()}
+                      className="px-3 py-1.5 text-sm rounded ring-1 ring-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 disabled:hover:bg-violet-500/10"
+                    >
+                      Send &amp; unblock
+                    </button>
+                    <span className="text-[11px] text-gray-600">
+                      goes into the task, and the agent reads it on its next run
+                    </span>
+                  </div>
                 </div>
               )}
 

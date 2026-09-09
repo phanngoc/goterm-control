@@ -179,6 +179,50 @@ func handleTaskResume(deps Deps, params json.RawMessage) (json.RawMessage, error
 	return json.Marshal(map[string]bool{"resumed": true})
 }
 
+type taskUnblockParams struct {
+	ID   string `json:"id"`
+	Note string `json:"note,omitempty"`
+}
+
+// handleTaskUnblock answers a task the agent parked on a person and returns it
+// to the queue.
+//
+// This is the admin page's half of `bomclaw task answer`. Until it existed the
+// dashboard could only tell the operator to go and run that CLI command — a
+// board full of "waiting on human" with nothing to click, which is most of what
+// a control page is for.
+//
+// The note is the instruction, not a comment: UnblockTask appends it to the
+// task's checkpoint, which taskPrompt feeds into the next run, so it is what
+// the agent actually reads when it picks the work back up.
+func handleTaskUnblock(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p taskUnblockParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+
+	// Read it before the unblock: afterwards assigned_to is what decides who to
+	// ring, and the row has already moved on.
+	task, err := deps.Coord.GetTask(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := deps.Coord.UnblockTask(p.ID, deps.AgentID, p.Note); err != nil {
+		return nil, err
+	}
+
+	// Ring whoever can take it: the agent it is addressed to, or everyone when
+	// it is unassigned. Best effort — their poll finds it regardless.
+	go NotifyAgents(deps.Coord, task.AssignedTo, "", "about unblocked "+p.ID)
+	return json.Marshal(map[string]bool{"unblocked": true})
+}
+
 type taskCreateParams struct {
 	Title      string `json:"title"`
 	Body       string `json:"body,omitempty"`
