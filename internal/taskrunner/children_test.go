@@ -27,10 +27,10 @@ func TestParentIsWokenWithChildResults(t *testing.T) {
 
 	// Run 1: the agent splits the work and parks the parent.
 	llm.hook = func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
-		if _, err := db.CreateSubTask(root.ID, "a2", coord.NewTask{Title: "Source A"}); err != nil {
+		if _, err := db.CreateSubTask(root.ID, "a2", coord.NewTask{Title: "Source A", Body: "Read source A end to end and summarise what it says about the scanner failure."}); err != nil {
 			t.Errorf("sub A: %v", err)
 		}
-		if _, err := db.CreateSubTask(root.ID, "a2", coord.NewTask{Title: "Source B"}); err != nil {
+		if _, err := db.CreateSubTask(root.ID, "a2", coord.NewTask{Title: "Source B", Body: "Read source B end to end and summarise what it says about the scanner failure."}); err != nil {
 			t.Errorf("sub B: %v", err)
 		}
 		if err := db.BlockTask(root.ID, "a2", 1, coord.BlockedOnChildren, "waiting on A and B"); err != nil {

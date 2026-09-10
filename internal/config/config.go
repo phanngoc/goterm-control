@@ -65,6 +65,7 @@ type CoordConfig struct {
 	Enabled            *bool  `yaml:"enabled"`
 	Path               string `yaml:"path"`                 // default ~/.goterm-shared/data/coord.db
 	NotesFile          string `yaml:"notes_file"`           // default ~/goterm-shared/NOTES.md
+	ArtifactsDir       string `yaml:"artifacts_dir"`        // default ~/goterm-shared/artifacts
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
 }
 
@@ -283,6 +284,10 @@ func Load(path string) (*Config, error) {
 	if strings.HasPrefix(cfg.Coord.NotesFile, "~/") {
 		home, _ := os.UserHomeDir()
 		cfg.Coord.NotesFile = home + cfg.Coord.NotesFile[1:]
+	}
+	if strings.HasPrefix(cfg.Coord.ArtifactsDir, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Coord.ArtifactsDir = home + cfg.Coord.ArtifactsDir[1:]
 	}
 	if cfg.Coord.TraceRetentionDays == 0 {
 		cfg.Coord.TraceRetentionDays = 7

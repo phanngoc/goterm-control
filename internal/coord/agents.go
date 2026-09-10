@@ -45,6 +45,13 @@ func (db *DB) RegisterAgent(a Agent) error {
 	if err != nil {
 		return fmt.Errorf("register agent %s: %w", a.ID, err)
 	}
+	// Every agent lands in #general on startup. An agent that has to be
+	// invited to the only room before it can be spoken to is an agent nobody
+	// remembers to invite; joining is idempotent and does not touch the read
+	// cursor, so a restart costs nothing.
+	if err := db.JoinChannel(GeneralChannelID, MemberAgent, a.ID); err != nil {
+		return fmt.Errorf("register agent %s: %w", a.ID, err)
+	}
 	return nil
 }
 

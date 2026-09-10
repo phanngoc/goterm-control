@@ -11,7 +11,11 @@ import (
 	"strings"
 )
 
-const systemdServiceName = "bomclaw-gateway"
+// systemdServiceNameFor names one agent's unit: bomclaw-gateway for the first,
+// bomclaw2-gateway for the rest.
+func systemdServiceNameFor(agentID string) string {
+	return "bomclaw" + unitSuffix(agentID) + "-gateway"
+}
 
 type systemdService struct {
 	unitName string
@@ -19,13 +23,13 @@ type systemdService struct {
 	unitPath string
 }
 
-func newSystemdService() (*systemdService, error) {
+func newSystemdService(agentID string) (*systemdService, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
-	unitName := systemdServiceName + ".service"
+	unitName := systemdServiceNameFor(agentID) + ".service"
 	return &systemdService{
 		unitName: unitName,
 		unitDir:  unitDir,

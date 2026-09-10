@@ -101,6 +101,12 @@ type Task struct {
 	// v5: set once this task's outcome has been delivered to whoever asked for
 	// it. Empty on a terminal task means a report is still owed.
 	ReportedAt string `json:"reported_at,omitempty"`
+
+	// v6: the bar this task is judged against, written by whoever scoped it.
+	// Paperclip's rule — a piece of work a reviewer could call "half done" was
+	// never scoped — so the bar travels with the work instead of staying in
+	// the head of the agent that split it up.
+	Acceptance string `json:"acceptance,omitempty"`
 }
 
 // SessionRef names the CLI session a task's work lives in. Both CLIs keep the
@@ -138,7 +144,7 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	priority, title, body, result, trace_id, lease_until, attempts,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-	max_continuations, blocked_on, fail_reason, reported_at`
+	max_continuations, blocked_on, fail_reason, reported_at, acceptance`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -166,6 +172,11 @@ type NewTask struct {
 	// MaxContinuations caps how many "not done yet" runs this task may take;
 	// 0 = DefaultMaxContinuations. A heartbeat sets it low: one look, not a job.
 	MaxContinuations int
+	// Acceptance is how the claimer knows it is done. Required for a sub-task.
+	Acceptance string
+	// Inputs are artifact ids handed down with the work; CreateSubTask links
+	// them with role=input so the child can read them without being told a path.
+	Inputs []string
 }
 
 // CreateTask records new work. It refuses to go past MaxDepth so a pair of
@@ -197,6 +208,7 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 		Kind:             n.Kind,
 		ScheduleID:       n.ScheduleID,
 		MaxContinuations: DefaultMaxContinuations,
+		Acceptance:       strings.TrimSpace(n.Acceptance),
 	}
 	if t.ContextID == "" {
 		t.ContextID = "ctx_" + uuid.NewString()
@@ -213,13 +225,13 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 		 title, body, result, trace_id, lease_until, attempts, max_attempts, depth,
 		 created_at, updated_at,
 		 parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-		 max_continuations, blocked_on, fail_reason)
+		 max_continuations, blocked_on, fail_reason, acceptance)
 		VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, '', '', ?, 0, ?, ?, ?, ?,
-		        ?, ?, ?, '', '', 0, ?, '', '')`,
+		        ?, ?, ?, '', '', 0, ?, '', '', ?)`,
 		t.ID, t.ContextID, t.CreatedBy, t.AssignedTo, t.State, t.Priority,
 		t.Title, t.Body, ts(t.LeaseUntil), t.MaxAttempts, t.Depth,
 		ts(t.CreatedAt), ts(t.UpdatedAt),
-		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations)
+		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations, t.Acceptance)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
 	}
@@ -664,7 +676,7 @@ func scanTask(s scanner) (*Task, error) {
 		&t.State, &t.Priority, &t.Title, &t.Body, &t.Result, &t.TraceID,
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
-		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt); err != nil {
+		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)

@@ -118,6 +118,10 @@ func main() {
 		runInbox(os.Args[2:])
 	case "msg":
 		runMsg(os.Args[2:])
+	case "ch", "channel":
+		runChannel(os.Args[2:])
+	case "artifact":
+		runArtifact(os.Args[2:])
 	case "agents":
 		runAgents(os.Args[2:])
 	case "models":
@@ -164,6 +168,8 @@ Commands:
   note               Record and search what the agents have learned
   inbox              Read messages other agents sent to this one
   msg                Send a message to another agent
+  ch                 Shared channels: post, read, thread, mention
+  artifact           Store and fetch what a task produced
   passwd             Set the dashboard password (creates the account if none)
   help               Show this help`)
 }
@@ -241,6 +247,14 @@ func runGateway(args []string) {
 	if err := os.Setenv("BOMCLAW_AGENT_ID", cfg.Agent.ID); err != nil {
 		log.Printf("gateway: could not export BOMCLAW_AGENT_ID: %v", err)
 	}
+	// Same reason for artifacts: `bomclaw artifact put` run from the agent's
+	// shell opens the shared database directly and would otherwise write under
+	// the default root while the gateway reads from the configured one.
+	if cfg.Coord.ArtifactsDir != "" {
+		if err := os.Setenv("BOMCLAW_ARTIFACTS_DIR", cfg.Coord.ArtifactsDir); err != nil {
+			log.Printf("gateway: could not export BOMCLAW_ARTIFACTS_DIR: %v", err)
+		}
+	}
 
 	// Create model provider: codex CLI, claude CLI (OAuth), or direct API key.
 	provider := buildProvider(cfg)
@@ -284,6 +298,9 @@ func runGateway(args []string) {
 	var coordDB *coord.DB
 	if cfg.Coord.IsEnabled() {
 		coordDB, err = coord.Open(cfg.Coord.Path)
+		if err == nil && cfg.Coord.ArtifactsDir != "" {
+			coordDB.SetArtifactsDir(cfg.Coord.ArtifactsDir)
+		}
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
 			coordDB = nil
@@ -1071,6 +1088,18 @@ func buildInstallEnv(configPath, envPath string) map[string]string {
 	return env
 }
 
+// serviceAgentFlag names whose service a `bomclaw gateway …` command acts on.
+// Each agent on this machine runs its own gateway service off the shared
+// binary, so without this every command would reach for agent 1's.
+func serviceAgentFlag(fs *flag.FlagSet) *string {
+	def := os.Getenv("BOMCLAW_AGENT_ID")
+	if def == "" {
+		def = daemon.DefaultAgentID
+	}
+	return fs.String("agent", def,
+		"Which agent's service to act on (default $BOMCLAW_AGENT_ID, else "+daemon.DefaultAgentID+")")
+}
+
 func runGatewayInstall(args []string) {
 	fs := flag.NewFlagSet("gateway install", flag.ExitOnError)
 	port := fs.Int("port", 18789, "Gateway port")
@@ -1078,9 +1107,10 @@ func runGatewayInstall(args []string) {
 	configPath := fs.String("config", "config.yaml", "Path to config file")
 	envPath := fs.String("env", ".env", "Path to .env file")
 	force := fs.Bool("force", false, "Force reinstall even if already installed")
+	agent := serviceAgentFlag(fs)
 	fs.Parse(args)
 
-	svc, err := daemon.Resolve()
+	svc, err := daemon.Resolve(*agent)
 	if err != nil {
 		log.Fatalf("daemon: %v", err)
 	}
@@ -1146,8 +1176,12 @@ func runGatewayInstall(args []string) {
 	fmt.Println("  bomclaw gateway uninstall — remove service")
 }
 
-func runGatewayUninstall(_ []string) {
-	svc, err := daemon.Resolve()
+func runGatewayUninstall(args []string) {
+	fs := flag.NewFlagSet("gateway uninstall", flag.ExitOnError)
+	agent := serviceAgentFlag(fs)
+	fs.Parse(args)
+
+	svc, err := daemon.Resolve(*agent)
 	if err != nil {
 		log.Fatalf("daemon: %v", err)
 	}
@@ -1158,8 +1192,12 @@ func runGatewayUninstall(_ []string) {
 	fmt.Println("Service uninstalled.")
 }
 
-func runGatewayStart(_ []string) {
-	svc, err := daemon.Resolve()
+func runGatewayStart(args []string) {
+	fs := flag.NewFlagSet("gateway start", flag.ExitOnError)
+	agent := serviceAgentFlag(fs)
+	fs.Parse(args)
+
+	svc, err := daemon.Resolve(*agent)
 	if err != nil {
 		log.Fatalf("daemon: %v", err)
 	}
@@ -1176,8 +1214,12 @@ func runGatewayStart(_ []string) {
 	fmt.Println("Service started.")
 }
 
-func runGatewayStop(_ []string) {
-	svc, err := daemon.Resolve()
+func runGatewayStop(args []string) {
+	fs := flag.NewFlagSet("gateway stop", flag.ExitOnError)
+	agent := serviceAgentFlag(fs)
+	fs.Parse(args)
+
+	svc, err := daemon.Resolve(*agent)
 	if err != nil {
 		log.Fatalf("daemon: %v", err)
 	}
@@ -1192,9 +1234,10 @@ func runGatewayRestart(args []string) {
 	fs := flag.NewFlagSet("gateway restart", flag.ExitOnError)
 	port := fs.Int("port", 18789, "Gateway port (for health check)")
 	bind := fs.String("bind", "127.0.0.1", "Bind address (for health check)")
+	agent := serviceAgentFlag(fs)
 	fs.Parse(args)
 
-	svc, err := daemon.Resolve()
+	svc, err := daemon.Resolve(*agent)
 	if err != nil {
 		log.Fatalf("daemon: %v", err)
 	}
@@ -1224,9 +1267,10 @@ func runGatewayServiceStatus(args []string) {
 	fs := flag.NewFlagSet("gateway status", flag.ExitOnError)
 	port := fs.Int("port", 18789, "Gateway port (for health probe)")
 	bind := fs.String("bind", "127.0.0.1", "Bind address")
+	agent := serviceAgentFlag(fs)
 	fs.Parse(args)
 
-	svc, err := daemon.Resolve()
+	svc, err := daemon.Resolve(*agent)
 	if err != nil {
 		log.Fatalf("daemon: %v", err)
 	}

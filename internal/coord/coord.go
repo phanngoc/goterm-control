@@ -26,12 +26,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 // DB is the shared coordination database.
 type DB struct {
 	conn *sql.DB
 	path string
+	// artifactsDir is the root artifact bytes are written under; empty means
+	// DefaultArtifactsDir. Config overrides it, tests point it at t.TempDir.
+	artifactsDir string
 }
 
 // DefaultPath is where the shared database lives when config says nothing.
@@ -287,6 +290,95 @@ var ddl = []string{
 		VALUES ('delete', old.rowid, old.title, old.body);
 		INSERT INTO shared_notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
 	END`,
+
+	// --- v6: artifacts — what a task produced -------------------------------
+	// The bytes live on disk, not here: a parent that gathers eight children
+	// would otherwise pull eight patches through SQLite and then through a
+	// prompt. The row is the pointer, `preview` is the first few hundred runes
+	// so an index reads usefully, and `bomclaw artifact get` fetches the rest
+	// only when the agent actually needs it.
+	`CREATE TABLE IF NOT EXISTS artifacts (
+		id           TEXT PRIMARY KEY,          -- 'a_' || uuid
+		context_id   TEXT NOT NULL,             -- the task tree this belongs to
+		task_id      TEXT NOT NULL,             -- the task that produced it
+		kind         TEXT NOT NULL,             -- document | patch | file | link | result
+		title        TEXT NOT NULL,
+		content_type TEXT NOT NULL DEFAULT '',
+		path         TEXT NOT NULL DEFAULT '',  -- relative to the artifacts root; '' for kind=link
+		url          TEXT NOT NULL DEFAULT '',  -- kind=link only
+		preview      TEXT NOT NULL DEFAULT '',  -- first PreviewRunes of the content
+		bytes        INTEGER NOT NULL DEFAULT 0,
+		created_by   TEXT NOT NULL,
+		created_at   TEXT NOT NULL
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_artifacts_task    ON artifacts(task_id, created_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_artifacts_context ON artifacts(context_id, created_at)`,
+
+	// A parent hands an artifact down to a child as an input without copying
+	// it: same artifact, a second row with role='input'. The producing task
+	// always has an implicit output link through artifacts.task_id, so only
+	// the extra edges are stored here.
+	`CREATE TABLE IF NOT EXISTS artifact_links (
+		artifact_id TEXT NOT NULL,
+		task_id     TEXT NOT NULL,
+		role        TEXT NOT NULL,             -- input | output
+		created_at  TEXT NOT NULL,
+		PRIMARY KEY (artifact_id, task_id, role)
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_artifact_links_task ON artifact_links(task_id, role)`,
+
+	// --- v6: channels — a place, not a pair ---------------------------------
+	// agent_messages addressed one agent, so nothing existed independently of
+	// two names and a third agent could not read along. A channel is the place;
+	// membership says who is in the work; a mention is what claims attention.
+	`CREATE TABLE IF NOT EXISTS channels (
+		id          TEXT PRIMARY KEY,          -- 'ch_<slug>' or 'dm_<a>__<b>' (sorted, so it is derivable)
+		name        TEXT NOT NULL,
+		kind        TEXT NOT NULL DEFAULT 'channel', -- channel | dm
+		purpose     TEXT NOT NULL DEFAULT '',
+		created_by  TEXT NOT NULL,
+		created_at  TEXT NOT NULL,
+		archived_at TEXT NOT NULL DEFAULT ''
+	) STRICT`,
+
+	`CREATE TABLE IF NOT EXISTS channel_members (
+		channel_id   TEXT NOT NULL,
+		member_kind  TEXT NOT NULL,            -- agent | user
+		member_id    TEXT NOT NULL,
+		joined_at    TEXT NOT NULL,
+		last_read_at TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (channel_id, member_kind, member_id)
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_members_who ON channel_members(member_kind, member_id)`,
+
+	// A thread is replies sharing a root message id — Slack's own model, and
+	// one table fewer than a threads table that would only ever hold a title.
+	// task_id on a root message is what binds a thread to a task.
+	`CREATE TABLE IF NOT EXISTS channel_messages (
+		id          TEXT PRIMARY KEY,          -- 'cm_' || uuid
+		channel_id  TEXT NOT NULL,
+		thread_root TEXT NOT NULL DEFAULT '',  -- '' = top level; else the root message id
+		author_kind TEXT NOT NULL,             -- agent | user
+		author_id   TEXT NOT NULL,
+		body        TEXT NOT NULL,
+		task_id     TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_messages_ch     ON channel_messages(channel_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_messages_thread ON channel_messages(thread_root, created_at)`,
+
+	// Being mentioned is the only thing that wakes an agent. Unread lives here
+	// rather than being derived from last_read_at because "someone called me"
+	// and "I have not caught up on the channel" are different questions.
+	`CREATE TABLE IF NOT EXISTS channel_mentions (
+		message_id  TEXT NOT NULL,
+		member_kind TEXT NOT NULL,
+		member_id   TEXT NOT NULL,
+		read_at     TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL,
+		PRIMARY KEY (message_id, member_kind, member_id)
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_mentions_unread ON channel_mentions(member_kind, member_id, read_at, created_at DESC)`,
 }
 
 // v3Columns are the columns added to tasks after it first shipped. CREATE TABLE
@@ -321,6 +413,13 @@ var v5Columns = []struct{ name, decl string }{
 	{"reported_at", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v6Columns: the acceptance bar a child is judged against. Paperclip's rule —
+// a child a reviewer could call "half done" was never scoped — so the bar is
+// recorded with the work, not left in the parent's head.
+var v6Columns = []struct{ name, decl string }{
+	{"acceptance", "TEXT NOT NULL DEFAULT ''"},
+}
+
 var v3Indexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id, state)`,
 }
@@ -346,10 +445,18 @@ func (db *DB) migrate() error {
 			return err
 		}
 	}
+	for _, c := range v6Columns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
 	for _, stmt := range v3Indexes {
 		if _, err := db.conn.Exec(stmt); err != nil {
 			return fmt.Errorf("%s: %w", firstLine(stmt), err)
 		}
+	}
+	if err := db.migrateMessagesToChannels(); err != nil {
+		return err
 	}
 	_, err := db.conn.Exec(
 		`INSERT INTO meta (key, value) VALUES ('schema_version', ?)

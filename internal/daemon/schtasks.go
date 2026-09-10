@@ -13,10 +13,13 @@ import (
 	"time"
 )
 
-// schtasksName is the task path. The BomClaw folder keeps the gateway out of
+// schtasksNameFor builds the task path. The BomClaw folder keeps the gateway out of
 // the top-level task list, where it would sit among the tasks Windows
 // registers for itself.
-const schtasksName = `\BomClaw\bomclaw-gateway`
+// One folder per install keeps agents together and out of the top-level list.
+func schtasksNameFor(agentID string) string {
+	return `\BomClaw\bomclaw` + unitSuffix(agentID) + `-gateway`
+}
 
 type schtasksService struct {
 	taskName string
@@ -24,7 +27,7 @@ type schtasksService struct {
 	logDir   string
 }
 
-func newSchtasksService() (*schtasksService, error) {
+func newSchtasksService(agentID string) (*schtasksService, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
@@ -36,7 +39,7 @@ func newSchtasksService() (*schtasksService, error) {
 		defDir = filepath.Join(home, "AppData", "Local")
 	}
 	return &schtasksService{
-		taskName: schtasksName,
+		taskName: schtasksNameFor(agentID),
 		xmlPath:  filepath.Join(defDir, "BomClaw", "bomclaw-gateway.xml"),
 		logDir:   filepath.Join(home, ".goterm", "logs"),
 	}, nil

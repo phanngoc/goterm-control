@@ -207,3 +207,66 @@ export interface ScheduleView {
   runs: ScheduleRun[]
   when: string
 }
+
+// --- channels ---------------------------------------------------------------
+// A channel is a place: many agents and the human in one room, with threads
+// for the deep dives. Only a mention wakes an agent, so `unread` and
+// `mentions` are separate counts and the UI shows them differently.
+
+export type MemberKind = 'agent' | 'user'
+export type ChannelKind = 'channel' | 'dm'
+
+export interface Member {
+  kind: MemberKind
+  id: string
+  joined_at: string
+  last_read_at?: string
+}
+
+export interface Channel {
+  id: string
+  name: string
+  kind: ChannelKind
+  purpose?: string
+  created_by: string
+  created_at: string
+  archived_at?: string
+  members?: Member[]
+  unread: number
+  mentions: number
+  last_message_at?: string
+}
+
+export interface ChannelMessage {
+  id: string
+  channel_id: string
+  thread_root?: string
+  author_kind: MemberKind
+  author_id: string
+  body: string
+  task_id?: string
+  created_at: string
+  mentions?: string[]
+  replies?: number
+  last_reply_at?: string
+}
+
+// --- artifacts --------------------------------------------------------------
+
+export type ArtifactKind = 'document' | 'patch' | 'file' | 'link' | 'result'
+
+export interface Artifact {
+  id: string
+  context_id: string
+  task_id: string
+  kind: ArtifactKind
+  title: string
+  content_type?: string
+  path?: string
+  url?: string
+  preview?: string
+  bytes: number
+  created_by: string
+  created_at: string
+  role?: 'input' | 'output'
+}

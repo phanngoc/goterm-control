@@ -3,7 +3,7 @@ import type { Overview as OverviewData } from './types'
 import Overview from './Overview'
 import TraceExplorer from './TraceExplorer'
 import TaskBoard from './TaskBoard'
-import MessageStream from './MessageStream'
+import ChannelView from './ChannelView'
 import NotesPane from './NotesPane'
 import SchedulesPane from './SchedulesPane'
 import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
@@ -95,7 +95,7 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
         {pane === 'tasks' && <TaskBoard call={call} agents={agentIDs} />}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
-        {pane === 'messages' && <MessageStream call={call} agents={agentIDs} selfID={selfID} />}
+        {pane === 'messages' && <ChannelView call={call} agents={agentIDs} selfID={selfID} />}
       </div>
     </div>
   )
