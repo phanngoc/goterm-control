@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,43 @@ func TestBuildPlistEscaping(t *testing.T) {
 	}
 	if strings.Contains(plist, `<special>`) && !strings.Contains(plist, `&lt;special&gt;`) {
 		t.Error("unescaped < > in program args")
+	}
+}
+
+func TestEachAgentGetsItsOwnLogDir(t *testing.T) {
+	// Agent 1 keeps the original path — anything already tailing it, or any
+	// runbook naming it, must not break on an upgrade.
+	// Expected paths go through filepath.Join too: this file is built on every
+	// platform even though launchd is darwin-only, and a hardcoded "/" fails
+	// on Windows without teaching anyone anything.
+	home := filepath.Join("/Users", "x")
+	agent1 := filepath.Join(home, ".goterm", "logs")
+
+	if got := launchdLogDirFor(home, "bomclaw"); got != agent1 {
+		t.Errorf("agent 1 log dir moved to %q", got)
+	}
+	if got := launchdLogDirFor(home, ""); got != agent1 {
+		t.Errorf("default log dir = %q", got)
+	}
+	// Everyone else is separate, or three startups interleave in one file.
+	if got, want := launchdLogDirFor(home, "bomclaw3"), filepath.Join(home, ".goterm3", "logs"); got != want {
+		t.Errorf("agent 3 log dir = %q, want %q", got, want)
+	}
+	if launchdLogDirFor(home, "bomclaw2") == launchdLogDirFor(home, "bomclaw3") {
+		t.Error("two agents share a log file")
+	}
+}
+
+func TestServiceNamesAreDerivedFromTheAgent(t *testing.T) {
+	cases := map[string]string{
+		"":         "com.bomclaw.gateway",
+		"bomclaw":  "com.bomclaw.gateway",
+		"bomclaw2": "com.bomclaw2.gateway",
+		"bomclaw3": "com.bomclaw3.gateway",
+	}
+	for id, want := range cases {
+		if got := launchdLabelFor(id); got != want {
+			t.Errorf("launchdLabelFor(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
