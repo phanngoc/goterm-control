@@ -16,6 +16,27 @@ When restarting the gateway service, stale Claude CLI subprocesses (spawned by p
 2. Clear Telegram state: `curl "https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=true"`
 3. Then restart: `./bomclaw gateway restart`
 
-**Root cause:** `client.go` spawns `claude -p --resume <session>` as a child process. If the parent gateway dies (crash, restart) without killing the child, the orphaned claude process keeps its Telegram long-poll alive. The new gateway instance then conflicts with it.
+**Root cause — there are two, and this file only had one until 2026-09-10:**
 
-**TODO:** Add child process cleanup on gateway shutdown (kill all spawned claude subprocesses in `Bot.Shutdown()`).
+1. **Orphaned subprocesses.** `client.go` spawns `claude -p --resume <session>`
+   as a child process. If the parent gateway dies (crash, restart) without
+   killing the child, the orphaned claude process keeps its Telegram long-poll
+   alive. The new gateway instance then conflicts with it.
+
+2. **Two gateways, one token.** Telegram serves `getUpdates` to exactly one
+   consumer per token. Agents 1 and 2 both had `TELEGRAM_TOKEN` in their `.env`
+   — which overrides `telegram.token: ""` in config (`config.go` Load) — so
+   both were polling the same bot, permanently. Fixed by `telegram.poll`
+   (default true): agent 1 polls, agents 2 and 3 set it false. They still build
+   the bot object, because that object is the shared turn engine `deps.Turn`;
+   dropping the token instead would push the dashboard and `bomclaw send` onto
+   the older non-streaming `agent.RunAgent` path.
+
+   Check with: `grep -c "telegram polling off" ~/.goterm<N>/logs/gateway.err.log`
+
+**Agents on this machine:** `bomclaw` (:18789, claude), `bomclaw2` (:18790,
+codex), `bomclaw3` (:18791, claude, shares agent 1's OAuth quota). One shared
+binary at `~/.bomclaw/bomclaw`, so a deploy restarts all three. Adding one:
+`docs/adding-an-agent.md`.
+
+**TODO:** Add child process cleanup on gateway shutdown (kill all spawned claude subprocesses in `Bot.Shutdown()`). Cause 2 is fixed; this is still open for cause 1.
