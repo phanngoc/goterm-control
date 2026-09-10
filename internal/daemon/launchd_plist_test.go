@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -88,17 +89,23 @@ func TestBuildPlistEscaping(t *testing.T) {
 func TestEachAgentGetsItsOwnLogDir(t *testing.T) {
 	// Agent 1 keeps the original path — anything already tailing it, or any
 	// runbook naming it, must not break on an upgrade.
-	if got := launchdLogDirFor("/Users/x", "bomclaw"); got != "/Users/x/.goterm/logs" {
+	// Expected paths go through filepath.Join too: this file is built on every
+	// platform even though launchd is darwin-only, and a hardcoded "/" fails
+	// on Windows without teaching anyone anything.
+	home := filepath.Join("/Users", "x")
+	agent1 := filepath.Join(home, ".goterm", "logs")
+
+	if got := launchdLogDirFor(home, "bomclaw"); got != agent1 {
 		t.Errorf("agent 1 log dir moved to %q", got)
 	}
-	if got := launchdLogDirFor("/Users/x", ""); got != "/Users/x/.goterm/logs" {
+	if got := launchdLogDirFor(home, ""); got != agent1 {
 		t.Errorf("default log dir = %q", got)
 	}
 	// Everyone else is separate, or three startups interleave in one file.
-	if got := launchdLogDirFor("/Users/x", "bomclaw3"); got != "/Users/x/.goterm3/logs" {
-		t.Errorf("agent 3 log dir = %q, want its own", got)
+	if got, want := launchdLogDirFor(home, "bomclaw3"), filepath.Join(home, ".goterm3", "logs"); got != want {
+		t.Errorf("agent 3 log dir = %q, want %q", got, want)
 	}
-	if launchdLogDirFor("/Users/x", "bomclaw2") == launchdLogDirFor("/Users/x", "bomclaw3") {
+	if launchdLogDirFor(home, "bomclaw2") == launchdLogDirFor(home, "bomclaw3") {
 		t.Error("two agents share a log file")
 	}
 }
