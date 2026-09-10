@@ -112,15 +112,15 @@ func runArtifact(args []string) {
 		fs := flag.NewFlagSet("artifact get", flag.ExitOnError)
 		dbPath := dbFlag(fs)
 		out := fs.String("out", "", "Write to this file instead of stdout")
-		fs.Parse(rest)
-		if fs.NArg() != 1 {
+		id, _ := parseLeading(fs, rest)
+		if id == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw artifact get <artifact-id> [--out FILE]")
 			os.Exit(1)
 		}
 
 		db := openCoord(*dbPath)
 		defer db.Close()
-		a, err := db.GetArtifact(fs.Arg(0))
+		a, err := db.GetArtifact(id)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "artifact get: %v\n", err)
 			os.Exit(1)

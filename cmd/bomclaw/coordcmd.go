@@ -54,6 +54,24 @@ func requireAgent(id string) string {
 	return id
 }
 
+// parseLeading lets flags follow a positional argument. Go's flag package
+// stops at the first non-flag token, so `ch post ch_general --thread X "hi"`
+// silently ignored --thread and then failed on a missing identity — while
+// being exactly how anyone, agent or person, would type it.
+//
+// It peels off one leading positional, re-parses what is left for flags, and
+// returns the remainder. A body that itself starts with "-" would still be
+// taken for a flag; quote it, as you would anywhere else.
+func parseLeading(fs *flag.FlagSet, args []string) (first string, rest []string) {
+	fs.Parse(args)
+	if fs.NArg() == 0 {
+		return "", nil
+	}
+	first = fs.Arg(0)
+	fs.Parse(fs.Args()[1:])
+	return first, fs.Args()
+}
+
 func dbFlag(fs *flag.FlagSet) *string {
 	return fs.String("db", coord.DefaultPath(), "Shared coordination database")
 }

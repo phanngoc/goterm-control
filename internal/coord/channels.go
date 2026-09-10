@@ -151,16 +151,18 @@ func (db *DB) CreateChannel(id, name, kind, purpose, createdBy string, members [
 // EnsureDM returns the direct channel between two agents, creating it on first
 // use. A DM is an ordinary channel with two members and kind='dm' — the UI
 // treats it differently, nothing else does.
+// A DM to yourself is allowed and is not a mistake: agents already used
+// `msg --to <self>` to leave their next turn a note, and the migrated history
+// contains those. Refusing it would have deleted a working habit.
 func (db *DB) EnsureDM(a, b string) (*Channel, error) {
 	if a == "" || b == "" {
 		return nil, fmt.Errorf("coord: a DM needs two members")
 	}
+	name, members := a+" ↔ "+b, []Member{{Kind: MemberAgent, ID: a}, {Kind: MemberAgent, ID: b}}
 	if a == b {
-		return nil, fmt.Errorf("coord: %s cannot DM itself", a)
+		name, members = a+" (notes to self)", []Member{{Kind: MemberAgent, ID: a}}
 	}
-	return db.CreateChannel(DMChannelID(a, b), a+" ↔ "+b, ChannelDM, "", a, []Member{
-		{Kind: MemberAgent, ID: a}, {Kind: MemberAgent, ID: b},
-	})
+	return db.CreateChannel(DMChannelID(a, b), name, ChannelDM, "", a, members)
 }
 
 // JoinChannel adds a member. Idempotent: re-joining does not reset the read
@@ -359,19 +361,27 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 	if err != nil {
 		return nil, nil, err
 	}
+	// Writing your own name in a sentence is not a summons, so a parsed
+	// mention of the author is dropped. An explicit Notify is not prose — it
+	// is addressing, and an agent addressing itself means it, so that one is
+	// kept. Either way nobody rings their own doorbell.
+	addressed := named[:0:0]
+	for _, who := range named {
+		if who.Kind != n.AuthorKind || who.ID != n.AuthorID {
+			addressed = append(addressed, who)
+		}
+	}
 	for _, who := range n.Notify {
 		if who.Kind == "" {
 			who.Kind = MemberAgent
 		}
-		if !containsMember(named, who.Kind, who.ID) {
-			named = append(named, who)
+		if !containsMember(addressed, who.Kind, who.ID) {
+			addressed = append(addressed, who)
 		}
 	}
+
 	var wake []string
-	for _, who := range named {
-		if who.Kind == n.AuthorKind && who.ID == n.AuthorID {
-			continue // naming yourself is not a summons
-		}
+	for _, who := range addressed {
 		if err := db.JoinChannel(m.ChannelID, who.Kind, who.ID); err != nil {
 			return nil, nil, err
 		}
@@ -382,7 +392,7 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 			return nil, nil, fmt.Errorf("record mention of %s: %w", who.ID, err)
 		}
 		m.Mentions = append(m.Mentions, who.ID)
-		if who.Kind == MemberAgent {
+		if who.Kind == MemberAgent && who.ID != n.AuthorID {
 			wake = append(wake, who.ID)
 		}
 	}

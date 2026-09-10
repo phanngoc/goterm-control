@@ -34,9 +34,11 @@ func runChannel(args []string) {
 		db := openCoord(*dbPath)
 		defer db.Close()
 
-		kind, who := coord.MemberAgent, requireAgent(*agent)
-		if *all {
-			kind, who = "", ""
+		// --all is a view of every room and belongs to nobody, so it must not
+		// demand an identity the caller may not have.
+		kind, who := "", ""
+		if !*all {
+			kind, who = coord.MemberAgent, requireAgent(*agent)
 		}
 		channels, err := db.ListChannels(kind, who)
 		if err != nil {
@@ -66,7 +68,7 @@ func runChannel(args []string) {
 		thread := fs.String("thread", "", "Read one thread instead of the channel")
 		limit := fs.Int("limit", 30, "Max messages")
 		keepUnread := fs.Bool("keep-unread", false, "Do not move my read cursor")
-		fs.Parse(rest)
+		channelID, _ := parseLeading(fs, rest)
 
 		db := openCoord(*dbPath)
 		defer db.Close()
@@ -80,11 +82,10 @@ func runChannel(args []string) {
 			printThread(msgs)
 			return
 		}
-		if fs.NArg() != 1 {
+		if channelID == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch read <channel-id> [--thread <message-id>]")
 			os.Exit(1)
 		}
-		channelID := fs.Arg(0)
 		msgs, err := db.ChannelMessages(channelID, *limit)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ch read: %v\n", err)
@@ -102,14 +103,13 @@ func runChannel(args []string) {
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		thread := fs.String("thread", "", "Reply inside this thread (a root message id)")
 		taskID := fs.String("task", "", "Bind this thread to a task (root messages only)")
-		fs.Parse(rest)
+		channelID, words := parseLeading(fs, rest)
 
-		if fs.NArg() < 2 {
+		body := strings.Join(words, " ")
+		if channelID == "" || strings.TrimSpace(body) == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch post <channel-id> [--thread <id>] [--task <id>] <message>")
 			os.Exit(1)
 		}
-		channelID := fs.Arg(0)
-		body := strings.Join(fs.Args()[1:], " ")
 
 		db := openCoord(*dbPath)
 		defer db.Close()
@@ -134,8 +134,8 @@ func runChannel(args []string) {
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		purpose := fs.String("purpose", "", "What this channel is for")
 		members := fs.String("members", "", "Comma-separated agent ids to add (the owner is always in)")
-		fs.Parse(rest)
-		if fs.NArg() != 1 {
+		name, _ := parseLeading(fs, rest)
+		if name == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch new <name> [--purpose ...] [--members a,b]")
 			os.Exit(1)
 		}
@@ -152,7 +152,7 @@ func runChannel(args []string) {
 				list = append(list, coord.Member{Kind: coord.MemberAgent, ID: id})
 			}
 		}
-		c, err := db.CreateChannel("", fs.Arg(0), coord.ChannelPublic, *purpose, me, list)
+		c, err := db.CreateChannel("", name, coord.ChannelPublic, *purpose, me, list)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ch new: %v\n", err)
 			os.Exit(1)
@@ -163,8 +163,8 @@ func runChannel(args []string) {
 		fs := flag.NewFlagSet("ch join", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		who := fs.String("who", "", "Add this agent instead of me")
-		fs.Parse(rest)
-		if fs.NArg() != 1 {
+		channelID, _ := parseLeading(fs, rest)
+		if channelID == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch join <channel-id> [--who <agent>]")
 			os.Exit(1)
 		}
@@ -175,11 +175,11 @@ func runChannel(args []string) {
 
 		db := openCoord(*dbPath)
 		defer db.Close()
-		if err := db.JoinChannel(fs.Arg(0), coord.MemberAgent, member); err != nil {
+		if err := db.JoinChannel(channelID, coord.MemberAgent, member); err != nil {
 			fmt.Fprintf(os.Stderr, "ch join: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("%s joined %s\n", member, fs.Arg(0))
+		fmt.Printf("%s joined %s\n", member, channelID)
 
 	case "mentions":
 		fs := flag.NewFlagSet("ch mentions", flag.ExitOnError)
@@ -242,7 +242,10 @@ func printChannel(channelID string, msgs []coord.ChannelMessage) {
 	// Newest first out of the query; read oldest first.
 	for i := len(msgs) - 1; i >= 0; i-- {
 		m := msgs[i]
-		fmt.Printf("%s  %s\n", m.CreatedAt.Local().Format("01-02 15:04"), m.AuthorID)
+		// The id is on every line, not just threaded ones: without it there
+		// is no way to start a thread from here, which made --thread
+		// unreachable for the agents this command exists for.
+		fmt.Printf("%s  %s  %s\n", m.CreatedAt.Local().Format("01-02 15:04"), m.AuthorID, m.ID)
 		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
 		if m.TaskID != "" {
 			fmt.Printf("  ↳ task %s\n", m.TaskID)
@@ -261,7 +264,7 @@ func printThread(msgs []coord.ChannelMessage) {
 		if i == 0 {
 			prefix = ""
 		}
-		fmt.Printf("%s%s  %s\n", prefix, m.CreatedAt.Local().Format("01-02 15:04"), m.AuthorID)
+		fmt.Printf("%s%s  %s  %s\n", prefix, m.CreatedAt.Local().Format("01-02 15:04"), m.AuthorID, m.ID)
 		fmt.Printf("%s  %s\n", prefix, strings.ReplaceAll(m.Body, "\n", "\n"+prefix+"  "))
 		if i == 0 && m.TaskID != "" {
 			fmt.Printf("  ↳ task %s\n", m.TaskID)

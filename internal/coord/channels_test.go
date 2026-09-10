@@ -272,3 +272,33 @@ func TestAgentMessagesAreMigratedIntoChannels(t *testing.T) {
 		t.Errorf("after a second migration the inbox has %d messages, want 1", len(again))
 	}
 }
+
+func TestAnAgentCanLeaveItselfANote(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+
+	// Agents already did this with `msg --to <self>`, and the migrated
+	// history contains such rows; it must keep working.
+	m, err := db.SendMessage("bomclaw", "bomclaw", "t_7", "lease was lost, redo the review")
+	if err != nil {
+		t.Fatalf("self-message: %v", err)
+	}
+	inbox, err := db.Inbox("bomclaw", true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 1 || inbox[0].ID != m.ID {
+		t.Fatalf("inbox = %+v, want the note it left itself", inbox)
+	}
+
+	// Writing your own name in a sentence, though, is not a summons.
+	_, wake, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: "@bomclaw is on markup",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 0 {
+		t.Errorf("wake = %v, want none — nobody rings their own doorbell", wake)
+	}
+}
