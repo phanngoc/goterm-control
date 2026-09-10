@@ -31,8 +31,17 @@ func newLaunchdService(agentID string) (*launchdService, error) {
 	return &launchdService{
 		label:     launchdLabelFor(agentID),
 		plistPath: filepath.Join(home, "Library", "LaunchAgents", launchdLabelFor(agentID)+".plist"),
-		logDir:    filepath.Join(home, ".goterm", "logs"),
+		logDir:    launchdLogDirFor(home, agentID),
 	}, nil
+}
+
+// launchdLogDirFor keeps each agent's gateway log to itself. Agent 1 stays at
+// ~/.goterm/logs so nothing that already tails it has to change; the rest get
+// ~/.goterm<N>/logs, which is beside the data dir they already own. Three
+// agents interleaved into one file makes every startup question ("did it
+// register? is it polling?") an exercise in guessing which process wrote what.
+func launchdLogDirFor(home, agentID string) string {
+	return filepath.Join(home, ".goterm"+unitSuffix(agentID), "logs")
 }
 
 func (s *launchdService) Label() string { return "LaunchAgent" }

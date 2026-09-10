@@ -84,3 +84,35 @@ func TestBuildPlistEscaping(t *testing.T) {
 		t.Error("unescaped < > in program args")
 	}
 }
+
+func TestEachAgentGetsItsOwnLogDir(t *testing.T) {
+	// Agent 1 keeps the original path — anything already tailing it, or any
+	// runbook naming it, must not break on an upgrade.
+	if got := launchdLogDirFor("/Users/x", "bomclaw"); got != "/Users/x/.goterm/logs" {
+		t.Errorf("agent 1 log dir moved to %q", got)
+	}
+	if got := launchdLogDirFor("/Users/x", ""); got != "/Users/x/.goterm/logs" {
+		t.Errorf("default log dir = %q", got)
+	}
+	// Everyone else is separate, or three startups interleave in one file.
+	if got := launchdLogDirFor("/Users/x", "bomclaw3"); got != "/Users/x/.goterm3/logs" {
+		t.Errorf("agent 3 log dir = %q, want its own", got)
+	}
+	if launchdLogDirFor("/Users/x", "bomclaw2") == launchdLogDirFor("/Users/x", "bomclaw3") {
+		t.Error("two agents share a log file")
+	}
+}
+
+func TestServiceNamesAreDerivedFromTheAgent(t *testing.T) {
+	cases := map[string]string{
+		"":         "com.bomclaw.gateway",
+		"bomclaw":  "com.bomclaw.gateway",
+		"bomclaw2": "com.bomclaw2.gateway",
+		"bomclaw3": "com.bomclaw3.gateway",
+	}
+	for id, want := range cases {
+		if got := launchdLabelFor(id); got != want {
+			t.Errorf("launchdLabelFor(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
