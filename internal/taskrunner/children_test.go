@@ -2,6 +2,7 @@ package taskrunner
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,20 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/session"
 )
+
+// waitFor polls until cond holds or the deadline passes, then fails with
+// describe(). For assertions about work a listener goroutine does.
+func waitFor(t *testing.T, within time.Duration, cond func() bool, describe func() string) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Error(describe())
+}
 
 // Flow A of the design (§7): the parent fans out, blocks on children, and is
 // called back with their results in its prompt once the last one finishes.
@@ -60,12 +75,19 @@ func TestParentIsWokenWithChildResults(t *testing.T) {
 	if p.State != coord.TaskSubmitted || p.AssignedTo != "a2" {
 		t.Fatalf("parent after children: state=%s assigned=%s", p.State, p.AssignedTo)
 	}
-	mu.Lock()
-	n := len(woke)
-	mu.Unlock()
-	if n != 1 || woke[0].TaskID != root.ID {
-		t.Errorf("wake listener: %+v", woke)
-	}
+	// The listener is called on its own goroutine on purpose — a listener does
+	// network writes and must never slow a run down — so wait for it rather
+	// than assuming it has already landed. Reading straight after the run is a
+	// race that a fast machine happens to win and Windows CI does not.
+	waitFor(t, time.Second*2, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(woke) == 1 && woke[0].TaskID == root.ID
+	}, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return fmt.Sprintf("wake listener: %+v", woke)
+	})
 
 	// Run 2 of the parent: resumed, with both results in the prompt.
 	llm.reply = "Digest: A and B say the same thing."
