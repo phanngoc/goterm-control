@@ -98,6 +98,11 @@ browser:
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
   timeout: 60      # polling timeout in seconds
+  # Telegram serves getUpdates to exactly ONE consumer per token and answers
+  # the others with 409 Conflict. On a machine running several agents, one
+  # polls and the rest set poll: false — they still build the bot object,
+  # which is the shared turn engine the dashboard and `bomclaw send` use.
+  poll: true
   indicator:
     enabled: false          # set to true to show loading emoji in bot name
     bot_name: ""            # leave empty to auto-detect via getMyName API

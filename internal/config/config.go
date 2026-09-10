@@ -187,10 +187,21 @@ type ModelsConfig struct {
 }
 
 type TelegramConfig struct {
-	Token     string          `yaml:"token"`
-	Timeout   int             `yaml:"timeout"`
+	Token   string `yaml:"token"`
+	Timeout int    `yaml:"timeout"`
+	// Poll is whether this gateway consumes the bot's updates. Default true.
+	//
+	// Telegram allows exactly one getUpdates consumer per token, so on a
+	// machine running several agents only one may poll — the rest set this
+	// false. They still construct the bot, because the bot object IS the
+	// shared turn engine the dashboard and `bomclaw send` run through; with
+	// no bot at all those fall back to the older non-streaming path.
+	Poll      *bool           `yaml:"poll"`
 	Indicator IndicatorConfig `yaml:"indicator"`
 }
+
+// Polling reports whether this gateway should consume Telegram updates.
+func (t TelegramConfig) Polling() bool { return t.Poll == nil || *t.Poll }
 
 type IndicatorConfig struct {
 	Enabled            bool     `yaml:"enabled"`

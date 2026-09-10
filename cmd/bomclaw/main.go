@@ -589,13 +589,21 @@ func runGateway(args []string) {
 		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(runner.Poke)))
 	}
 
-	// Start Telegram bot polling in background
-	if tgBot != nil {
+	// Start Telegram bot polling in background.
+	//
+	// Only one gateway on this machine may poll: Telegram serves getUpdates to
+	// a single consumer per token and answers the others with 409 Conflict,
+	// which is the failure this repo's CLAUDE.md documents. A secondary agent
+	// sets telegram.poll=false — it keeps the bot object, and with it the
+	// shared turn engine, but never touches the long poll.
+	if tgBot != nil && cfg.Telegram.Polling() {
 		go func() {
 			log.Println("gateway: starting Telegram bot")
 			tgBot.Run()
 		}()
 		defer tgBot.Shutdown()
+	} else if tgBot != nil {
+		log.Println("gateway: telegram polling off (telegram.poll=false) — turn engine still shared")
 	}
 
 	// Kill any stale process holding our port (prevents "address already in use"

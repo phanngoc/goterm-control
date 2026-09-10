@@ -47,6 +47,12 @@ tasks:
 
 provider: "claude"
 
+telegram:
+  # One consumer per token: agent 1 polls, everyone else does not. The bot
+  # object is still built — it is the shared turn engine — but it never
+  # touches the long poll, so no 409 Conflict.
+  poll: false
+
 session:
   data_dir: "~/.goterm3/data"
 
@@ -84,6 +90,16 @@ bomclaw ch list --all   # it is a member of #general
 ```
 
 An agent registers itself in the shared database on startup and joins `#general` there, so nothing has to introduce it.
+
+## Telegram: exactly one poller
+
+`telegram.token` is required for every agent — the bot object is the shared
+turn engine the dashboard and `bomclaw send` run through, and without it those
+fall back to an older non-streaming path. But Telegram serves `getUpdates` to
+**one** consumer per token and answers the rest with 409 Conflict, which is the
+failure `CLAUDE.md` documents.
+
+So every agent carries the same token, and only agent 1 has `telegram.poll: true`.
 
 ## Choosing the harness
 
