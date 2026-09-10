@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 )
 
 // InstallArgs holds everything needed to write and activate a service.
@@ -57,15 +58,33 @@ type Service interface {
 	UnitPath() string
 }
 
-// Resolve returns the appropriate Service for the current platform.
-func Resolve() (Service, error) {
+// DefaultAgentID is the agent a service command acts on when none is named.
+// It is also the one agent whose unit keeps the original, unsuffixed name, so
+// upgrading does not orphan the service that is already running.
+const DefaultAgentID = "bomclaw"
+
+// unitSuffix is what distinguishes one agent's service from another's.
+// Agent 2 was set up by hand as com.bomclaw2.gateway before any of this
+// existed; keeping that shape means the existing plists stay valid and only
+// new agents are new.
+func unitSuffix(agentID string) string {
+	if agentID == "" || agentID == DefaultAgentID {
+		return ""
+	}
+	return strings.TrimPrefix(agentID, DefaultAgentID)
+}
+
+// Resolve returns the Service that manages one agent's gateway. Every agent
+// on this machine runs its own service off the same binary, so the id is what
+// selects between them.
+func Resolve(agentID string) (Service, error) {
 	switch runtime.GOOS {
 	case "linux":
-		return newSystemdService()
+		return newSystemdService(agentID)
 	case "darwin":
-		return newLaunchdService()
+		return newLaunchdService(agentID)
 	case "windows":
-		return newSchtasksService()
+		return newSchtasksService(agentID)
 	default:
 		return nil, fmt.Errorf("daemon service not supported on %s", runtime.GOOS)
 	}

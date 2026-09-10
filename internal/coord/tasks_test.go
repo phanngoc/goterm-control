@@ -12,10 +12,13 @@ import (
 
 func testDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "coord.db"))
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "coord.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	// Never let a test write artifacts into the real shared directory.
+	db.SetArtifactsDir(filepath.Join(dir, "artifacts"))
 	t.Cleanup(func() { db.Close() })
 	return db
 }

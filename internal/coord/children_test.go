@@ -25,7 +25,7 @@ func TestCreateSubTaskInheritsAndLimits(t *testing.T) {
 	root, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "Weekly digest", AssignedTo: "a1"})
 	parent, _ := claimStart(t, db, "a1")
 
-	child, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source 1", AssignedTo: "a2"})
+	child, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source 1", Body: "Read the first source end to end and write down every claim it makes about latency.", AssignedTo: "a2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,18 +39,18 @@ func TestCreateSubTaskInheritsAndLimits(t *testing.T) {
 
 	// Cap on open children.
 	for i := 1; i < MaxOpenChildren; i++ {
-		if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "more"}); err != nil {
+		if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "more", Body: "Placeholder child used to fill the open-children quota in this test; does nothing real."}); err != nil {
 			t.Fatalf("child %d: %v", i+1, err)
 		}
 	}
-	if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "one too many"}); err == nil || !strings.Contains(err.Error(), "unfinished children") {
+	if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "one too many", Body: "Placeholder child that should be refused because the parent is already at its cap."}); err == nil || !strings.Contains(err.Error(), "unfinished children") {
 		t.Errorf("9th open child: got %v", err)
 	}
 	// Finishing one frees a slot.
 	if err := db.CancelTask(child.ID, "a1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "fits now"}); err != nil {
+	if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "fits now", Body: "Placeholder child created after a sibling finished, so the parent is back under its cap."}); err != nil {
 		t.Errorf("after a child finished: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestCreateSubTaskInheritsAndLimits(t *testing.T) {
 	db.CreateTask(NewTask{CreatedBy: "human", Title: "Chain", AssignedTo: "a4"})
 	deep, _ := claimStart(t, db, "a4")
 	for {
-		next, err := db.CreateSubTask(deep.ID, "a1", NewTask{Title: "deeper"})
+		next, err := db.CreateSubTask(deep.ID, "a1", NewTask{Title: "deeper", Body: "Placeholder child used to walk the depth limit one level at a time until it refuses."})
 		if err != nil {
 			if deep.Depth != MaxDepth || !strings.Contains(err.Error(), "depth") {
 				t.Fatalf("stopped at depth %d with %v, want a depth error at %d", deep.Depth, err, MaxDepth)
@@ -77,7 +77,7 @@ func TestCreateSubTaskInheritsAndLimits(t *testing.T) {
 		t.Fatalf("precondition: claimed %s (%s), want %s", dt.ID, dt.Title, done.ID)
 	}
 	db.FinishRun(run.ID, RunOutcome{Liveness: RunCompleted, Result: "ok"})
-	if _, err := db.CreateSubTask(done.ID, "a3", NewTask{Title: "late"}); err == nil {
+	if _, err := db.CreateSubTask(done.ID, "a3", NewTask{Title: "late", Body: "Placeholder child aimed at a finished parent, which must be refused."}); err == nil {
 		t.Error("a completed task must not get children")
 	}
 }
@@ -86,9 +86,9 @@ func TestWakeParentsWhenEveryChildIsTerminal(t *testing.T) {
 	db := testDB(t)
 	db.CreateTask(NewTask{CreatedBy: "human", Title: "Digest", AssignedTo: "a1"})
 	parent, prun := claimStart(t, db, "a1")
-	c1, _ := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source A"})
-	c2, _ := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source B"})
-	c3, _ := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source C"})
+	c1, _ := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source A", Body: "Read source A end to end and summarise what it says about the scanner failure."})
+	c2, _ := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source B", Body: "Read source B end to end and summarise what it says about the scanner failure."})
+	c3, _ := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "Source C", Body: "Read source C end to end and summarise what it says about the scanner failure."})
 	if err := db.BlockTask(parent.ID, "a1", parent.Attempts, BlockedOnChildren, "fanned out to 3 sources"); err != nil {
 		t.Fatal(err)
 	}
@@ -173,5 +173,67 @@ func TestWakeParentsLeavesHumanBlocksAlone(t *testing.T) {
 	db.FinishRun(prun.ID, RunOutcome{Liveness: RunBlocked, BlockedOn: BlockedOnHuman})
 	if woken, _ := db.WakeParents(time.Now()); len(woken) != 0 {
 		t.Error("a task waiting on a person is not a parent waiting on children")
+	}
+}
+
+func TestParentWakesWithAnArtifactIndexNotTheContent(t *testing.T) {
+	db := testDB(t)
+	db.CreateTask(NewTask{CreatedBy: "human", Title: "Clean up codex errors", AssignedTo: "a1"})
+	parent, prun := claimStart(t, db, "a1")
+	child, err := db.CreateSubTask(parent.ID, "a1", NewTask{
+		Title:      "Fix the stderr join",
+		Body:       "Join stderr on turn.failed and scanner failures; keep the nonzero-exit path returning an error.",
+		Acceptance: "go test -race ./internal/codex passes and the five fake-CLI regression cases stay green",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BlockTask(parent.ID, "a1", parent.Attempts, BlockedOnChildren, "one child"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.FinishRun(prun.ID, RunOutcome{Liveness: RunBlocked, BlockedOn: BlockedOnChildren}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A patch far larger than anything a prompt should carry.
+	patch := strings.Repeat("diff --git a/internal/codex/client.go b/internal/codex/client.go\n", 500)
+	art, err := db.PutArtifact(NewArtifact{
+		TaskID: child.ID, Kind: ArtifactPatch, Title: "codex error cleanup",
+		Filename: "cleanup.patch", Content: []byte(patch), CreatedBy: "a2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run := claimStart(t, db, "a2")
+	if _, err := db.FinishRun(run.ID, RunOutcome{
+		Liveness: RunCompleted, Result: "Fixed the stderr join; patch attached.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.WakeParents(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	woken, err := db.GetTask(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(woken.Checkpoint, art.ID) {
+		t.Errorf("the parent cannot reach the work: %q is not in the checkpoint", art.ID)
+	}
+	if !strings.Contains(woken.Checkpoint, "codex error cleanup") {
+		t.Error("the artifact index has no title")
+	}
+	if !strings.Contains(woken.Checkpoint, "accepted-if") {
+		t.Error("the acceptance bar did not travel with the child's outcome")
+	}
+	// The whole point: the content stays on disk. A checkpoint that carried
+	// the patch would be the 1500-rune truncation problem with a bigger cap.
+	if strings.Contains(woken.Checkpoint, "diff --git") {
+		t.Error("the patch body was pasted into the parent's prompt")
+	}
+	if n := len(woken.Checkpoint); n > 2000 {
+		t.Errorf("checkpoint is %d bytes for one child; the index should be small", n)
 	}
 }

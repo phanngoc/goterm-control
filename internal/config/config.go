@@ -65,6 +65,7 @@ type CoordConfig struct {
 	Enabled            *bool  `yaml:"enabled"`
 	Path               string `yaml:"path"`                 // default ~/.goterm-shared/data/coord.db
 	NotesFile          string `yaml:"notes_file"`           // default ~/goterm-shared/NOTES.md
+	ArtifactsDir       string `yaml:"artifacts_dir"`        // default ~/goterm-shared/artifacts
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
 }
 
@@ -186,10 +187,21 @@ type ModelsConfig struct {
 }
 
 type TelegramConfig struct {
-	Token     string          `yaml:"token"`
-	Timeout   int             `yaml:"timeout"`
+	Token   string `yaml:"token"`
+	Timeout int    `yaml:"timeout"`
+	// Poll is whether this gateway consumes the bot's updates. Default true.
+	//
+	// Telegram allows exactly one getUpdates consumer per token, so on a
+	// machine running several agents only one may poll — the rest set this
+	// false. They still construct the bot, because the bot object IS the
+	// shared turn engine the dashboard and `bomclaw send` run through; with
+	// no bot at all those fall back to the older non-streaming path.
+	Poll      *bool           `yaml:"poll"`
 	Indicator IndicatorConfig `yaml:"indicator"`
 }
+
+// Polling reports whether this gateway should consume Telegram updates.
+func (t TelegramConfig) Polling() bool { return t.Poll == nil || *t.Poll }
 
 type IndicatorConfig struct {
 	Enabled            bool     `yaml:"enabled"`
@@ -283,6 +295,10 @@ func Load(path string) (*Config, error) {
 	if strings.HasPrefix(cfg.Coord.NotesFile, "~/") {
 		home, _ := os.UserHomeDir()
 		cfg.Coord.NotesFile = home + cfg.Coord.NotesFile[1:]
+	}
+	if strings.HasPrefix(cfg.Coord.ArtifactsDir, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Coord.ArtifactsDir = home + cfg.Coord.ArtifactsDir[1:]
 	}
 	if cfg.Coord.TraceRetentionDays == 0 {
 		cfg.Coord.TraceRetentionDays = 7

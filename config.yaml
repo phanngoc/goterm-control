@@ -98,6 +98,11 @@ browser:
 telegram:
   token: ""        # set via TELEGRAM_TOKEN env var
   timeout: 60      # polling timeout in seconds
+  # Telegram serves getUpdates to exactly ONE consumer per token and answers
+  # the others with 409 Conflict. On a machine running several agents, one
+  # polls and the rest set poll: false — they still build the bot object,
+  # which is the shared turn engine the dashboard and `bomclaw send` use.
+  poll: true
   indicator:
     enabled: false          # set to true to show loading emoji in bot name
     bot_name: ""            # leave empty to auto-detect via getMyName API
@@ -173,14 +178,50 @@ claude:
       means the queue is empty, which is not an error.
     - `bomclaw task done --id ID --result R` (or `task fail`) — report back.
       Your result is what the requesting agent reads.
-    - `bomclaw inbox` / `bomclaw msg --to <agent> <text>` — talk to a peer.
+    - `bomclaw inbox` / `bomclaw msg --to <agent> <text>` — talk to one peer
+      privately.
+    - `bomclaw ch list` / `ch read <channel>` / `ch post <channel> <text>` —
+      the shared rooms. Everyone in a channel reads everything, so post there
+      when another agent could usefully pick your work up; use `msg` only when
+      it really is between the two of you.
     - `bomclaw note add --title T [--body B] [--kind fact|decision|result|gotcha]`
       — record something durable that the other agents should also know.
       `bomclaw note search <words>` before assuming something is unknown.
 
+    ### Mentions wake, posts do not
+
+    Writing `@bomclaw2` in a channel message rings that agent immediately. A
+    message with no mention is read whenever the others next look. So name
+    someone when you need an answer, and do not when you are just narrating —
+    waking every agent for every line is how three agents burn a day's tokens
+    on nothing. `bomclaw ch mentions` lists what named you.
+
+    Reply inside a thread (`ch post <channel> --thread <message-id> "…"`)
+    rather than in the main line, so one deep dive does not bury the room.
+
+    ### Handing work over: artifacts, not pasted text
+
+    Anything you produce that another task needs — a patch, a report, a
+    generated file — is an artifact:
+
+    - `bomclaw artifact put --task <id> --kind patch --title "what it is" --file p.diff`
+    - `bomclaw artifact list --task <id> [--tree]` / `bomclaw artifact get <id>`
+
+    Do NOT paste a patch or a long report into a task result or a message, and
+    do not leave files in ~/goterm-shared/mailbox — that is what artifacts
+    replaced. A result is a summary; the artifact is the thing. When your
+    children finish, you are woken with an index of what they produced and you
+    read only the ones you need.
+
     Notes are append-only: correct one with `--supersedes <id>`, never by
     editing. The readable copy lives at ~/goterm-shared/NOTES.md and is
     regenerated on every write, so do not edit that file by hand.
+
+    When you split work up, the child must stand on its own: `bomclaw task sub`
+    requires a real `--body`, because whoever claims it may be a different
+    agent on a different harness with none of your conversation. Say what to
+    do, where, and give `--acceptance` so it is clear when it is done. Hand
+    inputs down with `--input <artifact-id>` instead of describing a path.
 
     Do not create tasks to continue your own work: when you are running a task
     and it is not finished, record progress with `bomclaw task progress` and

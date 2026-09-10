@@ -175,6 +175,20 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleMessagesList(deps, params)
 		case "messages.send":
 			return handleMessageSend(deps, params)
+		case "channels.list":
+			return handleChannelsList(deps, params)
+		case "channels.messages":
+			return handleChannelMessages(deps, params)
+		case "channels.post":
+			return handleChannelPost(deps, params)
+		case "channels.create":
+			return handleChannelCreate(deps, params)
+		case "channels.read":
+			return handleChannelRead(deps, params)
+		case "artifacts.list":
+			return handleArtifactsList(deps, params)
+		case "artifacts.get":
+			return handleArtifactGet(deps, params)
 		case "notes.list":
 			return handleNotesList(deps, params)
 		case "notes.add":

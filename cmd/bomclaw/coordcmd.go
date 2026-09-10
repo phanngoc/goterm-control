@@ -54,6 +54,24 @@ func requireAgent(id string) string {
 	return id
 }
 
+// parseLeading lets flags follow a positional argument. Go's flag package
+// stops at the first non-flag token, so `ch post ch_general --thread X "hi"`
+// silently ignored --thread and then failed on a missing identity — while
+// being exactly how anyone, agent or person, would type it.
+//
+// It peels off one leading positional, re-parses what is left for flags, and
+// returns the remainder. A body that itself starts with "-" would still be
+// taken for a flag; quote it, as you would anywhere else.
+func parseLeading(fs *flag.FlagSet, args []string) (first string, rest []string) {
+	fs.Parse(args)
+	if fs.NArg() == 0 {
+		return "", nil
+	}
+	first = fs.Arg(0)
+	fs.Parse(fs.Args()[1:])
+	return first, fs.Args()
+}
+
 func dbFlag(fs *flag.FlagSet) *string {
 	return fs.String("db", coord.DefaultPath(), "Shared coordination database")
 }
@@ -99,7 +117,9 @@ func runTask(args []string) {
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		parent := fs.String("parent", "", "The task you are splitting (required)")
 		title := fs.String("title", "", "Short summary of the piece (required)")
-		body := fs.String("body", "", "Full description")
+		body := fs.String("body", "", "Full description — enough that whoever claims it needs nothing else (required)")
+		acceptance := fs.String("acceptance", "", "How the claimer knows it is done")
+		inputs := fs.String("input", "", "Comma-separated artifact ids to hand down")
 		to := fs.String("to", "", "Assign to a specific agent (default: any agent may claim)")
 		priority := fs.Int("priority", 0, "Higher is claimed first")
 		fs.Parse(rest)
@@ -107,11 +127,18 @@ func runTask(args []string) {
 			fmt.Fprintln(os.Stderr, "task sub: --parent is required")
 			os.Exit(1)
 		}
+		var inputIDs []string
+		for _, id := range strings.Split(*inputs, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				inputIDs = append(inputIDs, id)
+			}
+		}
 
 		db := openCoord(*dbPath)
 		defer db.Close()
 		child, err := db.CreateSubTask(*parent, requireAgent(*agent), coord.NewTask{
 			AssignedTo: *to, Title: *title, Body: *body, Priority: *priority,
+			Acceptance: *acceptance, Inputs: inputIDs,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "task sub: %v\n", err)
@@ -349,8 +376,15 @@ func runTask(args []string) {
 		if task.Checkpoint != "" {
 			fmt.Printf("\ncheckpoint:\n%s\n", task.Checkpoint)
 		}
+		if task.Acceptance != "" {
+			fmt.Printf("\naccepted if:\n%s\n", task.Acceptance)
+		}
 		if task.Result != "" {
 			fmt.Printf("\nresult:\n%s\n", task.Result)
+		}
+		if arts, err := db.TaskArtifacts(task.ID); err == nil && len(arts) > 0 {
+			fmt.Println("\nartifacts:")
+			printArtifacts(arts)
 		}
 		if len(runs) > 0 {
 			fmt.Println("\nruns:")
@@ -422,7 +456,8 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: bomclaw task <command>
 
   new    --title T [--body B] [--to agent] [--priority N]   create work
-  sub    --parent ID --title T [--body B] [--to agent]      split a piece off a task you hold (max 8 open)
+  sub    --parent ID --title T --body B [--acceptance A]    split a piece off a task you hold (max 8 open)
+         [--to agent] [--input a_id,a_id]                   the body must stand alone: another agent may claim it
   claim  [--json]                                           take the next claimable task
   done   --id ID [--result R] [--attempts N]                finish it
   fail   --id ID [--result R] [--attempts N]                give up on it
@@ -610,7 +645,7 @@ func runInbox(args []string) {
 	}
 
 	if *markRead {
-		n, err := db.MarkRead(ids)
+		n, err := db.MarkRead(requireAgent(*agent), ids)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mark read: %v\n", err)
 			os.Exit(1)

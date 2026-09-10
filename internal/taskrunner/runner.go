@@ -585,7 +585,7 @@ func (r *Runner) taskMail(taskID string) []coord.Message {
 		}
 	}
 	if len(ids) > 0 {
-		_, _ = r.db.MarkRead(ids)
+		_, _ = r.db.MarkRead(r.cfg.AgentID, ids)
 	}
 	return mine
 }

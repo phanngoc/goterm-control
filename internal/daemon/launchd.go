@@ -10,7 +10,12 @@ import (
 	"strings"
 )
 
-const launchdLabel = "com.bomclaw.gateway"
+// launchdLabelFor names one agent's LaunchAgent: com.bomclaw.gateway for the
+// first, com.bomclaw2.gateway, com.bomclaw3.gateway for the rest — the naming
+// agent 2 was already given by hand.
+func launchdLabelFor(agentID string) string {
+	return "com.bomclaw" + unitSuffix(agentID) + ".gateway"
+}
 
 type launchdService struct {
 	label     string
@@ -18,14 +23,14 @@ type launchdService struct {
 	logDir    string
 }
 
-func newLaunchdService() (*launchdService, error) {
+func newLaunchdService(agentID string) (*launchdService, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	return &launchdService{
-		label:     launchdLabel,
-		plistPath: filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist"),
+		label:     launchdLabelFor(agentID),
+		plistPath: filepath.Join(home, "Library", "LaunchAgents", launchdLabelFor(agentID)+".plist"),
 		logDir:    filepath.Join(home, ".goterm", "logs"),
 	}, nil
 }
