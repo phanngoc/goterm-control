@@ -401,8 +401,8 @@ P0 trước P1 vì lịch sinh ra task — task chưa "dài được, thấy đ�
 - **Spec không parse được** (TZ bị gỡ, lỗi dữ liệu) → tự `enabled=0` + báo, thay vì log lỗi mỗi 30s mãi.
 - Parser cron: `robfig/cron/v3` chuẩn 5 trường + descriptor (`@daily`, `@every 1h`); DOM và DOW cùng đặt → **OR** (ghi trong `schedule --help`).
 - `schedule run-now` chỉ đẩy `next_run_at = now`; gateway bắt ở tick kế (≤30s). RPC `schedules.run` có thêm poke vòng quét cục bộ nên từ dashboard là ngay.
-- Chưa có: purge `schedule_runs` theo tuổi (hàng nhỏ; thêm khi cần).
-- Dashboard (P1c): Go marshal `time.Time{}` thành `0001-01-01T00:00:00Z` (`omitempty` không bỏ struct zero) → `last_run_at`/`ended_at` rỗng tới UI như "739867d ago"; `format.ts` có `isZeroTime`/`rel` (hai chiều "in 3m"/"3m ago") thay cho `ago` chỉ-quá-khứ.
+- Purge `schedule_runs` theo tuổi: `schedules.run_retention_days` (mặc định 30, 0 = giữ mãi) — `PurgeScheduleRunsBefore` chạy cùng vòng 6h với purge trace trong `startCoordUpkeep`; **không xoá run `pending`** (đang chờ task; settle sẽ đóng khi task bị reap). `tasks`/`task_runs` là sổ cái, không purge.
+- Dashboard (P1c): Go marshal `time.Time{}` thành `0001-01-01T00:00:00Z` (`omitempty` không bỏ struct zero) → `last_run_at`/`ended_at` rỗng tới UI như "739867d ago"; `format.ts` có `isZeroTime`/`rel` (hai chiều "in 3m"/"3m ago") thay cho `ago` chỉ-quá-khứ. Phía Go sau đó đổi hai cột này sang `omitzero` (Go ≥1.24) nên JSON bỏ hẳn; UI vẫn giữ guard cho dữ liệu cũ.
 
 ### Ghi chú P1b (heartbeat)
 
@@ -418,11 +418,11 @@ P0 trước P1 vì lịch sinh ra task — task chưa "dài được, thấy đ�
 
 ## 9c. Ghi chú triển khai P2/P3
 
-- **Cha thức bằng sweep, không phải hook trong FinishRun của con.** Con kết thúc qua nhiều đường (FinishRun, CancelTask, ReapExhausted, người bấm trên dashboard); một câu hỏi "còn con nào chưa terminal không?" phủ hết. Runner gọi `WakeParents` ngay sau khi kết thúc run của một task có `parent_id` (độ trễ ~0 cho đường thường) và trong mỗi sweep (đường còn lại, ≤ poll interval). Cha bị cancel/fail bởi người trong lúc chờ: con vẫn chạy tới hết — chấp nhận, không cascade cancel (đơn giản, và kết quả con vẫn có ích).
+- **Cha thức bằng sweep, không phải hook trong FinishRun của con.** Con kết thúc qua nhiều đường (FinishRun, CancelTask, ReapExhausted, người bấm trên dashboard); một câu hỏi "còn con nào chưa terminal không?" phủ hết. Runner gọi `WakeParents` ngay sau khi kết thúc run của một task có `parent_id` (độ trễ ~0 cho đường thường) và trong mỗi sweep (đường còn lại, ≤ poll interval). Cha bị **cancel** (người, dashboard, `bomclaw task cancel`) → `CancelTaskTree` **cascade** xuống mọi hậu duệ chưa terminal (BFS, chặn bởi `MaxDepth`), event `canceled with parent <id>`; con đã xong giữ nguyên kết quả; con đang chạy trên agent khác: run kết thúc gặp task terminal → `FinishRun` ghi run, `ErrTaskFinished`, không ghi đè. Cha bị **fail** thì không cascade (fail là của hệ thống/agent, không phải ý người dừng việc).
 - Cha `block --on children` mà **không tạo con nào** → thức ngay với ghi chú "none were created" thay vì ngủ mãi.
 - `MaxOpenChildren` tính con chưa terminal, không phải tổng — cha có thể fan-out nhiều đợt.
 - P3: `claimAndRun` (đồng bộ) giữ cho test; loop dùng `claimAndStart` (goroutine + slot). Heartbeat "agent busy" đọc `deps.Runs` nên khi có task chạy song song heartbeat vẫn skip — đúng ý.
-- Chưa làm: cascade cancel con khi cha bị cancel; `tasks.create` từ dashboard với `parent_id`.
+- `tasks.create` nhận `parent_id` → đi `CreateSubTask` (cùng cap 8 con mở, cùng depth, cùng "cha phải còn mở"); TaskDrawer có ô "↳ add child" khi task còn mở; nút Cancel nói rõ "+ N children" và hỏi lại trước khi cascade. RPC `tasks.cancel` trả `children_canceled`.
 
 ---
 

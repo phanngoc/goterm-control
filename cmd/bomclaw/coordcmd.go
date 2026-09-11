@@ -205,6 +205,27 @@ func runTask(args []string) {
 		}
 		fmt.Printf("%s → %s\n", *id, state)
 
+	case "cancel":
+		// A person stopping work. Takes every unfinished child with it: a
+		// canceled parent never comes back for their results.
+		fs := flag.NewFlagSet("task cancel", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		children, err := db.CancelTaskTree(*id, requireAgent(*agent))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task cancel: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s canceled", *id)
+		if len(children) > 0 {
+			fmt.Printf(" — and %d unfinished child task(s): %s", len(children), strings.Join(children, ", "))
+		}
+		fmt.Println()
+
 	case "progress":
 		// The agent's own "here is how far I got". Fed into the next run's
 		// prompt, so a run that hits its time cap loses nothing it wrote down.
@@ -461,6 +482,7 @@ func taskUsage() {
   claim  [--json]                                           take the next claimable task
   done   --id ID [--result R] [--attempts N]                finish it
   fail   --id ID [--result R] [--attempts N]                give up on it
+  cancel --id ID                                            (person) stop it, and every unfinished child with it
   progress --id ID --note "..."                             record how far you got (fed to the next run)
   block  --id ID --on human|children [--note "..."]         park it until answered / children finish
   answer --id ID --note "..."                               (person) unblock with an answer

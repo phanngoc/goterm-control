@@ -69,7 +69,7 @@ type Schedule struct {
 	System              bool            `json:"system"`
 	SkipMissed          bool            `json:"skip_missed"`
 	NextRunAt           time.Time       `json:"next_run_at"`
-	LastRunAt           time.Time       `json:"last_run_at,omitempty"`
+	LastRunAt           time.Time       `json:"last_run_at,omitzero"` // omitzero: omitempty never drops a struct
 	LastStatus          string          `json:"last_status,omitempty"`
 	ConsecutiveFailures int             `json:"consecutive_failures"`
 	CreatedAt           time.Time       `json:"created_at"`
@@ -113,7 +113,7 @@ type ScheduleRun struct {
 	ScheduleID string    `json:"schedule_id"`
 	TaskID     string    `json:"task_id,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
-	EndedAt    time.Time `json:"ended_at,omitempty"`
+	EndedAt    time.Time `json:"ended_at,omitzero"`
 	Status     string    `json:"status"`
 	ExitCode   int       `json:"exit_code"`
 	Output     string    `json:"output,omitempty"`
@@ -580,6 +580,18 @@ func (db *DB) PendingScheduleRuns() ([]ScheduleRun, error) {
 	}
 	defer rows.Close()
 	return scanScheduleRuns(rows)
+}
+
+// PurgeScheduleRunsBefore deletes finished runs older than cutoff. Pending runs
+// stay whatever their age: they are waiting on a task, and settle() closes
+// them (as failed) once that task is reaped. Returns the rows removed.
+func (db *DB) PurgeScheduleRunsBefore(cutoff time.Time) (int64, error) {
+	res, err := db.conn.Exec(`DELETE FROM schedule_runs WHERE started_at < ? AND status != ?`,
+		ts(cutoff), ScheduleRunPending)
+	if err != nil {
+		return 0, fmt.Errorf("purge schedule runs: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // ScheduleRuns lists a schedule's firings, newest first.

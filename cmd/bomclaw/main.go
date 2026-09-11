@@ -759,14 +759,28 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 		}
 	}()
 
-	if days := cfg.Coord.TraceRetentionDays; days > 0 {
+	// Retention. Trace spans and schedule runs age out on their own clocks;
+	// tasks and task_runs are the work ledger and are kept. Every gateway runs
+	// this — a DELETE below a cutoff is idempotent, so two of them are harmless.
+	traceDays, scheduleDays := cfg.Coord.TraceRetentionDays, cfg.Schedules.RunRetentionDays
+	if traceDays > 0 || scheduleDays > 0 {
 		go func() {
 			purge := func() {
-				n, err := cdb.PurgeRunsBefore(time.Now().AddDate(0, 0, -days))
-				if err != nil {
-					log.Printf("coord: purge traces: %v", err)
-				} else if n > 0 {
-					log.Printf("coord: purged %d trace rows older than %d days", n, days)
+				if traceDays > 0 {
+					n, err := cdb.PurgeRunsBefore(time.Now().AddDate(0, 0, -traceDays))
+					if err != nil {
+						log.Printf("coord: purge traces: %v", err)
+					} else if n > 0 {
+						log.Printf("coord: purged %d trace rows older than %d days", n, traceDays)
+					}
+				}
+				if scheduleDays > 0 {
+					n, err := cdb.PurgeScheduleRunsBefore(time.Now().AddDate(0, 0, -scheduleDays))
+					if err != nil {
+						log.Printf("coord: purge schedule runs: %v", err)
+					} else if n > 0 {
+						log.Printf("coord: purged %d schedule runs older than %d days", n, scheduleDays)
+					}
 				}
 			}
 			purge()
