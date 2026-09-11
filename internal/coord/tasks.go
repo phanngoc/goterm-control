@@ -28,7 +28,8 @@ const (
 	KindManual    = "manual"    // a person or an agent queued it
 	KindScheduled = "scheduled" // materialised from a schedule
 	KindHeartbeat = "heartbeat"
-	KindSub       = "sub" // a child of another task
+	KindSub       = "sub"     // a child of another task
+	KindMention   = "mention" // someone named this agent in a channel
 )
 
 // What a task can be blocked on.

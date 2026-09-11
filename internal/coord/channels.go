@@ -613,3 +613,29 @@ func slug(s string) string {
 	}
 	return out
 }
+
+// OpenMentionTasks counts the unfinished tasks an agent is carrying because it
+// was named. It bounds the one loop this design can produce: agent A answers a
+// mention by naming agent B, B answers by naming A, forever. Neither agent is
+// doing anything wrong — there is simply nothing in a conversation that says
+// when to stop — so the stop is a cap.
+func (db *DB) OpenMentionTasks(agentID string) (int, error) {
+	var n int
+	err := db.conn.QueryRow(`SELECT count(*) FROM tasks
+		WHERE kind = ? AND assigned_to = ? AND state NOT IN (?, ?, ?, ?)`,
+		KindMention, agentID, TaskCompleted, TaskFailed, TaskCanceled, TaskRejected).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("open mention tasks for %s: %w", agentID, err)
+	}
+	return n, nil
+}
+
+// ChannelName is the room's display name, for a prompt that should read like
+// a place rather than an id.
+func (db *DB) ChannelName(channelID string) string {
+	var name string
+	if err := db.conn.QueryRow(`SELECT name FROM channels WHERE id = ?`, channelID).Scan(&name); err != nil {
+		return channelID
+	}
+	return name
+}

@@ -194,6 +194,9 @@ func (r *Runner) Wait() {
 // tasks that have used every attempt (they used to sit in `working` forever),
 // and open up tasks addressed to an agent that has stopped heartbeating.
 func (r *Runner) sweep() {
+	// A mention is not a task until this turns it into one; without it the
+	// doorbell rings a loop that only reads the task queue. See mentions.go.
+	r.mentionsToTasks()
 	if ids, err := r.db.ReapExhausted(); err != nil {
 		log.Printf("taskrunner: reap: %v", err)
 	} else if len(ids) > 0 {
