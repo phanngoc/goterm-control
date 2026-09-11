@@ -233,6 +233,7 @@ type taskCreateParams struct {
 	Body       string `json:"body,omitempty"`
 	AssignedTo string `json:"assigned_to,omitempty"`
 	Priority   int    `json:"priority,omitempty"`
+	ParentID   string `json:"parent_id,omitempty"` // set: a child of that task, same rules as `bomclaw task sub`
 }
 
 func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -243,15 +244,25 @@ func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
-	// Depth stays 0: a task created from the dashboard is a human starting a
-	// chain, not an agent extending one.
-	task, err := deps.Coord.CreateTask(coord.NewTask{
+	n := coord.NewTask{
 		CreatedBy:  deps.AgentID,
 		AssignedTo: p.AssignedTo,
 		Title:      p.Title,
 		Body:       p.Body,
 		Priority:   p.Priority,
-	})
+	}
+	var task *coord.Task
+	var err error
+	if p.ParentID != "" {
+		// A person adding a piece to a task in flight. It inherits the parent's
+		// context and depth like a child the agent made, and counts against
+		// the same open-children cap.
+		task, err = deps.Coord.CreateSubTask(p.ParentID, deps.AgentID, n)
+	} else {
+		// Depth stays 0: a task created from the dashboard is a human starting
+		// a chain, not an agent extending one.
+		task, err = deps.Coord.CreateTask(n)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -269,10 +280,13 @@ func handleTaskCancel(deps Deps, params json.RawMessage) (json.RawMessage, error
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
-	if err := deps.Coord.CancelTask(p.ID, deps.AgentID); err != nil {
+	// Cancelling a parent takes its unfinished children with it; the count
+	// comes back so the dashboard can say what actually stopped.
+	children, err := deps.Coord.CancelTaskTree(p.ID, deps.AgentID)
+	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]bool{"canceled": true})
+	return json.Marshal(map[string]any{"canceled": true, "children_canceled": len(children)})
 }
 
 // --- shared notes ----------------------------------------------------------

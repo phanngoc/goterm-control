@@ -91,6 +91,7 @@ type SchedulesConfig struct {
 	Enabled               bool `yaml:"enabled"`
 	TickSeconds           int  `yaml:"tick_seconds"`            // default 30
 	CommandTimeoutSeconds int  `yaml:"command_timeout_seconds"` // default 60; a payload's timeout_s overrides
+	RunRetentionDays      int  `yaml:"run_retention_days"`      // default 30; finished schedule_runs older than this are purged
 }
 
 // HeartbeatConfig (docs/design/scheduling-and-long-tasks.md §5.6). The
@@ -317,6 +318,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Schedules.CommandTimeoutSeconds == 0 {
 		cfg.Schedules.CommandTimeoutSeconds = 60
+	}
+	if cfg.Schedules.RunRetentionDays == 0 {
+		cfg.Schedules.RunRetentionDays = 30
 	}
 	if cfg.Heartbeat.Every == "" {
 		cfg.Heartbeat.Every = "30m"

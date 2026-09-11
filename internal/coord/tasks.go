@@ -328,19 +328,72 @@ func (db *DB) AttachTrace(taskID, traceID string) error {
 	return err
 }
 
-// CancelTask stops a task from any non-terminal state. Used by the dashboard,
-// which is not the claiming agent and so carries no fencing token.
+// CancelTask stops a task from any non-terminal state — and every unfinished
+// descendant with it, see CancelTaskTree. Used by the dashboard and the CLI,
+// which are not the claiming agent and so carry no fencing token.
 func (db *DB) CancelTask(taskID, byAgent string) error {
-	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, updated_at = ?
+	_, err := db.CancelTaskTree(taskID, byAgent)
+	return err
+}
+
+// CancelTaskTree cancels a task and every unfinished descendant, and returns
+// the descendants it canceled. A canceled parent is never coming back for its
+// children's results, so work still queued or running for it would be spent
+// on nobody. A child that already finished is left alone — its result is
+// history, not waste. A running child's agent finds out at the end of its run:
+// FinishRun sees the terminal state and records the run against it.
+func (db *DB) CancelTaskTree(taskID, byAgent string) ([]string, error) {
+	now := ts(time.Now())
+	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', updated_at = ?
 		WHERE id = ? AND state IN (?, ?, ?, ?)`,
-		TaskCanceled, ts(time.Now()), taskID, TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked)
+		TaskCanceled, now, taskID, TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked)
 	if err != nil {
-		return fmt.Errorf("cancel task: %w", err)
+		return nil, fmt.Errorf("cancel task: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("coord: task %s is already finished", taskID)
+		return nil, fmt.Errorf("coord: task %s is already finished", taskID)
 	}
-	return db.appendEvent(taskID, byAgent, "", TaskCanceled, "canceled")
+	_ = db.appendEvent(taskID, byAgent, "", TaskCanceled, "canceled")
+
+	// Breadth-first down the tree. RETURNING yields only the rows this
+	// statement flipped, so each level is exactly the children still open.
+	var canceled []string
+	frontier := []string{taskID}
+	for depth := 0; len(frontier) > 0 && depth < MaxDepth; depth++ {
+		var next []string
+		for _, parent := range frontier {
+			ids, err := db.cancelOpenChildren(parent, now)
+			if err != nil {
+				return canceled, err
+			}
+			next = append(next, ids...)
+		}
+		for _, id := range next {
+			_ = db.appendEvent(id, byAgent, "", TaskCanceled, "canceled with parent "+taskID)
+		}
+		canceled = append(canceled, next...)
+		frontier = next
+	}
+	return canceled, nil
+}
+
+func (db *DB) cancelOpenChildren(parentID, now string) ([]string, error) {
+	rows, err := db.conn.Query(`UPDATE tasks SET state = ?, blocked_on = '', updated_at = ?
+		WHERE parent_id = ? AND state IN (?, ?, ?, ?) RETURNING id`,
+		TaskCanceled, now, parentID, TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked)
+	if err != nil {
+		return nil, fmt.Errorf("cancel children of %s: %w", parentID, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // TaskFilter narrows a task listing.

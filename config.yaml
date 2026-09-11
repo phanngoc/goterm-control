@@ -40,6 +40,7 @@ schedules:
   enabled: false
   tick_seconds: 30              # how often to look for due schedules
   command_timeout_seconds: 60   # cap on a --command payload (its --timeout overrides)
+  run_retention_days: 30        # finished schedule_runs older than this are purged (0 = keep forever)
 
 # Heartbeat (design §5.6): every `every`, this agent looks at its own scratchpad
 # (`bomclaw heartbeat scratch`) and acts only if a note asks for it. Costs

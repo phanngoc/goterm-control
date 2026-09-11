@@ -91,28 +91,54 @@ function TaskCard({ task, kids, onOpen }: { task: Task; kids: { total: number; d
   )
 }
 
-function TaskDrawer({ call, id, onClose, onChanged, onOpenTask }: {
-  call: Call; id: string; onClose: () => void; onChanged: () => void; onOpenTask: (id: string) => void
+function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask }: {
+  call: Call; id: string; agents: string[]; onClose: () => void; onChanged: () => void; onOpenTask: (id: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
+  const [childTitle, setChildTitle] = useState('')
+  const [childBody, setChildBody] = useState('')
+  const [childTo, setChildTo] = useState('')
 
-  useEffect(() => {
-    let cancelled = false
+  const load = useCallback(() => {
     call('tasks.get', { id })
-      .then((d: TaskDetail) => { if (!cancelled) setDetail(d) })
-      .catch((e: any) => { if (!cancelled) setErr(String(e?.message ?? e)) })
-    return () => { cancelled = true }
+      .then((d: TaskDetail) => setDetail(d))
+      .catch((e: any) => setErr(String(e?.message ?? e)))
   }, [call, id])
 
+  useEffect(() => { load() }, [load])
+
+  // Cancelling a parent cancels its unfinished children too — say so before
+  // doing it, since those may be running on another agent right now.
+  const openChildren = detail?.children?.filter(c => !['completed', 'failed', 'canceled', 'rejected'].includes(c.state)).length ?? 0
   const cancel = async () => {
+    if (openChildren > 0 && !confirm(`Cancel this task and its ${openChildren} unfinished child task${openChildren > 1 ? 's' : ''}?`)) return
     setBusy(true)
     try {
       await call('tasks.cancel', { id })
       onChanged()
       onClose()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // A person splitting a piece off a task in flight: same path as the agent's
+  // `bomclaw task sub`, so the same rules apply — the cap, the depth, and a
+  // brief of its own, because whoever claims it has none of this conversation.
+  const addChild = async () => {
+    if (!childTitle.trim()) return
+    setBusy(true)
+    try {
+      await call('tasks.create', { title: childTitle.trim(), body: childBody.trim(), parent_id: id, assigned_to: childTo || undefined })
+      setChildTitle(''); setChildBody('')
+      setErr(null)
+      load()
+      onChanged()
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     } finally {
@@ -255,6 +281,36 @@ function TaskDrawer({ call, id, onClose, onChanged, onOpenTask }: {
                 </div>
               )}
 
+              {open && (
+                <div className="rounded ring-1 ring-gray-800 bg-gray-900/40 p-2 space-y-1.5">
+                  <div className="flex gap-2 items-center">
+                    <span className="text-gray-600 text-xs shrink-0">↳ add child</span>
+                    <input
+                      value={childTitle}
+                      onChange={e => setChildTitle(e.target.value)}
+                      placeholder="a piece a peer could do in parallel…"
+                      className="flex-1 px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
+                    />
+                    <select value={childTo} onChange={e => setChildTo(e.target.value)}
+                      className="px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 text-gray-300 outline-none">
+                      <option value="">any agent</option>
+                      {agents.map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                    <button onClick={addChild} disabled={busy || !childTitle.trim()}
+                      className="px-2.5 py-1 text-xs rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed">
+                      Add
+                    </button>
+                  </div>
+                  <textarea
+                    value={childBody}
+                    onChange={e => setChildBody(e.target.value)}
+                    rows={2}
+                    placeholder="its brief — what to do, where, what done looks like (whoever claims it has none of this task's conversation)"
+                    className="w-full px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600 resize-none"
+                  />
+                </div>
+              )}
+
               {detail!.runs?.length > 0 && (
                 <div>
                   <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">Runs</div>
@@ -345,8 +401,9 @@ function TaskDrawer({ call, id, onClose, onChanged, onOpenTask }: {
                 onClick={cancel}
                 disabled={busy}
                 className="px-3 py-1.5 text-sm rounded ring-1 ring-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                title={openChildren > 0 ? 'Its unfinished children are canceled with it' : undefined}
               >
-                Cancel task
+                {openChildren > 0 ? `Cancel task + ${openChildren} child${openChildren > 1 ? 'ren' : ''}` : 'Cancel task'}
               </button>
             )}
             {resumable && (
@@ -467,7 +524,7 @@ export default function TaskBoard({ call, agents }: { call: Call; agents: string
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} />
+        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} />
       )}
     </div>
   )
