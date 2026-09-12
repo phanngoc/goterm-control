@@ -1,6 +1,6 @@
 # Design: Hợp nhất session, và không gian làm việc theo session
 
-> Trạng thái: DRAFT — thiết kế, chưa triển khai.
+> Trạng thái: **ship một phần**. S0 (PR #75) và S1 (#76) xong; S5 được triển khai mở rộng ở [scheduling-and-long-tasks.md](./scheduling-and-long-tasks.md) và đã ship. **S2, S3, S4 vẫn mở.** Bảng §10 là nguồn chính xác.
 > Phạm vi: hai kênh vào của agent (Telegram và dashboard web), và chỗ đứng của **session** trong quan hệ với **task** (`docs/design/shared-agent-memory.md`) và **trace**.
 > Tham chiếu: [paperclipai/paperclip](https://github.com/paperclipai/paperclip) — đã clone và đọc để lấy mô hình heartbeat, atomic checkout, và execution workspace.
 
