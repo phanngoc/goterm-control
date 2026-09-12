@@ -82,6 +82,11 @@ type TasksConfig struct {
 	PollIntervalSeconds int  `yaml:"poll_interval_seconds"` // default 60
 	TimeoutMinutes      int  `yaml:"timeout_minutes"`       // default 15
 	Concurrency         int  `yaml:"concurrency"`           // default 1: tasks run at once (chat has its own lane)
+
+	// MaxPerContext caps how many tasks one tree may hold, finished ones
+	// included (default 50). MaxOpenChildren and MaxDepth are local caps and
+	// cannot see the size of the tree they are building between them.
+	MaxPerContext int `yaml:"max_per_context"`
 }
 
 // SchedulesConfig tunes the scheduler (docs/design/scheduling-and-long-tasks.md

@@ -18,6 +18,39 @@ import (
 // fans out without bound is a loop with extra steps.
 const MaxOpenChildren = 8
 
+// DefaultMaxTasksPerContext caps a whole task tree, which MaxOpenChildren and
+// MaxDepth together do not: eight open children five levels deep is 32768 tasks
+// on paper, and handing a child to another agent made that easier to reach, not
+// harder. The two existing caps are local — how wide one parent may fan out,
+// how deep the tree may go — and neither can see the size of what they are
+// building between them.
+//
+// It counts finished tasks too. The cap is about how big one piece of work was
+// allowed to become, and a tree that produced fifty tasks has answered that
+// whether or not they are still open.
+const DefaultMaxTasksPerContext = 50
+
+// MaxTasksPerContext is the cap in force, from config or the default.
+func (db *DB) MaxTasksPerContext() int {
+	if db.maxTasksPerContext <= 0 {
+		return DefaultMaxTasksPerContext
+	}
+	return db.maxTasksPerContext
+}
+
+// SetMaxTasksPerContext overrides the cap. Config calls it at startup.
+func (db *DB) SetMaxTasksPerContext(n int) { db.maxTasksPerContext = n }
+
+// TasksInContext counts every task in one tree, finished ones included.
+func (db *DB) TasksInContext(contextID string) (int, error) {
+	var n int
+	if err := db.conn.QueryRow(
+		`SELECT count(*) FROM tasks WHERE context_id = ?`, contextID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count tasks in %s: %w", contextID, err)
+	}
+	return n, nil
+}
+
 // ChildrenDoneEvent is the task_events note that marks a parent waking.
 const ChildrenDoneEvent = "children-done"
 
@@ -58,6 +91,18 @@ func (db *DB) CreateSubTask(parentID, byAgent string, n NewTask) (*Task, error) 
 	}
 	if open >= MaxOpenChildren {
 		return nil, fmt.Errorf("coord: task %s already has %d unfinished children (max %d) — wait for some to finish", parentID, open, MaxOpenChildren)
+	}
+	// The tree-wide cap. The error says the number because the agent reading it
+	// is the one who has to decide what to drop or merge — "too many tasks" it
+	// cannot act on, "47 of 50" it can.
+	inContext, err := db.TasksInContext(parent.ContextID)
+	if err != nil {
+		return nil, err
+	}
+	if cap := db.MaxTasksPerContext(); inContext >= cap {
+		return nil, fmt.Errorf("coord: context %s already holds %d tasks (max %d) — "+
+			"this piece of work has grown past what one tree should carry: finish or merge "+
+			"some of it, or start a separate task rather than another child", parent.ContextID, inContext, cap)
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(n.Body)) < MinSubTaskBody {
 		return nil, fmt.Errorf("coord: a child needs a brief of its own (at least %d characters). "+

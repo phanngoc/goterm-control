@@ -301,6 +301,9 @@ func runGateway(args []string) {
 		if err == nil && cfg.Coord.ArtifactsDir != "" {
 			coordDB.SetArtifactsDir(cfg.Coord.ArtifactsDir)
 		}
+		if err == nil && cfg.Tasks.MaxPerContext > 0 {
+			coordDB.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
+		}
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
 			coordDB = nil

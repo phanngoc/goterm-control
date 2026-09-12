@@ -35,6 +35,8 @@ type DB struct {
 	// artifactsDir is the root artifact bytes are written under; empty means
 	// DefaultArtifactsDir. Config overrides it, tests point it at t.TempDir.
 	artifactsDir string
+	// maxTasksPerContext caps the size of one task tree; 0 means the default.
+	maxTasksPerContext int
 }
 
 // DefaultPath is where the shared database lives when config says nothing.
