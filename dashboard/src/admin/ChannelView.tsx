@@ -24,6 +24,7 @@ export default function ChannelView({ call, agents, selfID }: {
   const [body, setBody] = useState('')
   const [as, setAs] = useState<string>(OWNER)
   const [err, setErr] = useState<string | null>(null)
+  const sending = useRef(false)
   const bottom = useRef<HTMLDivElement>(null)
 
   const loadChannels = useCallback(async () => {
@@ -86,9 +87,13 @@ export default function ChannelView({ call, agents, selfID }: {
     call('channels.read', { channel_id: active }).then(loadChannels).catch(() => {})
   }, [active, call, loadChannels])
 
+  // One post per press. The body is only cleared once the round trip is over,
+  // so without this latch a second Enter arriving before the reply re-sends the
+  // same text — which is how the room ended up with a line in it twice.
   const post = async () => {
     const text = body.trim()
-    if (!text || !active) return
+    if (!text || !active || sending.current) return
+    sending.current = true
     try {
       await call('channels.post', {
         channel_id: active, body: text, as,
@@ -100,6 +105,8 @@ export default function ChannelView({ call, agents, selfID }: {
       else bottom.current?.scrollIntoView({ behavior: 'smooth' })
     } catch (e: any) {
       setErr(String(e?.message ?? e))
+    } finally {
+      sending.current = false
     }
   }
 
@@ -261,7 +268,13 @@ function Composer({ value, onChange, onSend, as, setAs, agents, replyingTo, onCa
         <input
           value={value}
           onChange={e => onChange(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() } }}
+          // Enter while an IME is composing commits the candidate — Vietnamese,
+          // Japanese, Korean — and is not a send. Chrome reports that press as
+          // keyCode 229; isComposing covers the rest.
+          onKeyDown={e => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
+          }}
           placeholder="Message the channel — @agent to wake one"
           className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
         />
