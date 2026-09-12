@@ -277,7 +277,17 @@ func (b *Bot) Run() {
 }
 
 // Shutdown performs graceful cleanup.
+//
+// The CLI children go first, and before engine.Close: a turn still running is
+// blocked on reading its child's stdout, so killing the child is what lets the
+// engine drain instead of waiting out a process that has no reason left to
+// finish. Leaving them alive is what produced the Telegram conflict this
+// repo's CLAUDE.md documents — an orphaned `claude -p --resume` keeps the long
+// poll, and the next gateway to start is refused by a bot it cannot see.
 func (b *Bot) Shutdown() {
+	if n := execution.KillSpawned(); n > 0 {
+		log.Printf("bot: killed %d CLI process group(s) still running", n)
+	}
 	b.typing.Close()
 	b.indicator.Close()
 	b.queue.Close()

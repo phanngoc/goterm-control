@@ -14,6 +14,7 @@ import (
 
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
+	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -177,6 +178,9 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)
 
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
+	// Its own process group, so cancelling this turn — or shutting the
+	// gateway down — reaches whatever the CLI went on to spawn as well.
+	execution.Detach(cmd)
 
 	// Set working directory so Claude creates files in the workspace,
 	// not in the bot's own source directory.
@@ -205,13 +209,14 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start claude: %w", err)
 	}
+	defer execution.Track(cmd)()
 
 	// Drain stderr concurrently; join it before examining diagnostics or returning.
 	waited := false
 	var stderrText bytes.Buffer
 	stderrDone := make(chan struct{})
 	defer func() {
-		_ = cmd.Process.Kill()
+		_ = execution.KillGroup(cmd.Process)
 		<-stderrDone
 		if !waited {
 			_ = cmd.Wait()
@@ -236,7 +241,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
-			_ = cmd.Process.Kill()
+			_ = execution.KillGroup(cmd.Process)
 			break
 		}
 		line := scanner.Text()
@@ -322,7 +327,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 			}
 			if ev.IsError {
 				// Error results are terminal. Kill/wait even if the CLI leaves pipes open.
-				_ = cmd.Process.Kill()
+				_ = execution.KillGroup(cmd.Process)
 				<-stderrDone
 				return cliError(sessionID, ev.Result, ev.Errors, stderrText.String())
 			}

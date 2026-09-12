@@ -24,6 +24,7 @@ import (
 
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
+	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -123,6 +124,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	args := buildArgs(modelID, threadID, isNewThread)
 
 	cmd := exec.CommandContext(ctx, codexBin, args...)
+	execution.Detach(cmd)
 	// codex has always inherited the ambient environment; the account layers
 	// CODEX_HOME on top so each login keeps its own threads.
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
@@ -144,6 +146,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start codex: %w", err)
 	}
+	defer execution.Track(cmd)()
 
 	// Drain stderr to logs. Codex logs auth/model diagnostics here; the last
 	// lines are the only clue when a turn dies before emitting any event.
@@ -180,7 +183,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// kill first so Wait cannot block on a subprocess still producing output.
 	abort := func(err error) error {
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			_ = execution.KillGroup(cmd.Process)
 		}
 		_ = reap()
 		return err
@@ -197,7 +200,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
-			_ = cmd.Process.Kill()
+			_ = execution.KillGroup(cmd.Process)
 			break
 		}
 		line := strings.TrimSpace(scanner.Text())

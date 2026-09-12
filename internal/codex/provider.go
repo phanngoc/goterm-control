@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ngocp/goterm-control/internal/agent"
+	"github.com/ngocp/goterm-control/internal/execution"
 )
 
 // CLIProvider implements agent.ModelProvider using the codex CLI subprocess.
@@ -61,6 +62,7 @@ func (p *CLIProvider) Stream(ctx context.Context, params agent.StreamParams) (<-
 	args = append(args, "-")
 
 	cmd := exec.CommandContext(ctx, codexBin, args...)
+	execution.Detach(cmd)
 	_ = os.MkdirAll(p.workspace, 0755)
 	cmd.Dir = p.workspace
 	cmd.Stdin = strings.NewReader(prompt)
@@ -77,6 +79,7 @@ func (p *CLIProvider) Stream(ctx context.Context, params agent.StreamParams) (<-
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
+	defer execution.Track(cmd)()
 
 	go func() {
 		s := bufio.NewScanner(stderr)
@@ -95,7 +98,7 @@ func (p *CLIProvider) Stream(ctx context.Context, params agent.StreamParams) (<-
 
 		for scanner.Scan() {
 			if ctx.Err() != nil {
-				_ = cmd.Process.Kill()
+				_ = execution.KillGroup(cmd.Process)
 				return
 			}
 			line := strings.TrimSpace(scanner.Text())
