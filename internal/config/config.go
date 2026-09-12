@@ -67,7 +67,17 @@ type CoordConfig struct {
 	NotesFile          string `yaml:"notes_file"`           // default ~/goterm-shared/NOTES.md
 	ArtifactsDir       string `yaml:"artifacts_dir"`        // default ~/goterm-shared/artifacts
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
+
+	// ReplyToMentions is whether being named in a channel makes this agent run
+	// a turn and answer. Pointer for the same reason as Enabled: absent means
+	// on. Turning it off leaves the room readable and the mention recorded —
+	// only the answering stops, which is what an agent kept for scheduled work
+	// alone wants.
+	ReplyToMentions *bool `yaml:"reply_to_mentions"`
 }
+
+// AnswersMentions reports whether a mention of this agent becomes a chat turn.
+func (c CoordConfig) AnswersMentions() bool { return c.ReplyToMentions == nil || *c.ReplyToMentions }
 
 // IsEnabled reports whether the shared coordination database should be opened.
 func (c CoordConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }

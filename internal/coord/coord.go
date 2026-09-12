@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 // DB is the shared coordination database.
 type DB struct {
@@ -379,6 +379,24 @@ var ddl = []string{
 		PRIMARY KEY (message_id, member_kind, member_id)
 	) STRICT`,
 	`CREATE INDEX IF NOT EXISTS idx_channel_mentions_unread ON channel_mentions(member_kind, member_id, read_at, created_at DESC)`,
+
+	// What an agent remembers of a thread. A mention is answered by a chat turn,
+	// and a chat turn that forgets the last one is not a conversation — so the
+	// CLI session the agent used is kept here and resumed next time, the way
+	// tasks.session_ref keeps a task's own thread of thought across runs.
+	//
+	// Keyed by thread rather than by channel: two threads in one room are two
+	// conversations, and Slack's own model says so. turns is the loop stop —
+	// nothing inside a conversation ever says "enough".
+	`CREATE TABLE IF NOT EXISTS channel_sessions (
+		thread_key TEXT NOT NULL,             -- thread_root, or channel_id for the main line
+		agent_id   TEXT NOT NULL,
+		provider   TEXT NOT NULL DEFAULT '',
+		session_id TEXT NOT NULL DEFAULT '',
+		turns      INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY (thread_key, agent_id)
+	) STRICT`,
 }
 
 // v3Columns are the columns added to tasks after it first shipped. CREATE TABLE

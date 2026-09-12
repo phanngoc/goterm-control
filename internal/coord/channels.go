@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"database/sql"
 	"fmt"
 	"regexp"
 	"sort"
@@ -554,6 +555,70 @@ func (db *DB) MarkMentionsRead(memberKind, memberID string, messageIDs []string)
 		return 0, fmt.Errorf("mark mentions read: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// ThreadKey names the conversation a message belongs to: the thread it is in,
+// or the thread it starts. Two threads in one room are two conversations, and
+// an agent must not answer one while remembering the other.
+//
+// A top-level message keys on its own id rather than on the channel, because a
+// reply to it goes into a thread rooted there — key it by the channel and the
+// answer to a line and the follow-up under that same line land in two
+// different conversations, which is a conversation with amnesia every other
+// turn.
+func ThreadKey(m ChannelMessage) string {
+	if m.ThreadRoot != "" {
+		return m.ThreadRoot
+	}
+	return m.ID
+}
+
+// ThreadSession is what an agent remembers of one conversation: the CLI
+// session to resume, and how many turns it has already spent there.
+type ThreadSession struct {
+	ThreadKey string
+	AgentID   string
+	Provider  string
+	SessionID string
+	Turns     int
+	UpdatedAt time.Time
+}
+
+// GetThreadSession returns the agent's memory of a thread. A thread nobody has
+// answered yet is not an error — it is a zero-value row, which is what the
+// first turn wants.
+func (db *DB) GetThreadSession(threadKey, agentID string) (*ThreadSession, error) {
+	row := db.conn.QueryRow(`SELECT thread_key, agent_id, provider, session_id, turns, updated_at
+		FROM channel_sessions WHERE thread_key = ? AND agent_id = ?`, threadKey, agentID)
+	var t ThreadSession
+	var updated string
+	switch err := row.Scan(&t.ThreadKey, &t.AgentID, &t.Provider, &t.SessionID, &t.Turns, &updated); {
+	case err == sql.ErrNoRows:
+		return &ThreadSession{ThreadKey: threadKey, AgentID: agentID}, nil
+	case err != nil:
+		return nil, fmt.Errorf("thread session %s/%s: %w", threadKey, agentID, err)
+	}
+	t.UpdatedAt = parseTS(updated)
+	return &t, nil
+}
+
+// SaveThreadSession records the session the turn ran under and counts the turn.
+// Turns is incremented here rather than by the caller so the cap cannot be
+// skipped by a code path that forgets.
+func (db *DB) SaveThreadSession(threadKey, agentID, provider, sessionID string) error {
+	_, err := db.conn.Exec(`INSERT INTO channel_sessions
+		(thread_key, agent_id, provider, session_id, turns, updated_at)
+		VALUES (?, ?, ?, ?, 1, ?)
+		ON CONFLICT(thread_key, agent_id) DO UPDATE SET
+			provider   = excluded.provider,
+			session_id = excluded.session_id,
+			turns      = channel_sessions.turns + 1,
+			updated_at = excluded.updated_at`,
+		threadKey, agentID, provider, sessionID, ts(time.Now()))
+	if err != nil {
+		return fmt.Errorf("save thread session %s/%s: %w", threadKey, agentID, err)
+	}
+	return nil
 }
 
 func (db *DB) getMessage(id string) (*ChannelMessage, error) {
