@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func putTestArtifact(t *testing.T, db *DB, taskID, kind, title, name, body string) *Artifact {
@@ -139,5 +140,140 @@ func TestPutArtifactRejectsNonsense(t *testing.T) {
 		if _, err := db.PutArtifact(c.in); err == nil {
 			t.Errorf("%s: accepted, want an error", c.name)
 		}
+	}
+}
+
+// age moves a task's clock back so a test does not have to wait days.
+func age(t *testing.T, db *DB, taskID string, d time.Duration) {
+	t.Helper()
+	when := time.Now().Add(-d).UTC().Format(time.RFC3339Nano)
+	if _, err := db.Conn().Exec(`UPDATE tasks SET updated_at = ? WHERE id = ?`, when, taskID); err != nil {
+		t.Fatalf("age %s: %v", taskID, err)
+	}
+}
+
+// TestPurgeTakesFinishedTreesAndKeepsDocuments covers the three rules at once,
+// because they only make sense against each other.
+func TestPurgeTakesFinishedTreesAndKeepsDocuments(t *testing.T) {
+	db := testDB(t)
+
+	// An old, finished tree: a patch (goes) and a report (stays).
+	done, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "old work", AssignedTo: "a1"})
+	patch, err := db.PutArtifact(NewArtifact{TaskID: done.ID, Kind: ArtifactPatch, Title: "the diff", Content: []byte("--- a\n+++ b\n")})
+	if err != nil {
+		t.Fatalf("put patch: %v", err)
+	}
+	report, err := db.PutArtifact(NewArtifact{TaskID: done.ID, Kind: ArtifactDocument, Title: "the report", Content: []byte("# findings")})
+	if err != nil {
+		t.Fatalf("put report: %v", err)
+	}
+	if err := db.CancelTask(done.ID, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	age(t, db, done.ID, 60*24*time.Hour)
+
+	// An equally old tree that is still open: nothing of it may go.
+	open, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "still going", AssignedTo: "a1"})
+	live, err := db.PutArtifact(NewArtifact{TaskID: open.ID, Kind: ArtifactPatch, Title: "wip", Content: []byte("wip")})
+	if err != nil {
+		t.Fatalf("put wip: %v", err)
+	}
+	age(t, db, open.ID, 60*24*time.Hour)
+
+	// A finished tree from this morning: too young.
+	recent, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "yesterday", AssignedTo: "a1"})
+	fresh, err := db.PutArtifact(NewArtifact{TaskID: recent.ID, Kind: ArtifactPatch, Title: "recent", Content: []byte("new")})
+	if err != nil {
+		t.Fatalf("put recent: %v", err)
+	}
+	if err := db.CancelTask(recent.ID, "a1"); err != nil {
+		t.Fatal(err)
+	}
+
+	patchFile := filepath.Join(db.ArtifactsDir(), patch.Path)
+	if _, err := os.Stat(patchFile); err != nil {
+		t.Fatalf("patch file should exist before the purge: %v", err)
+	}
+
+	// Dry run must name exactly what the purge then takes.
+	preview, err := db.PurgeableArtifacts(time.Now().AddDate(0, 0, -30))
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if len(preview) != 1 || preview[0].ID != patch.ID {
+		t.Fatalf("dry run should list only the old patch, got %+v", preview)
+	}
+
+	rows, files, err := db.PurgeArtifacts(time.Now().AddDate(0, 0, -30))
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if rows != 1 || files != 1 {
+		t.Fatalf("expected 1 row and 1 file, got %d rows and %d files", rows, files)
+	}
+	if _, err := os.Stat(patchFile); !os.IsNotExist(err) {
+		t.Error("the patch file is still on disk")
+	}
+	for _, keep := range []*Artifact{report, live, fresh} {
+		if _, err := db.GetArtifact(keep.ID); err != nil {
+			t.Errorf("%s (%s) should have been kept: %v", keep.Title, keep.Kind, err)
+		}
+	}
+	if _, err := db.GetArtifact(patch.ID); err == nil {
+		t.Error("the purged artifact still has a row")
+	}
+}
+
+// TestDryRunDeletesNothing: the flag is the whole point of the flag.
+func TestDryRunDeletesNothing(t *testing.T) {
+	db := testDB(t)
+	task, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "old", AssignedTo: "a1"})
+	a, err := db.PutArtifact(NewArtifact{TaskID: task.ID, Kind: ArtifactFile, Title: "thing", Content: []byte("bytes")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.CancelTask(task.ID, "a1")
+	age(t, db, task.ID, 60*24*time.Hour)
+
+	if _, err := db.PurgeableArtifacts(time.Now().AddDate(0, 0, -30)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetArtifact(a.ID); err != nil {
+		t.Fatalf("the dry run deleted the row: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(db.ArtifactsDir(), a.Path)); err != nil {
+		t.Fatalf("the dry run deleted the file: %v", err)
+	}
+}
+
+// TestPurgeRefusesPathsOutsideTheRoot: filenames are sanitised on the way in,
+// so this guards a row written before that, or by hand.
+func TestPurgeRefusesPathsOutsideTheRoot(t *testing.T) {
+	db := testDB(t)
+	outside := filepath.Join(t.TempDir(), "precious.txt")
+	if err := os.WriteFile(outside, []byte("not yours"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	task, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "old", AssignedTo: "a1"})
+	a, err := db.PutArtifact(NewArtifact{TaskID: task.ID, Kind: ArtifactFile, Title: "thing", Content: []byte("bytes")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(db.ArtifactsDir(), outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Conn().Exec(`UPDATE artifacts SET path = ? WHERE id = ?`, rel, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	db.CancelTask(task.ID, "a1")
+	age(t, db, task.ID, 60*24*time.Hour)
+
+	if _, _, err := db.PurgeArtifacts(time.Now().AddDate(0, 0, -30)); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatal("the purge deleted a file outside the artifacts root")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -164,6 +165,46 @@ func runArtifact(args []string) {
 		}
 		fmt.Printf("%s is now an %s of %s\n", *id, *role, *taskID)
 
+	case "purge":
+		fs := flag.NewFlagSet("artifact purge", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		days := fs.Int("older-than-days", 30, "Delete work product of task trees finished more than this many days ago")
+		dry := fs.Bool("dry-run", false, "List what would go, delete nothing")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		cutoff := time.Now().AddDate(0, 0, -*days)
+
+		if *dry {
+			list, err := db.PurgeableArtifacts(cutoff)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "artifact purge: %v\n", err)
+				os.Exit(1)
+			}
+			if len(list) == 0 {
+				fmt.Printf("nothing to purge older than %d days\n", *days)
+				return
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tKIND\tSIZE\tCONTEXT\tTITLE")
+			var bytes int64
+			for _, a := range list {
+				bytes += a.Bytes
+				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", a.ID, a.Kind, a.Bytes, a.ContextID, a.Title)
+			}
+			w.Flush()
+			fmt.Printf("\n%d artifacts, %d bytes — documents are never purged\n", len(list), bytes)
+			return
+		}
+
+		rows, files, err := db.PurgeArtifacts(cutoff)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "artifact purge: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("purged %d artifacts (%d files) from task trees finished over %d days ago\n", rows, files, *days)
+
 	default:
 		artifactUsage()
 		os.Exit(1)
@@ -206,6 +247,7 @@ Usage: bomclaw artifact <command>
   list  (--task <id> [--tree] | --context <id>)
   get   <artifact-id> [--out FILE]
   link  --id <artifact> --task <id> [--role input|output]
+  purge [--older-than-days 30] [--dry-run]
 
 An artifact is how work crosses a task boundary. Put what you produced against
 your task; a parent gathering children sees the index and reads only what it
