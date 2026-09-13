@@ -11,6 +11,7 @@ export type Session = {
   updated_at: string
   label?: string
   seq?: number
+  account?: string
 }
 
 export type TranscriptEvent = {

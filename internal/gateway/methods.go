@@ -162,6 +162,10 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleBrowserCall(ctx, deps, params)
 
 		// --- admin / observability ---
+		case "accounts.list":
+			return handleAccountsList(deps, params)
+		case "accounts.use":
+			return handleAccountsUse(deps, params)
 		case "admin.settings":
 			return handleAdminSettings(deps)
 		case "admin.set_model":

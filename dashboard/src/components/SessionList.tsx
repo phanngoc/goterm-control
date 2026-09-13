@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useStore, Session } from '../stores/store'
 import { eventsToMessages } from '../lib/transcript'
 
@@ -11,7 +12,36 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
+interface AccountInfo {
+  name: string
+  sessions: number
+  cooling_until?: string
+  current?: boolean
+}
+
 export default function SessionList({ call }: { call: (m: string, p?: any) => Promise<any> }) {
+  // Which logins this agent can run a conversation on. Empty on the usual
+  // install — one ambient login — and the picker stays out of the way then.
+  const [accounts, setAccounts] = useState<AccountInfo[]>([])
+  useEffect(() => {
+    call('accounts.list').then((a: AccountInfo[]) => setAccounts(a || [])).catch(() => {})
+  }, [call])
+
+  // An account belongs to a conversation, not to a setting on one: both CLIs
+  // keep their conversation store inside the credential directory, so this
+  // starts a new session rather than repointing a live one.
+  const startOn = async (account: string) => {
+    try {
+      const r = await call('accounts.use', { account, chat_id: 0 })
+      await call('sessions.list').then(useStore.getState().setSessions)
+      useStore.getState().setActiveSessionId(r.session_id)
+      useStore.getState().setMessages([])
+      useStore.getState().setTab('chat')
+    } catch (e: any) {
+      alert(String(e?.message ?? e))
+    }
+  }
+
   const rawSessions = useStore(s => s.sessions)
   // Newest first — the server already sorts, but keep the invariant client-side too.
   const sessions = [...rawSessions].sort(
@@ -71,6 +101,21 @@ export default function SessionList({ call }: { call: (m: string, p?: any) => Pr
     <div className="h-full overflow-y-auto p-4">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-medium text-gray-300">Sessions</h2>
+        {accounts.length > 1 && (
+          <select
+            value=""
+            onChange={e => { if (e.target.value) startOn(e.target.value) }}
+            title="Start a new conversation on another login"
+            className="ml-auto mr-2 px-2 py-1.5 text-sm bg-gray-950 rounded ring-1 ring-gray-800 text-gray-300 outline-none"
+          >
+            <option value="">new chat on…</option>
+            {accounts.map(a => (
+              <option key={a.name} value={a.name}>
+                {a.name}{a.cooling_until ? ' (cooling)' : ''}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           onClick={() => {
             const id = 'chat_' + Date.now()
@@ -97,6 +142,7 @@ export default function SessionList({ call }: { call: (m: string, p?: any) => Pr
               </div>
               <div className="text-xs text-gray-500 mt-0.5 truncate">
                 {timeAgo(s.updated_at)} · {s.input_tokens + s.output_tokens} tokens
+                {s.account ? <span className="text-sky-400"> · {s.account}</span> : null}
                 {s.label ? <span className="font-mono"> · {s.id}</span> : null}
               </div>
             </div>
