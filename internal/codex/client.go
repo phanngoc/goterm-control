@@ -25,6 +25,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -431,4 +432,15 @@ func formatInput(raw json.RawMessage) string {
 func defaultWorkspace() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "goterm-workspace")
+}
+
+// See the note in internal/claude: the provider knows how to build itself, and
+// internal/bot no longer needs a branch per CLI.
+func init() {
+	chat.Register(models.APICodexCLI, func(d chat.Deps) chat.Client {
+		c := New(d.SystemPrompt)
+		c.SetWorkspace(d.Workspace)
+		c.SetPool(d.Pool)
+		return c
+	})
 }
