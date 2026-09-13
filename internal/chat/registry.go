@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/ngocp/goterm-control/internal/agent"
+
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -87,4 +89,45 @@ func Registered() []models.ModelAPI {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+// The second seam: one-shot text.
+//
+// Naming a session is not a conversation — no stream to a sink, no tool loop,
+// no session to resume — so it needs a different interface, and giving it one
+// registry of its own is cheaper than bending chat.Client around a single
+// string. What it must NOT have is the shape this package just removed: a
+// switch that ends in "and anything else is claude". An agent running a
+// backend that has no titler then shells out to a CLI it may not have
+// installed, and on a machine where it does, spends that provider's quota on
+// titles for an agent deliberately moved off it.
+//
+// Absent is a legitimate answer here, in a way it is not for chat: a session
+// with no title is a small loss, and titler.Title already no-ops on a nil
+// provider. Silence beats a failing call every turn.
+type TitlerFactory func(Deps) agent.ModelProvider
+
+var titlers = map[models.ModelAPI]TitlerFactory{}
+
+// RegisterTitler adds the one-shot text backend for an API. Optional: a
+// provider with no titler simply has none.
+func RegisterTitler(api models.ModelAPI, f TitlerFactory) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, taken := titlers[api]; taken {
+		panic(fmt.Sprintf("chat: two titlers registered for %q", api))
+	}
+	titlers[api] = f
+}
+
+// ResolveTitler returns the one-shot backend for an API, or nil when that
+// backend has none. nil is a supported answer: the caller skips titling.
+func ResolveTitler(api models.ModelAPI, deps Deps) agent.ModelProvider {
+	registryMu.RLock()
+	f, ok := titlers[api]
+	registryMu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return f(deps)
 }

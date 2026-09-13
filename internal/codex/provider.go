@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/chat"
+	"github.com/ngocp/goterm-control/internal/models"
 	"log"
 	"os"
 	"os/exec"
@@ -166,4 +168,10 @@ func lastUserMessage(messages []agent.Message) string {
 		}
 	}
 	return ""
+}
+
+func init() {
+	chat.RegisterTitler(models.APICodexCLI, func(d chat.Deps) agent.ModelProvider {
+		return NewCLIProvider(d.Workspace)
+	})
 }

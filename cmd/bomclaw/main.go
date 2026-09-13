@@ -20,15 +20,10 @@ import (
 	"runtime"
 
 	"github.com/ngocp/goterm-control/internal/agent"
-	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/auth"
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/browserbridge"
 	"github.com/ngocp/goterm-control/internal/channel"
-	// Also imported for their init(), which registers each as a chat backend
-	// (internal/chat/registry.go). Used directly here only by the titler.
-	"github.com/ngocp/goterm-control/internal/claude"
-	"github.com/ngocp/goterm-control/internal/codex"
 	"github.com/ngocp/goterm-control/internal/config"
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/coord"
@@ -259,8 +254,9 @@ func runGateway(args []string) {
 		}
 	}
 
-	// Create model provider: codex CLI, claude CLI (OAuth), or direct API key.
-	provider := buildProvider(cfg)
+	// One-shot text backend (session titles, `bomclaw send` fallback). Which
+	// one is bot.TitleBackend's decision, so this cannot drift from the bot.
+	provider := buildProvider(cfg, models.NewResolver(cfg.Models.Default, cfg.Models.Custom))
 
 	// Recorder for the gateway's own command path (dashboard, `bomclaw send`,
 	// a peer agent). The bot keeps its own for the Telegram path; both write
@@ -856,21 +852,12 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 	}
 }
 
-// buildProvider picks the model backend for one-shot text calls, following
-// cfg.Provider first and then the shape of the Anthropic credential.
-func buildProvider(cfg *config.Config) agent.ModelProvider {
-	if cfg.Provider == config.ProviderCodex {
-		log.Println("gateway: using Codex CLI provider")
-		return codex.NewCLIProvider(cfg.Claude.Workspace)
-	}
-	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-oat") {
-		// OAuth subscription token — must use claude CLI subprocess
-		log.Println("gateway: using Claude CLI provider (OAuth token detected)")
-		return claude.NewCLIProvider(cfg.Claude.Workspace)
-	}
-	// Direct API key (sk-ant-api03-...)
-	log.Println("gateway: using direct Anthropic API provider")
-	return anthropicClient.New(cfg.Claude.APIKey)
+// buildProvider picks the model backend for one-shot text calls. One decision,
+// made in bot.TitleBackend, so this and the bot cannot drift apart the way they
+// had: both grew the same switch and both ended in "anything else is claude".
+func buildProvider(cfg *config.Config, resolver *models.Resolver) agent.ModelProvider {
+	p, _ := bot.TitleBackend(cfg, resolver)
+	return p
 }
 
 // --- chat command (direct, no gateway) ---
@@ -889,8 +876,8 @@ func runChat(args []string) {
 		log.Fatalf("config: %v", err)
 	}
 
-	chatProvider := buildProvider(cfg)
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
+	chatProvider := buildProvider(cfg, resolver)
 
 	modelID := resolver.Default()
 	if *modelOverride != "" {

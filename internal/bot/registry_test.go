@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -108,5 +109,58 @@ func TestAThirdBackendNeedsNoChangeHere(t *testing.T) {
 	client := NewChatClientWithPool(c, nil, nil)
 	if got := client.Name(); got != "opencode" {
 		t.Fatalf("the opencode config resolved to %q", got)
+	}
+}
+
+// TestOpenCodeDoesNotTitleWithClaude is the bug this replaced: both call sites
+// ended in "anything else is claude", so an agent moved onto opencode still
+// shelled out to the claude CLI to name its sessions — spending claude's quota
+// on an agent deliberately taken off claude, and failing outright on a machine
+// where claude is not installed.
+func TestOpenCodeDoesNotTitleWithClaude(t *testing.T) {
+	c := cfgFor(config.ProviderOpenCode, "oc-model")
+	c.Models.Custom = []models.Model{{ID: "oc-model", Name: "oc", API: models.APIOpenCodeCLI}}
+	p, _ := TitleBackend(c, models.NewResolver(c.Claude.Model, c.Models.Custom))
+	if p != nil {
+		t.Fatalf("opencode has no titler registered, so the answer must be none — got %T", p)
+	}
+	// And nil is safe: titler.Title no-ops on it rather than crashing a turn.
+}
+
+func TestClaudeAndCodexStillTitle(t *testing.T) {
+	for _, tc := range []struct{ provider, model string }{
+		{config.ProviderClaude, "claude-opus-5"},
+		{config.ProviderCodex, "gpt-6-astra"},
+	} {
+		c := cfgFor(tc.provider, tc.model)
+		p, model := TitleBackend(c, models.NewResolver(tc.model, nil))
+		if p == nil {
+			t.Errorf("%s lost its titler", tc.provider)
+		}
+		if model == "" {
+			t.Errorf("%s has no title model", tc.provider)
+		}
+	}
+}
+
+// A direct Anthropic key is cheaper and faster than a CLI subprocess for eight
+// words — but only when the agent is on claude at all.
+func TestADirectKeyIsUsedOnlyForClaude(t *testing.T) {
+	c := cfgFor(config.ProviderClaude, "claude-opus-5")
+	c.Claude.APIKey = "sk-ant-api03-xxx"
+	p, _ := TitleBackend(c, models.NewResolver("claude-opus-5", nil))
+	if p == nil {
+		t.Fatal("a direct key produced no titler")
+	}
+
+	// The same key on a codex agent must not drag titling back to Anthropic.
+	c2 := cfgFor(config.ProviderCodex, "gpt-6-astra")
+	c2.Claude.APIKey = "sk-ant-api03-xxx"
+	p2, _ := TitleBackend(c2, models.NewResolver("gpt-6-astra", nil))
+	if p2 == nil {
+		t.Fatal("codex lost its titler")
+	}
+	if fmt.Sprintf("%T", p2) == fmt.Sprintf("%T", p) {
+		t.Errorf("a codex agent titled through the Anthropic API: %T", p2)
 	}
 }

@@ -11,8 +11,6 @@ import (
 	"github.com/ngocp/goterm-control/internal/agent"
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
 	"github.com/ngocp/goterm-control/internal/chat"
-	"github.com/ngocp/goterm-control/internal/claude"
-	"github.com/ngocp/goterm-control/internal/codex"
 	"github.com/ngocp/goterm-control/internal/config"
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/credentials"
@@ -76,6 +74,41 @@ func (b *Bot) Notify(text string) {
 // work in isolated sessions, alongside whatever the bot is chatting about.
 func NewChatClient(cfg *config.Config, executor *tools.Executor) chat.Client {
 	return NewChatClientWithPool(cfg, executor, nil)
+}
+
+// TitleBackend picks the one-shot backend that names sessions, and the model
+// it should use.
+//
+// Two call sites had grown the same switch, and both ended in "anything else
+// is claude" — which after opencode meant an agent deliberately moved off
+// claude still spent claude's quota naming its sessions, on a machine where
+// claude happens to be installed, and would simply fail on one where it is not.
+//
+// A direct Anthropic key still wins when there is one: it is cheaper and
+// faster than a CLI subprocess for eight words. Otherwise the answer comes
+// from the registry, and a backend with no titler registered returns nil —
+// which titler.Title already treats as "skip", the honest outcome for a
+// nicety that cannot be produced.
+func TitleBackend(cfg *config.Config, resolver *models.Resolver) (agent.ModelProvider, string) {
+	titleModel := resolver.Default()
+	if strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-api") && modelAPI(cfg) == models.APIClaudeCLI {
+		if m := resolver.Lookup("haiku"); m != nil {
+			titleModel = m.ID
+		}
+		return anthropicClient.New(cfg.Claude.APIKey), titleModel
+	}
+	api := modelAPI(cfg)
+	p := chat.ResolveTitler(api, chat.Deps{Workspace: cfg.Claude.Workspace})
+	if p == nil {
+		log.Printf("titler: no one-shot backend for %s — sessions keep their default names", api)
+		return nil, titleModel
+	}
+	if api == models.APIClaudeCLI {
+		if m := resolver.Lookup("haiku"); m != nil {
+			titleModel = m.ID
+		}
+	}
+	return p, titleModel
 }
 
 // modelAPI is the protocol this agent's default model speaks, which is what
@@ -244,27 +277,7 @@ func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *sessio
 		}
 	}
 
-	// Session titler — renames sessions to a content summary after each turn.
-	// Uses the direct API when an API key is configured; otherwise falls back
-	// to the claude CLI (which the bot already requires for OAuth tokens).
-	var titleProvider agent.ModelProvider
-	titleModel := resolver.Default()
-	switch {
-	case cfg.Provider == config.ProviderCodex:
-		// Stay on the codex side: a claude model id would be rejected, and the
-		// agent may not have Anthropic credentials at all.
-		titleProvider = codex.NewCLIProvider(cfg.Claude.Workspace)
-	case strings.HasPrefix(cfg.Claude.APIKey, "sk-ant-api"):
-		titleProvider = anthropicClient.New(cfg.Claude.APIKey)
-		if m := resolver.Lookup("haiku"); m != nil {
-			titleModel = m.ID
-		}
-	default:
-		titleProvider = claude.NewCLIProvider(cfg.Claude.Workspace)
-		if m := resolver.Lookup("haiku"); m != nil {
-			titleModel = m.ID
-		}
-	}
+	titleProvider, titleModel := TitleBackend(cfg, resolver)
 	sessionTitler := titler.New(titleProvider, titleModel)
 
 	// Build handler first (queue needs handler.executeMessage as callback)
