@@ -1,7 +1,7 @@
 # Research: Chọn backend cho agent, và giữ nguyên đường Telegram khi mở thêm kênh
 
 > Trạng thái: **RESEARCH** — khảo sát mã nguồn thật, chưa code. Mọi dòng "hiện trạng" dưới đây đều kèm file:dòng đã đọc ngày 2026-09-12, main @ `be68950`.
-> Câu hỏi gốc: (1) Telegram nhắn tin điều khiển máy **như cũ**, (2) agent vào kênh tự thảo luận + giao việc, (3) **trace log đầy đủ**, (4) agent chọn được `claude` / `claude-tam` / `codex`, tương lai `openclaw` + `helmet`.
+> Câu hỏi gốc: (1) Telegram nhắn tin điều khiển máy **như cũ**, (2) agent vào kênh tự thảo luận + giao việc, (3) **trace log đầy đủ**, (4) agent chọn được `claude` / `claude-tam` / `codex`, tương lai `openclaw` + `hermes`.
 > Liên quan: `agent-teams-and-channels.md` (kênh), `scheduling-and-long-tasks.md` (task, lịch, trace).
 
 ---
@@ -14,8 +14,8 @@ Ba trong bốn câu hỏi **không cần kiến trúc mới** — đường nố
 |---|---|
 | Telegram điều khiển máy như cũ | Không có gì phải làm để *giữ*; cần một **test đặc tả** để không ai làm hỏng về sau |
 | Agent thảo luận trong kênh | Phòng đã có (PR #106); hop cuối mention→lượt chat đang ở PR #119 |
-| `claude-tam` | **Rất có thể không phải provider mới** mà là một *account* Claude thứ hai — thứ `accounts.pool` đã làm được hôm nay. Xem §5 |
-| `openclaw`, `helmet` | Cần `chat.Client` mới. Chi phí nằm ở **chỗ thắt** §3, không nằm ở giao diện |
+| `claude-tam` | **Không phải provider mới** — đã chốt: tài khoản Claude của Tâm. `accounts.pool` hôm nay đã làm được. Xem §5 |
+| `openclaw`, `hermes` | Cần `chat.Client` mới. Chi phí nằm ở **chỗ thắt** §3, không nằm ở giao diện |
 | Trace đầy đủ | Có ba lỗ thật, §6 |
 
 ---
@@ -66,7 +66,7 @@ Việc phải làm, theo đúng thứ tự:
 1. `chat.Register(api, factory)` + `chat.Resolve(api)`; `NewChatClientWithPool` gọi `Resolve`, **không còn nhánh else im lặng** — không tìm thấy thì lỗi, nói rõ api nào.
 2. `Validate()` hỏi registry thay vì `switch` cứng hai giá trị.
 3. **Pool theo từng provider**: `map[string]*Pool`, dựng từ `accounts.pool` gom theo `provider`. Hôm nay account của backend kia bị bỏ im lặng — với ba backend thì đó là một cái bẫy.
-4. `claude` và `codex` tự đăng ký trong `init()`; thêm `openclaw`/`helmet` sau này là một file mới + một dòng đăng ký, không sửa `bot`.
+4. `claude` và `codex` tự đăng ký trong `init()`; thêm `openclaw`/`hermes` sau này là một file mới + một dòng đăng ký, không sửa `bot`.
 
 ---
 
@@ -80,17 +80,17 @@ Không có gì trong §3 đụng vào đường Telegram — `bot.Handler.RunTur
 
 ---
 
-## 5. `claude-tam`: có thể không phải provider
+## 5. `claude-tam`: một account, không phải một provider
 
-Hai cách đọc, và chúng dẫn tới hai khối lượng công việc rất khác nhau:
+**Đã chốt 2026-09-13: `claude-tam` là tài khoản Claude của Tâm.** Cùng CLI, login khác.
 
-**(a) Một tài khoản Claude thứ hai** — `claude-tam` là login riêng, cùng CLI. Thì **hôm nay đã làm được**: `accounts.pool` với `config_dir` riêng (`CLAUDE_CONFIG_DIR`), và pool xoay theo session (`config.go:116-135`). Việc còn thiếu chỉ là **chọn được account** từ dashboard/CLI thay vì để pool tự xoay — `sess.SetAccount` đã có, `Pool.Pick(pinned)` đã nhận tham số ghim.
+Nghĩa là **hôm nay đã làm được**: `accounts.pool` với `config_dir` riêng (`CLAUDE_CONFIG_DIR`) cho mỗi login (`config.go:116-135`). Việc còn thiếu chỉ là **chọn được account** thay vì để pool tự xoay — và hai mảnh của việc đó đã nằm sẵn trong code: `sess.SetAccount` (`session.go:142`) và `Pool.Pick(pinned)` (`pool.go:185`) đã nhận tham số ghim.
 
-**(b) Một CLI khác** (bản fork, binary khác) — thì là provider mới như §3.
+Nên "chọn claude-tam" là **một form + một tham số**, không phải cả §3. Đó là V2.
 
-Theo dấu vết trên máy (`~/.claude-tam/`) thì (a) nhiều khả năng đúng hơn. **Đây là câu hỏi mở phải chốt trước khi code**, vì (a) là một form chọn + một tham số, còn (b) là cả §3.
+Một hệ quả phải nói rõ với người dùng: xoay account là **theo session, không theo lượt** — cả hai CLI giữ session store *bên trong* thư mục credential, nên đổi account giữa cuộc là mất cuộc nói chuyện (`config.go:109-115`). Vậy "đổi sang tài khoản Tâm" nghĩa là **mở phiên mới**, không phải chuyển giữa chừng.
 
-`openclaw` và `helmet` thì rõ ràng là (b).
+`openclaw` và `hermes` thì là chuyện khác: CLI khác, cần `chat.Client` mới như §3.
 
 ---
 
@@ -113,13 +113,13 @@ Hôm nay có ba gốc trace: `turn` (`bot/handler.go:654`), `task` (`taskrunner/
 | **V1** | Registry `ModelAPI → chat.Client`; pool theo provider; bỏ nhánh else im lặng; test đặc tả §4 | Điều kiện cần của mọi backend thứ ba. Không đổi hành vi nào đang chạy — đó là điểm của test đặc tả |
 | **V2** | Chọn account (`claude-tam`) từ dashboard/CLI, ghim vào session | Nhỏ, và nếu §5(a) đúng thì đây **là** toàn bộ yêu cầu "chọn claude-tam" |
 | **V3** | Trace: gốc `schedule.command` + tag kênh | Độc lập với V1/V2, làm lúc nào cũng được |
-| **V4** | `openclaw` / `helmet` là `chat.Client` | Sau V1, mỗi cái là một file. Trước V1 thì mỗi cái là một lần sửa `bot` |
+| **V4** | `openclaw` / `hermes` là `chat.Client` | Sau V1, mỗi cái là một file. Trước V1 thì mỗi cái là một lần sửa `bot` |
 
 ---
 
 ## 8. Rủi ro & câu hỏi mở
 
-1. **`claude-tam` là account hay CLI?** Quyết định này đổi khối lượng V2 từ một form thành cả §3. Chưa chốt thì chưa code.
-2. **`helmet` là gì?** Chưa có dữ liệu nào trong repo hay trên máy. Cần một câu mô tả trước khi ước lượng.
+1. ~~`claude-tam` là account hay CLI?~~ **Đã chốt: account của Tâm.** V2 là một form + một tham số ghim.
+2. **`hermes` là gì?** (tên đúng là Hermes agent, không phải "helmet".) Chưa có dữ liệu nào trong repo hay trên máy này. Trước khi ước lượng V4 cần biết: nó chạy bằng **CLI subprocess** (như claude/codex, hợp với `chat.Client` ngay) hay bằng **HTTP API** (thì cần thêm một `ModelAPI` và một client không-subprocess — `models.APIAnthropic`/`APIOpenAI` đã để dành chỗ cho hình dạng đó)? Và nó có khái niệm **session resume** không — nếu không thì `sess.SetSessionID` không có gì để ghi, và mỗi lượt là một lượt mới.
 3. **Quota dùng chung.** Ba agent Claude cùng một OAuth vẫn là một quota — `accounts.pool` chia đau chứ không tạo thêm hạn mức. Chọn được account không giải quyết việc này.
 4. **Session không resume được sau khi đổi backend.** Đã lường trong code (`ref.Provider == llm.Name()`), nhưng với người dùng thì nó hiện ra như "agent quên mất cuộc nói chuyện". Có nên báo một dòng khi điều đó xảy ra?
