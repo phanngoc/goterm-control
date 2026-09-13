@@ -737,9 +737,16 @@ function FileBrowser({ call, channelID, root, onClose }: {
   const [entries, setEntries] = useState<ProjectEntry[] | null>(null)
   const [file, setFile] = useState<{ path: string; body: string; truncated: boolean; binary: boolean } | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  // Editing is a mode, not the default. A folder full of an agent's work is
+  // something you mostly read; opening every file in a textarea invites a
+  // stray keystroke into source nobody meant to touch.
+  const [draft, setDraft] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     setFile(null)
+    setDraft(null)
     call('channels.files', { channel_id: channelID, path })
       .then((r: any) => { setEntries(r?.entries ?? []); setErr(null) })
       .catch((e: any) => setErr(String(e?.message ?? e)))
@@ -756,9 +763,27 @@ function FileBrowser({ call, channelID, root, onClose }: {
     try {
       const r = await call('channels.files', { channel_id: channelID, path: e.path, read: true })
       setFile({ path: e.path, body: r?.body ?? '', truncated: !!r?.truncated, binary: !!r?.binary })
+      setDraft(null)
       setErr(null)
     } catch (x: any) {
       setErr(String(x?.message ?? x))
+    }
+  }
+
+  const save = async () => {
+    if (draft === null || !file || saving) return
+    setSaving(true)
+    try {
+      const r = await call('channels.files', { channel_id: channelID, path: file.path, body: draft })
+      setFile({ path: file.path, body: r?.body ?? draft, truncated: !!r?.truncated, binary: !!r?.binary })
+      setDraft(null)
+      setErr(null)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -794,9 +819,40 @@ function FileBrowser({ call, channelID, root, onClose }: {
         <div className="flex-1 overflow-y-auto">
           {file ? (
             <div className="px-6 py-4">
-              <button onClick={() => setFile(null)} className="mb-3 text-xs text-gray-500 hover:text-sky-300">
-                ← quay lại thư mục
-              </button>
+              <div className="mb-3 flex items-center gap-3">
+                <button onClick={() => { setFile(null); setDraft(null) }} className="text-xs text-gray-500 hover:text-sky-300">
+                  ← quay lại thư mục
+                </button>
+                {!file.binary && draft === null && !file.truncated && (
+                  <button onClick={() => setDraft(file.body)} className="text-xs text-gray-500 hover:text-sky-300">
+                    sửa
+                  </button>
+                )}
+                {/* A file the server had to cut cannot be edited here: saving
+                    what is on screen would delete the part that was not sent. */}
+                {!file.binary && file.truncated && (
+                  <span className="text-xs text-gray-600">quá dài để sửa ở đây</span>
+                )}
+                {draft !== null && (
+                  <>
+                    <button
+                      onClick={save} disabled={saving}
+                      className="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
+                    >{saving ? 'đang lưu…' : 'Lưu'}</button>
+                    <button onClick={() => setDraft(null)} className="text-xs text-gray-500 hover:text-gray-300">huỷ</button>
+                  </>
+                )}
+                {saved && <span className="text-xs text-emerald-300">đã lưu</span>}
+                <span className="ml-auto text-[11px] text-gray-600 font-mono truncate">{file.path}</span>
+              </div>
+              {draft !== null ? (
+                <textarea
+                  value={draft}
+                  onChange={e => setDraft(e.target.value)}
+                  spellCheck={false}
+                  className="w-full h-[60vh] px-3 py-2 text-xs font-mono bg-gray-900 rounded ring-1 ring-gray-800 text-gray-200 outline-none focus:ring-gray-600 resize-none"
+                />
+              ) : (<>
               {file.binary ? (
                 <p className="text-sm text-gray-500">File nhị phân — không hiển thị được ở đây.</p>
               ) : file.path.toLowerCase().endsWith('.md') ? (
@@ -807,6 +863,7 @@ function FileBrowser({ call, channelID, root, onClose }: {
               {file.truncated && (
                 <p className="mt-4 text-xs text-amber-300">File dài hơn phần hiển thị — mở trực tiếp để đọc hết.</p>
               )}
+              </>)}
             </div>
           ) : entries === null ? (
             <div className="px-6 py-4 text-sm text-gray-500">Loading…</div>
