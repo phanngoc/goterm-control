@@ -398,7 +398,10 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	defer progress.Close()
 
 	sendErr := r.llm.SendMessage(runCtx, sess, r.cfg.Model, prompt, "", chat.StreamCallbacks{
-		OnText: func(chunk string) { reply.WriteString(chunk) },
+		OnText: func(chunk string) {
+			reply.WriteString(chunk)
+			progress.Text(chunk)
+		},
 		OnToolCall: func(name, input string) {
 			sess.NoteTool(name)
 			progress.Tool(name)

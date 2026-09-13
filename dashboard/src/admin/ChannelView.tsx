@@ -149,20 +149,12 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
     }
   }
 
-  // Asking for a review is an ordinary message in the thread, addressed to the
-  // agent you are talking to — not a special mode. The agent already sees the
-  // artifact list in its prompt, so the id is all it needs.
-  const reviewFile = async (a: Artifact) => {
-    if (!to || !threadRoot || !active) return
-    try {
-      await call('channels.post', {
-        channel_id: active, thread_root: threadRoot, notify: [to],
-        body: `Xem lại giúp mình artifact \`${a.id}\` (${a.title}) — đọc nội dung rồi nói thẳng chỗ nào sai, thiếu, hoặc đáng ngờ.`,
-      })
-      await loadThread(threadRoot)
-    } catch (e: any) {
-      setErr(String(e?.message ?? e))
-    }
+  // Asking for a review FILLS THE BOX; it does not send. A button that posts
+  // words in your name the moment it is touched is a button you cannot try,
+  // and the first thing it did was put a sentence nobody wrote into a thread.
+  // Edit it, or delete it, then send — the way you would any other message.
+  const reviewFile = (a: Artifact) => {
+    setThreadBody(`Xem lại giúp mình artifact \`${a.id}\` (${a.title}) — đọc nội dung rồi nói thẳng chỗ nào sai, thiếu, hoặc đáng ngờ.`)
   }
 
   const ordered = useMemo(() => [...msgs].reverse(), [msgs])
@@ -421,7 +413,7 @@ function FileRow({ a, call, onReview, reviewer }: {
       <button
         onClick={onReview}
         disabled={!reviewer}
-        title={reviewer ? `Nhờ ${reviewer} xem lại` : 'Chọn một agent trước'}
+        title={reviewer ? `Soạn sẵn câu nhờ ${reviewer} xem lại — bạn bấm Send` : 'Chọn một agent trước'}
         className="shrink-0 px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40 disabled:opacity-40"
       >
         review

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/session"
 )
@@ -221,7 +222,7 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 		progress = nil // the turn still runs; it just runs unseen
 	}
 
-	sink := &replySink{}
+	sink := &replySink{preview: chat.DefaultPreview()}
 	if progress != nil {
 		sink.onProgress = func(tools []string, partial string, since time.Time) {
 			if err := w.deps.Coord.UpdateMessageBody(progress.ID, workingLine(tools, partial, since)); err != nil {
@@ -525,15 +526,21 @@ type replySink struct {
 	// onProgress is called with the tools used so far and the reply as it
 	// stands. Nil when nobody is watching.
 	onProgress func(tools []string, partial string, since time.Time)
+
+	preview *chat.StreamPreview
 }
 
 const progressEvery = 2 * time.Second
 
+// Write redraws when the answer has grown by enough to be worth reading again
+// — a character threshold rather than a timer, because a timer fires mid-word
+// as often as not and a reader learns more from a paragraph landing whole.
 func (r *replySink) Write(chunk string) {
 	r.mu.Lock()
 	r.b.WriteString(chunk)
+	grown := r.preview.Ready(r.b.String())
 	r.mu.Unlock()
-	r.report(false)
+	r.report(grown)
 }
 
 // NoteTool is the part worth watching: "reading the log" says more about what
@@ -602,7 +609,7 @@ func workingLine(tools []string, partial string, since time.Time) string {
 	}
 	if p := strings.TrimSpace(partial); p != "" {
 		b.WriteString("\n\n")
-		b.WriteString(truncateRunes(p, 600))
+		b.WriteString(chat.DefaultPreview().Cut(p))
 	}
 	return b.String()
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
 )
 
@@ -34,9 +35,11 @@ type progressLine struct {
 	title     string
 	started   time.Time
 
-	mu    sync.Mutex
-	tools []string
-	last  time.Time
+	mu      sync.Mutex
+	tools   []string
+	last    time.Time
+	reply   string
+	preview *chat.StreamPreview
 }
 
 const progressEvery = 3 * time.Second
@@ -69,7 +72,7 @@ func openProgress(db *coord.DB, task *coord.Task) *progressLine {
 
 	p := &progressLine{
 		db: db, channelID: channelID, taskID: task.ID,
-		title: task.Title, started: time.Now(),
+		title: task.Title, started: time.Now(), preview: chat.DefaultPreview(),
 	}
 	msg, _, err := db.PostMessage(coord.NewChannelMessage{
 		ChannelID: channelID, ThreadRoot: rootID,
@@ -110,6 +113,27 @@ func (p *progressLine) Tool(name string) {
 	}
 }
 
+// Text shows the answer as it forms. The threshold is a character count, not a
+// timer: a timer fires mid-word as often as not, and the point of watching is
+// to see the reasoning arrive in readable pieces.
+func (p *progressLine) Text(chunk string) {
+	if p == nil || chunk == "" {
+		return
+	}
+	p.mu.Lock()
+	p.reply += chunk
+	grown := p.preview.Ready(p.reply)
+	body := p.bodyLocked()
+	p.mu.Unlock()
+
+	if !grown {
+		return
+	}
+	if err := p.db.UpdateMessageBody(p.messageID, body); err != nil {
+		log.Printf("taskrunner: progress update: %v", err)
+	}
+}
+
 // Close removes the line. The result belongs to the reporter, which posts it
 // when the task itself finishes rather than when one run of it does.
 func (p *progressLine) Close() {
@@ -140,6 +164,11 @@ func (p *progressLine) bodyLocked() string {
 	}
 	if t := strings.TrimSpace(p.title); t != "" {
 		fmt.Fprintf(&b, "\n\n%s", t)
+	}
+	// What it is actually saying, once it starts saying anything. This is the
+	// part a person waiting wants; the tool names above are context for it.
+	if r := strings.TrimSpace(p.reply); r != "" {
+		fmt.Fprintf(&b, "\n\n%s", p.preview.Cut(r))
 	}
 	return b.String()
 }
