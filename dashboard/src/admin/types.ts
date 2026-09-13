@@ -133,7 +133,8 @@ export interface TaskDetail {
   runs: TaskRun[]
   children: Task[]
   context_count?: number
-  context_cap?: number // the tasks it split off (`bomclaw task sub`); empty for a leaf
+  context_cap?: number
+  thread_root?: string // the tasks it split off (`bomclaw task sub`); empty for a leaf
 }
 
 export interface Message {

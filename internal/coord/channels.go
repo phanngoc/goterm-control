@@ -433,6 +433,59 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 	return m, wake, nil
 }
 
+// BindThreadToTask makes a thread the conversation about a task. The binding
+// lives on the thread's root message, which is why a task can be attached to a
+// conversation that started as a question — most work does, and until this the
+// only way to bind was to already know the task id when the first line was
+// written, which is never when a conversation becomes work.
+//
+// One thread, one task: a thread that discusses two pieces of work gives the
+// agent finishing either one nowhere unambiguous to report back to.
+func (db *DB) BindThreadToTask(rootID, taskID string) error {
+	root, err := db.getMessage(rootID)
+	if err != nil {
+		return err
+	}
+	if root.ThreadRoot != "" {
+		return fmt.Errorf("coord: %s is a reply, not a thread root — bind %s instead", rootID, root.ThreadRoot)
+	}
+	if root.TaskID != "" && root.TaskID != taskID {
+		return fmt.Errorf("coord: that thread is already about task %s", root.TaskID)
+	}
+	if _, err := db.GetTask(taskID); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`UPDATE channel_messages SET task_id = ? WHERE id = ?`, taskID, rootID); err != nil {
+		return fmt.Errorf("bind %s to %s: %w", rootID, taskID, err)
+	}
+	return nil
+}
+
+// TaskThread finds the thread a task was opened from, or "" when it was not
+// opened from a conversation. The channel comes back with it: a report has to
+// know which room to go to, not just which message.
+func (db *DB) TaskThread(taskID string) (rootID, channelID string, err error) {
+	row := db.conn.QueryRow(`SELECT id, channel_id FROM channel_messages
+		WHERE task_id = ? AND thread_root = '' ORDER BY created_at LIMIT 1`, taskID)
+	switch err := row.Scan(&rootID, &channelID); {
+	case err == sql.ErrNoRows:
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("thread of task %s: %w", taskID, err)
+	}
+	return rootID, channelID, nil
+}
+
+// MessageChannel is the room a message lives in. Callers that already named a
+// message should not have to also name its channel — the database knows.
+func (db *DB) MessageChannel(id string) (string, error) {
+	m, err := db.getMessage(id)
+	if err != nil {
+		return "", err
+	}
+	return m.ChannelID, nil
+}
+
 // threadAgents lists the agents that have spoken in a thread — its root
 // included, since the root is what started it.
 func (db *DB) threadAgents(rootID string) ([]Member, error) {

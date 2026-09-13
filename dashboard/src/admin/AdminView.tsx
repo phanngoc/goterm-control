@@ -26,6 +26,12 @@ const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
 export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pane; onPane: (p: Pane) => void }) {
   const [data, setData] = useState<OverviewData | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  // Work and the conversation it came out of live in two panes. These carry a
+  // click from one to the other: a task id the board should open, a thread the
+  // room should open. Cleared once handed over, so returning to a pane later
+  // does not reopen what you already closed.
+  const [openTask, setOpenTask] = useState<string>('')
+  const [openThread, setOpenThread] = useState<string>('')
 
   // The overview drives the agent list every other pane filters by, so it is
   // refreshed regardless of which pane is showing.
@@ -92,10 +98,22 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
       <div className="flex-1 min-h-0">
         {pane === 'overview' && <Overview data={data} />}
         {pane === 'traces' && <TraceExplorer call={call} agents={agentIDs} />}
-        {pane === 'tasks' && <TaskBoard call={call} agents={agentIDs} />}
+        {pane === 'tasks' && (
+          <TaskBoard
+            call={call} agents={agentIDs}
+            openTaskID={openTask} onOpenedTask={() => setOpenTask('')}
+            onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
+          />
+        )}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
-        {pane === 'messages' && <ChannelView call={call} agents={agentIDs} selfID={selfID} />}
+        {pane === 'messages' && (
+          <ChannelView
+            call={call} agents={agentIDs} selfID={selfID}
+            openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
+            onOpenTask={taskID => { setOpenTask(taskID); onPane('tasks') }}
+          />
+        )}
       </div>
     </div>
   )

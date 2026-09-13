@@ -170,7 +170,40 @@ func (r *Reporter) Tick() {
 		}
 
 		r.notify(Format(&task))
+		r.reportToThread(&task)
 		log.Printf("reporter: delivered %s (%s) for task %s", task.State, task.ClaimedBy, task.ID)
+	}
+}
+
+// reportToThread puts the outcome back where the work was asked for. A task
+// that came out of a conversation has someone waiting in that conversation,
+// and making them go and watch a board for the answer to a question they asked
+// in a room is how a team stops using the room.
+//
+// Best effort, and deliberately after the owner's notification: the delivery
+// is already claimed by then, so a failure here costs a thread post, never the
+// report itself. It rides on that same claim, so two gateways cannot both post.
+//
+// Authored by the agent that ran the task rather than the one reporting — the
+// reader wants to know who did the work. An agent's line in a thread wakes
+// nobody, which is right: this is an answer, not a summons.
+func (r *Reporter) reportToThread(t *coord.Task) {
+	rootID, channelID, err := r.db.TaskThread(t.ID)
+	if err != nil {
+		log.Printf("reporter: thread of %s: %v", t.ID, err)
+		return
+	}
+	if rootID == "" {
+		return // not work that came out of a conversation
+	}
+	author := t.ClaimedBy
+	if author == "" {
+		author = r.cfg.AgentID
+	}
+	if _, _, err := r.db.PostMessage(coord.NewChannelMessage{
+		ChannelID: channelID, ThreadRoot: rootID, AuthorID: author, Body: Format(t),
+	}); err != nil {
+		log.Printf("reporter: report %s into thread %s: %v", t.ID, rootID, err)
 	}
 }
 

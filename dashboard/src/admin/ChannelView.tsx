@@ -13,8 +13,9 @@ type Call = (method: string, params?: any) => Promise<any>
 
 const OWNER = 'owner'
 
-export default function ChannelView({ call, agents, selfID }: {
+export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask }: {
   call: Call; agents: string[]; selfID: string
+  openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
 }) {
   const [channels, setChannels] = useState<Channel[]>([])
   const [active, setActive] = useState<string>('')
@@ -72,6 +73,20 @@ export default function ChannelView({ call, agents, selfID }: {
   }, [loadChannels])
 
   useEffect(() => { loadMessages(active) }, [active, loadMessages])
+
+  // Arriving from the board: open the conversation the task came out of.
+  useEffect(() => {
+    if (!openThreadID) return
+    call('channels.messages', { thread_root: openThreadID })
+      .then((t: ChannelMessage[]) => {
+        if (!t?.length) return
+        setActive(t[0].channel_id)
+        setThread(t)
+        setThreadRoot(openThreadID)
+      })
+      .catch((e: any) => setErr(String(e?.message ?? e)))
+      .finally(() => onOpenedThread?.())
+  }, [openThreadID, call, onOpenedThread])
 
   // Poll: an agent posting from its own shell has no way to push to this page.
   useEffect(() => {
@@ -164,7 +179,7 @@ export default function ChannelView({ call, agents, selfID }: {
             </div>
           )}
           {ordered.map(m => (
-            <Line key={m.id} m={m} selfID={selfID} onThread={() => loadThread(m.id)} />
+            <Line key={m.id} m={m} selfID={selfID} onThread={() => loadThread(m.id)} onOpenTask={onOpenTask} />
           ))}
           <div ref={bottom} />
         </div>
@@ -189,7 +204,7 @@ export default function ChannelView({ call, agents, selfID }: {
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {thread.map((m, i) => (
               <div key={m.id} className={i === 0 ? '' : 'pl-3 border-l border-gray-800'}>
-                <Line m={m} selfID={selfID} compact />
+                <Line m={m} selfID={selfID} compact onOpenTask={onOpenTask} />
               </div>
             ))}
           </div>
@@ -225,8 +240,9 @@ function ChannelRow({ c, active, onPick }: { c: Channel; active: boolean; onPick
   )
 }
 
-function Line({ m, selfID, compact, onThread }: {
-  m: ChannelMessage; selfID: string; compact?: boolean; onThread?: () => void
+function Line({ m, selfID, compact, onThread, onOpenTask }: {
+  m: ChannelMessage; selfID: string; compact?: boolean
+  onThread?: () => void; onOpenTask?: (taskID: string) => void
 }) {
   const mine = m.author_kind === 'user'
   return (
@@ -238,9 +254,14 @@ function Line({ m, selfID, compact, onThread }: {
           {m.author_kind === 'user' ? 'you' : m.author_id}
         </span>
         {m.task_id && (
-          <span className="px-1.5 rounded ring-1 ring-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300 font-mono">
+          <button
+            onClick={() => onOpenTask?.(m.task_id!)}
+            disabled={!onOpenTask}
+            title="Open this task on the board"
+            className="px-1.5 rounded ring-1 ring-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300 font-mono enabled:hover:bg-fuchsia-500/20"
+          >
             {m.task_id.slice(0, 10)}
-          </span>
+          </button>
         )}
         {m.mentions?.map(w => (
           <span key={w} className="px-1.5 rounded bg-amber-500/15 text-amber-300 font-mono">@{w}</span>

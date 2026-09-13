@@ -470,3 +470,84 @@ func TestThreadFollowUpSkipsTheAuthor(t *testing.T) {
 		}
 	}
 }
+
+// TestBindThreadToTask: most work starts as a question, so binding has to be
+// possible after the thread exists — not only when the first line is written.
+func TestBindThreadToTask(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+
+	root, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+		Body: "@bomclaw2 log hôm qua có gì lạ không",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.CreateTask(NewTask{CreatedBy: "bomclaw2", Title: "đọc log hôm qua"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	// Both directions resolve.
+	gotRoot, gotChannel, err := db.TaskThread(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRoot != root.ID || gotChannel != GeneralChannelID {
+		t.Fatalf("TaskThread: got %s in %s, want %s in %s", gotRoot, gotChannel, root.ID, GeneralChannelID)
+	}
+	line, _ := db.ChannelMessages(GeneralChannelID, 10)
+	if line[0].TaskID != task.ID {
+		t.Fatalf("thread root does not carry the task: %q", line[0].TaskID)
+	}
+
+	// Rebinding to the same task is not an error — a retry must not fail.
+	if err := db.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatalf("rebinding the same task should be a no-op: %v", err)
+	}
+
+	// One thread, one task: two would leave an agent nowhere unambiguous to
+	// report back to.
+	other, _ := db.CreateTask(NewTask{CreatedBy: "bomclaw2", Title: "việc khác"})
+	err = db.BindThreadToTask(root.ID, other.ID)
+	if err == nil || !strings.Contains(err.Error(), task.ID) {
+		t.Fatalf("second task should be refused and name the first, got %v", err)
+	}
+}
+
+// TestBindRejectsAReply: the binding lives on the root, because the root is
+// what a reader clicks and what a reporter posts under.
+func TestBindRejectsAReply(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw2")
+	root, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "@bomclaw2 hi",
+	})
+	reply, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw2", Body: "ừ",
+	})
+	task, _ := db.CreateTask(NewTask{CreatedBy: "bomclaw2", Title: "việc"})
+
+	err := db.BindThreadToTask(reply.ID, task.ID)
+	if err == nil || !strings.Contains(err.Error(), root.ID) {
+		t.Fatalf("binding a reply should be refused and point at the root, got %v", err)
+	}
+}
+
+// TestTaskWithoutAThread: work queued from the CLI or a schedule has no
+// conversation, and must not invent one.
+func TestTaskWithoutAThread(t *testing.T) {
+	db := testDB(t)
+	task, _ := db.CreateTask(NewTask{CreatedBy: "human", Title: "việc từ lịch"})
+	root, channel, err := db.TaskThread(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != "" || channel != "" {
+		t.Fatalf("a task with no conversation reported one: %s / %s", root, channel)
+	}
+}
