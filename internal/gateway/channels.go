@@ -204,6 +204,42 @@ func handleProjectBrief(deps Deps, params json.RawMessage) (json.RawMessage, err
 	})
 }
 
+type projectFilesParams struct {
+	ChannelID string `json:"channel_id"`
+	Path      string `json:"path,omitempty"` // relative to the project folder; "" is its root
+	// Read asks for one file's contents instead of a directory listing.
+	Read bool `json:"read,omitempty"`
+}
+
+// handleProjectFiles browses a project's folder — the place the work actually
+// lands, which until now could only be seen from a terminal.
+func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p projectFilesParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ChannelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	if !p.Read {
+		entries, err := deps.Coord.ProjectFiles(p.ChannelID, p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"path": p.Path, "entries": entries})
+	}
+	body, truncated, binary, err := deps.Coord.ReadProjectFile(p.ChannelID, p.Path)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"path": p.Path, "body": body, "truncated": truncated, "binary": binary,
+	})
+}
+
 type channelReadParams struct {
 	ChannelID string `json:"channel_id"`
 	As        string `json:"as,omitempty"`

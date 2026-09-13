@@ -38,6 +38,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   const [files, setFiles] = useState<Artifact[]>([])
   const [more, setMore] = useState(false)
   const [briefFor, setBriefFor] = useState('')
+  const [filesFor, setFilesFor] = useState('')
   const sending = useRef(false)
   const loadingOlder = useRef(false)
   const scroller = useRef<HTMLDivElement>(null)
@@ -242,6 +243,15 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
           {current?.purpose && <span className="text-xs text-gray-500 truncate">{current.purpose}</span>}
           {current?.workspace && (
             <button
+              onClick={() => setFilesFor(current.id)}
+              title={current.workspace}
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              Files
+            </button>
+          )}
+          {current?.workspace && (
+            <button
               onClick={() => setBriefFor(current.id)}
               title={current.workspace}
               className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
@@ -290,6 +300,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
       </div>
 
       {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
+      {filesFor && <FileBrowser call={call} channelID={filesFor} root={current?.workspace ?? ''} onClose={() => setFilesFor('')} />}
 
       {/* Thread */}
       {thread && (
@@ -702,6 +713,130 @@ function BriefEditor({ call, channelID, onClose }: { call: Call; channelID: stri
             className="px-3 py-1.5 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
           >{busy ? 'đang lưu…' : 'Lưu'}</button>
         </footer>
+      </div>
+    </div>
+  )
+}
+
+interface ProjectEntry {
+  name: string
+  path: string
+  dir: boolean
+  bytes: number
+  mtime: string
+}
+
+// FileBrowser looks inside a project's folder — the place the work actually
+// lands. Until now the only way to see it was a terminal, which is fine for
+// whoever set the machine up and useless for checking whether an agent wrote
+// the thing it said it wrote.
+function FileBrowser({ call, channelID, root, onClose }: {
+  call: Call; channelID: string; root: string; onClose: () => void
+}) {
+  const [path, setPath] = useState('')
+  const [entries, setEntries] = useState<ProjectEntry[] | null>(null)
+  const [file, setFile] = useState<{ path: string; body: string; truncated: boolean; binary: boolean } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFile(null)
+    call('channels.files', { channel_id: channelID, path })
+      .then((r: any) => { setEntries(r?.entries ?? []); setErr(null) })
+      .catch((e: any) => setErr(String(e?.message ?? e)))
+  }, [call, channelID, path])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { file ? setFile(null) : onClose() } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [file, onClose])
+
+  const open = async (e: ProjectEntry) => {
+    if (e.dir) { setPath(e.path); return }
+    try {
+      const r = await call('channels.files', { channel_id: channelID, path: e.path, read: true })
+      setFile({ path: e.path, body: r?.body ?? '', truncated: !!r?.truncated, binary: !!r?.binary })
+      setErr(null)
+    } catch (x: any) {
+      setErr(String(x?.message ?? x))
+    }
+  }
+
+  // Breadcrumbs, so a reader can tell where they are and get back out.
+  const parts = path ? path.split('/') : []
+  const up = () => setPath(parts.slice(0, -1).join('/'))
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
+      <div
+        onClick={e => e.stopPropagation()}
+        className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
+      >
+        <header className="flex items-baseline gap-2 px-5 py-3 border-b border-gray-800 text-sm">
+          <button onClick={() => { setPath(''); setFile(null) }} className="text-gray-200 font-medium hover:text-sky-300">
+            {root.split('/').pop() || 'project'}
+          </button>
+          {parts.map((p, i) => (
+            <span key={i} className="text-gray-500">
+              /{' '}
+              <button
+                onClick={() => { setPath(parts.slice(0, i + 1).join('/')); setFile(null) }}
+                className="hover:text-sky-300"
+              >{p}</button>
+            </span>
+          ))}
+          <span className="ml-auto text-[11px] text-gray-600 font-mono truncate">{root}</span>
+          <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">close</button>
+        </header>
+
+        {err && <div className="px-5 pt-3 text-xs text-red-300">{err}</div>}
+
+        <div className="flex-1 overflow-y-auto">
+          {file ? (
+            <div className="px-6 py-4">
+              <button onClick={() => setFile(null)} className="mb-3 text-xs text-gray-500 hover:text-sky-300">
+                ← quay lại thư mục
+              </button>
+              {file.binary ? (
+                <p className="text-sm text-gray-500">File nhị phân — không hiển thị được ở đây.</p>
+              ) : file.path.toLowerCase().endsWith('.md') ? (
+                <MessageMarkdown wide>{file.body}</MessageMarkdown>
+              ) : (
+                <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap break-words">{file.body}</pre>
+              )}
+              {file.truncated && (
+                <p className="mt-4 text-xs text-amber-300">File dài hơn phần hiển thị — mở trực tiếp để đọc hết.</p>
+              )}
+            </div>
+          ) : entries === null ? (
+            <div className="px-6 py-4 text-sm text-gray-500">Loading…</div>
+          ) : entries.length === 0 ? (
+            <div className="px-6 py-4 text-sm text-gray-500">Thư mục trống.</div>
+          ) : (
+            <ul className="px-3 py-2">
+              {path && (
+                <li>
+                  <button onClick={up} className="w-full text-left px-3 py-1.5 text-sm text-gray-500 hover:text-sky-300">
+                    ..
+                  </button>
+                </li>
+              )}
+              {entries.map(e => (
+                <li key={e.path}>
+                  <button
+                    onClick={() => open(e)}
+                    className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-3 hover:bg-gray-900 rounded"
+                  >
+                    <span className={e.dir ? 'text-sky-300' : 'text-gray-200'}>
+                      {e.dir ? `${e.name}/` : e.name}
+                    </span>
+                    {!e.dir && <span className="ml-auto text-[11px] text-gray-600">{e.bytes} B</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   )
