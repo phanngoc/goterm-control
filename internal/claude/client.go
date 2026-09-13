@@ -15,6 +15,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
@@ -458,4 +459,15 @@ func cliError(resumeID, result string, details []string, stderr string) error {
 		}
 	}
 	return fmt.Errorf("claude error: %s", message)
+}
+
+// Registering here rather than in internal/bot is what keeps bot from having to
+// know this package exists. The blank import in cmd/bomclaw is what runs it.
+func init() {
+	chat.Register(models.APIClaudeCLI, func(d chat.Deps) chat.Client {
+		c := New(d.SystemPrompt, d.Executor)
+		c.SetWorkspace(d.Workspace)
+		c.SetPool(d.Pool)
+		return c
+	})
 }

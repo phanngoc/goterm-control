@@ -5,7 +5,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/models"
+
+	// Imported for their init(): each registers itself as a chat backend.
+	// Validate asks the registry which backends exist, so a package that used
+	// config without importing a provider would find it empty and reject every
+	// valid config. Registration belongs next to the code that depends on it,
+	// not left to whoever happens to import a provider for another reason.
+	_ "github.com/ngocp/goterm-control/internal/claude"
+	_ "github.com/ngocp/goterm-control/internal/codex"
 	"gopkg.in/yaml.v3"
 )
 
@@ -448,29 +457,44 @@ func (c *Config) Validate() error {
 	if c.Telegram.Token == "" {
 		return fmt.Errorf("telegram.token is required (set TELEGRAM_TOKEN env var or config)")
 	}
-	switch c.Provider {
-	case ProviderClaude:
-		if c.Claude.APIKey == "" {
-			return fmt.Errorf("claude.api_key is required (set ANTHROPIC_API_KEY env var or config)")
-		}
-	case ProviderCodex:
-		// Codex authenticates itself via `codex login`; no key lives here.
-		// Guard the model though: NewResolver silently falls back to the first
-		// builtin (a claude model) when the configured id is unknown, and the
-		// codex CLI would then reject every turn with a 400.
-		want := c.Models.Default
-		if want == "" {
-			want = c.Claude.Model
-		}
-		m := models.NewResolver(want, c.Models.Custom).Lookup(want)
-		if m == nil || m.API != models.APICodexCLI {
-			return fmt.Errorf("provider %q needs a codex model, but models.default/claude.model is %q; "+
-				"use a model with api: codex-cli (e.g. gpt-6-astra)", ProviderCodex, want)
-		}
-	default:
-		return fmt.Errorf("provider must be %q or %q, got %q", ProviderClaude, ProviderCodex, c.Provider)
+	// The provider and the model have to agree, because the model's API is what
+	// actually selects the backend (chat.Resolve). NewResolver falls back to the
+	// first builtin — a claude model — when the configured id is unknown, so a
+	// typo in models.default would otherwise turn a codex agent into a claude
+	// one at startup and reject every turn with a 400 much later.
+	want := c.Models.Default
+	if want == "" {
+		want = c.Claude.Model
+	}
+	m := models.NewResolver(want, c.Models.Custom).Lookup(want)
+	if m == nil {
+		return fmt.Errorf("models.default/claude.model %q is not a known model", want)
+	}
+	if !chat.Supports(m.API) {
+		return fmt.Errorf("no backend for model %q (api %q); registered: %v", want, m.API, chat.Registered())
+	}
+	if want := providerFor(m.API); want != "" && c.Provider != want {
+		return fmt.Errorf("provider is %q but model %q speaks %q — use provider: %s, "+
+			"or a model whose api matches", c.Provider, m.ID, m.API, want)
+	}
+	if c.Provider == ProviderClaude && c.Claude.APIKey == "" {
+		return fmt.Errorf("claude.api_key is required (set ANTHROPIC_API_KEY env var or config)")
 	}
 	return nil
+}
+
+// providerFor maps a model API back to the provider key that config uses, for
+// the two that predate the registry. A backend added later needs no entry: the
+// check above simply does not apply to it, which is better than a list that
+// silently rejects anything not in it.
+func providerFor(api models.ModelAPI) string {
+	switch api {
+	case models.APIClaudeCLI:
+		return ProviderClaude
+	case models.APICodexCLI:
+		return ProviderCodex
+	}
+	return ""
 }
 
 func (c *SecurityConfig) IsAllowed(userID int64) bool {

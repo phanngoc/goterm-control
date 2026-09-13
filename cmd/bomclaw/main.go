@@ -25,6 +25,8 @@ import (
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/browserbridge"
 	"github.com/ngocp/goterm-control/internal/channel"
+	// Also imported for their init(), which registers each as a chat backend
+	// (internal/chat/registry.go). Used directly here only by the titler.
 	"github.com/ngocp/goterm-control/internal/claude"
 	"github.com/ngocp/goterm-control/internal/codex"
 	"github.com/ngocp/goterm-control/internal/config"

@@ -78,19 +78,38 @@ func NewChatClient(cfg *config.Config, executor *tools.Executor) chat.Client {
 	return NewChatClientWithPool(cfg, executor, nil)
 }
 
+// modelAPI is the protocol this agent's default model speaks, which is what
+// decides the backend. config.Validate has already checked that it agrees with
+// cfg.Provider, so by the time anything calls this the two cannot disagree.
+func modelAPI(cfg *config.Config) models.ModelAPI {
+	want := cfg.Models.Default
+	if want == "" {
+		want = cfg.Claude.Model
+	}
+	if m := models.NewResolver(want, cfg.Models.Custom).Lookup(want); m != nil {
+		return m.API
+	}
+	return models.APIClaudeCLI
+}
+
 // NewChatClientWithPool is NewChatClient with a credential pool attached. A
 // nil or empty pool leaves the client running on the ambient credentials,
 // which is what every install without an `accounts:` section does.
 func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *credentials.Pool) chat.Client {
-	if cfg.Provider == config.ProviderCodex {
-		c := codex.New(cfg.Claude.SystemPrompt)
-		c.SetWorkspace(cfg.Claude.Workspace)
-		c.SetPool(pool)
-		return c
+	api := modelAPI(cfg)
+	c, err := chat.Resolve(api, chat.Deps{
+		SystemPrompt: cfg.Claude.SystemPrompt,
+		Workspace:    cfg.Claude.Workspace,
+		Executor:     executor,
+		Pool:         pool,
+	})
+	if err != nil {
+		// Unreachable through config, which validates against the same
+		// registry. Reachable by a caller passing a hand-built Config, and
+		// then loud is the only safe answer: the old code fell back to claude
+		// here, so an agent could report one backend and run another.
+		panic(err)
 	}
-	c := claude.New(cfg.Claude.SystemPrompt, executor)
-	c.SetWorkspace(cfg.Claude.Workspace)
-	c.SetPool(pool)
 	return c
 }
 
@@ -98,18 +117,45 @@ func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *c
 // the other backend are ignored: an agent runs one CLI, and a codex login is
 // unreadable by claude.
 func PoolFromConfig(cfg *config.Config) (*credentials.Pool, error) {
-	accts := make([]credentials.Account, 0, len(cfg.Accounts.Pool))
+	pools, err := PoolsFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return pools[cfg.Provider], nil
+}
+
+// PoolsFromConfig builds one pool per provider named in accounts.pool, plus an
+// empty one for this agent's own provider so callers never get a nil.
+//
+// The single-pool version silently dropped every account belonging to another
+// backend — fine while an agent could only ever be one of two things, a trap
+// once a machine runs three agents on three CLIs and someone lists all their
+// logins in one file and wonders why half are ignored.
+func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
+	byProvider := map[string][]credentials.Account{cfg.Provider: nil}
 	for _, a := range cfg.Accounts.Pool {
-		accts = append(accts, credentials.Account{
+		provider := a.Provider
+		if provider == "" {
+			provider = cfg.Provider
+		}
+		byProvider[provider] = append(byProvider[provider], credentials.Account{
 			Name:      a.Name,
-			Provider:  a.Provider,
+			Provider:  provider,
 			ConfigDir: a.ConfigDir,
 			APIKey:    a.APIKey,
 			APIKeyEnv: a.APIKeyEnv,
 		})
 	}
-	return credentials.NewPool(cfg.Provider, accts,
-		time.Duration(cfg.Accounts.CooldownMinutes)*time.Minute)
+	cooldown := time.Duration(cfg.Accounts.CooldownMinutes) * time.Minute
+	out := make(map[string]*credentials.Pool, len(byProvider))
+	for provider, accts := range byProvider {
+		p, err := credentials.NewPool(provider, accts, cooldown)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", provider, err)
+		}
+		out[provider] = p
+	}
+	return out, nil
 }
 
 func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *session.Manager) (*Bot, error) {
