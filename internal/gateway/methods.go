@@ -47,6 +47,15 @@ type Deps struct {
 	ProviderName string          // "claude" | "codex", for trace metadata
 	Trace        *trace.Recorder // nil-safe: nil disables tracing on this path
 
+	// ConfigPath is this agent's own config file. The settings screen edits it;
+	// nothing else writes it.
+	ConfigPath string
+
+	// Restart restarts this agent's own service, for the settings screen. Nil
+	// when the gateway was not started by a service manager, in which case the
+	// screen says so rather than editing a file nothing will reload.
+	Restart func() error
+
 	// PokeTasks asks the local task runner to check the queue immediately.
 	// Nil when this agent does not claim tasks.
 	PokeTasks func()
@@ -153,6 +162,10 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleBrowserCall(ctx, deps, params)
 
 		// --- admin / observability ---
+		case "admin.settings":
+			return handleAdminSettings(deps)
+		case "admin.set_model":
+			return handleAdminSetModel(deps, params)
 		case "admin.overview":
 			return handleAdminOverview(deps)
 		case "traces.list":
