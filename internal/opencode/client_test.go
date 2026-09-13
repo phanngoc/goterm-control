@@ -144,3 +144,41 @@ func TestClientSatisfiesChatClient(t *testing.T) {
 	var _ chat.Client = New("")
 	var _ tools.ToolResult = toolResult(&toolState{})
 }
+
+// Captured verbatim from `opencode run --format json --model
+// opencode/muse-spark-1.3-contributor-free` on 2026-09-13. Tests written
+// against invented JSON prove only that the invention parses.
+const realStepFinish = `{"type":"step_finish","timestamp":1789268656890,"sessionID":"ses_f67470e8bffebibXTlEg4Cbl0g",` +
+	`"part":{"id":"prt_098b902f000175NXg2AXKm824D","reason":"stop","type":"step-finish",` +
+	`"tokens":{"total":12726,"input":12491,"output":15,"reasoning":107,"cache":{"write":0,"read":113}},"cost":0}}`
+
+const realTextFromTheCLI = `{"type":"text","timestamp":1789268656815,"sessionID":"ses_f67470e8bffebibXTlEg4Cbl0g",` +
+	`"part":{"id":"prt_098b9027a001VV81yVfE1HiT0j","type":"text","text":"Tôi chạy được rồi.",` +
+	`"time":{"start":1789268656762,"end":1789268656813}}}`
+
+func TestParseCapturedStepFinish(t *testing.T) {
+	var ev event
+	if err := json.Unmarshal([]byte(realStepFinish), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev.Part == nil || ev.Part.Tokens == nil {
+		t.Fatal("token usage was dropped — the memory flush reads this")
+	}
+	u := ev.Part.Tokens
+	if u.Input != 12491 || u.Output != 15 || u.Cache.Read != 113 {
+		t.Fatalf("usage parsed wrong: %+v", u)
+	}
+}
+
+func TestParseCapturedText(t *testing.T) {
+	var ev event
+	if err := json.Unmarshal([]byte(realTextFromTheCLI), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev.Part.Text != "Tôi chạy được rồi." {
+		t.Fatalf("text: %q", ev.Part.Text)
+	}
+	if ev.SessionID != "ses_f67470e8bffebibXTlEg4Cbl0g" {
+		t.Fatalf("session id: %q", ev.SessionID)
+	}
+}

@@ -22,10 +22,25 @@ type event struct {
 }
 
 type part struct {
-	Type  string     `json:"type"`  // text | tool | step-start | step-finish | reasoning
-	Text  string     `json:"text,omitempty"`
-	Tool  string     `json:"tool,omitempty"`
-	State *toolState `json:"state,omitempty"`
+	Type   string     `json:"type"` // text | tool | step-start | step-finish | reasoning
+	Text   string     `json:"text,omitempty"`
+	Tool   string     `json:"tool,omitempty"`
+	State  *toolState `json:"state,omitempty"`
+	Tokens *usage     `json:"tokens,omitempty"` // step-finish only
+}
+
+// usage rides on the step-finish part. It matters beyond bookkeeping: the
+// memory flush fires on how much context a turn actually carried
+// (session.LastContextTokens), so a backend that reports nothing here never
+// flushes and its agent's memory grows until the CLI truncates it.
+type usage struct {
+	Input     int `json:"input"`
+	Output    int `json:"output"`
+	Reasoning int `json:"reasoning"`
+	Cache     struct {
+		Read  int `json:"read"`
+		Write int `json:"write"`
+	} `json:"cache"`
 }
 
 type toolState struct {

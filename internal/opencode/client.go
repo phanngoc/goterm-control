@@ -225,6 +225,16 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 				cb.OnToolResult(name, toolResult(ev.Part.State))
 			}
 
+		case "step_finish":
+			// Not bookkeeping: the threshold memory flush reads what the turn
+			// actually carried, so a backend that stays silent here never
+			// flushes. Cached input counts — it is context the model saw.
+			if ev.Part != nil && ev.Part.Tokens != nil {
+				u := ev.Part.Tokens
+				sess.AddTokens(u.Input, u.Output)
+				sess.SetLastContextTokens(u.Input + u.Cache.Read)
+			}
+
 		case "error":
 			return abort(fmt.Errorf("opencode error: %s", errorText(ev.Error, lastErrLine)))
 		}
