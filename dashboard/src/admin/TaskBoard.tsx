@@ -250,7 +250,17 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask }: {
                 <div><dt className="text-gray-600">created by</dt><dd className="font-mono text-gray-300">{t.created_by}</dd></div>
                 <div><dt className="text-gray-600">claimed by</dt><dd className="font-mono text-gray-300">{t.claimed_by || '—'}</dd></div>
                 <div><dt className="text-gray-600">assigned to</dt><dd className="font-mono text-gray-300">{t.assigned_to || 'any'}</dd></div>
-                <div><dt className="text-gray-600">context</dt><dd className="font-mono text-gray-300 truncate">{t.context_id}</dd></div>
+                <div>
+                  <dt className="text-gray-600">context</dt>
+                  <dd className="font-mono text-gray-300 truncate">
+                    {t.context_id}
+                    {!!detail.context_cap && (
+                      <span className={detail.context_count! >= detail.context_cap ? 'ml-1 text-amber-400' : 'ml-1 text-gray-500'}>
+                        {detail.context_count}/{detail.context_cap}
+                      </span>
+                    )}
+                  </dd>
+                </div>
               </dl>
 
               {t.parent_id && (

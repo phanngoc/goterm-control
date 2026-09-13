@@ -131,7 +131,9 @@ export interface TaskDetail {
   task: Task
   events: TaskEvent[]
   runs: TaskRun[]
-  children: Task[] // the tasks it split off (`bomclaw task sub`); empty for a leaf
+  children: Task[]
+  context_count?: number
+  context_cap?: number // the tasks it split off (`bomclaw task sub`); empty for a leaf
 }
 
 export interface Message {

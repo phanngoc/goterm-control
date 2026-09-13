@@ -133,6 +133,12 @@ type TaskDetail struct {
 	Events   []coord.TaskEvent `json:"events"`
 	Runs     []coord.TaskRun   `json:"runs"`
 	Children []coord.Task      `json:"children"` // the tasks it split off; empty for a leaf
+
+	// How big this piece of work has grown, against the cap that refuses the
+	// next child. Counted server-side: the board's own list is truncated by
+	// its limit, so counting there would be quietly wrong on a large tree.
+	ContextCount int `json:"context_count"`
+	ContextCap   int `json:"context_cap"`
 }
 
 func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -159,7 +165,14 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(TaskDetail{Task: task, Events: events, Runs: runs, Children: children})
+	inContext, err := deps.Coord.TasksInContext(task.ContextID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(TaskDetail{
+		Task: task, Events: events, Runs: runs, Children: children,
+		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
+	})
 }
 
 type taskResumeParams struct {

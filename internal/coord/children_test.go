@@ -237,3 +237,80 @@ func TestParentWakesWithAnArtifactIndexNotTheContent(t *testing.T) {
 		t.Errorf("checkpoint is %d bytes for one child; the index should be small", n)
 	}
 }
+
+// TestContextCapStopsTheTreeFromSpreading: MaxOpenChildren and MaxDepth are
+// both local — eight wide and five deep is 32768 tasks between them, and
+// neither cap can see that number. This one can.
+func TestContextCapStopsTheTreeFromSpreading(t *testing.T) {
+	db := testDB(t)
+	db.SetMaxTasksPerContext(5) // the root plus four children
+
+	db.CreateTask(NewTask{CreatedBy: "human", Title: "Big piece of work", AssignedTo: "a1"})
+	parent, _ := claimStart(t, db, "a1")
+
+	body := "Placeholder child with a brief long enough to pass the minimum body rule."
+	for i := 0; i < 4; i++ {
+		if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "child", Body: body}); err != nil {
+			t.Fatalf("child %d: %v", i+1, err)
+		}
+	}
+
+	_, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "one too many", Body: body})
+	if err == nil {
+		t.Fatal("the 6th task in the context was allowed")
+	}
+	// The agent reading this has to decide what to drop, so the numbers matter.
+	for _, want := range []string{"5 tasks", "max 5"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should say %q, got: %v", want, err)
+		}
+	}
+
+	// Finishing one must NOT free a slot: the cap is about how big this piece
+	// of work was allowed to become, and that is already answered.
+	children, _ := db.Children(parent.ID)
+	if err := db.CancelTask(children[0].ID, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateSubTask(parent.ID, "a1", NewTask{Title: "still too many", Body: body}); err == nil {
+		t.Error("cancelling a child reopened the tree-wide cap")
+	}
+}
+
+// TestContextCapIsPerTree: one piece of work hitting the cap must not stop
+// another. Separate databases because ClaimTask takes the oldest claimable
+// task, which in one database would be a child of the tree being filled.
+func TestContextCapIsPerTree(t *testing.T) {
+	body := "Placeholder child with a brief long enough to pass the minimum body rule."
+	fill := func(db *DB, agent string) *Task {
+		db.SetMaxTasksPerContext(2)
+		db.CreateTask(NewTask{CreatedBy: "human", Title: "work", AssignedTo: agent})
+		parent, _ := claimStart(t, db, agent)
+		if _, err := db.CreateSubTask(parent.ID, agent, NewTask{Title: "child", Body: body}); err != nil {
+			t.Fatalf("first child: %v", err)
+		}
+		return parent
+	}
+
+	full := testDB(t)
+	parent := fill(full, "a1")
+	if _, err := full.CreateSubTask(parent.ID, "a1", NewTask{Title: "over", Body: body}); err == nil {
+		t.Fatal("the first tree was not capped")
+	}
+
+	fresh := testDB(t)
+	fill(fresh, "a1") // its own tree, its own count
+}
+
+// TestContextCapDefaultsWhenUnset guards the knob: config absent means 50, not
+// zero, and zero would refuse every child.
+func TestContextCapDefaultsWhenUnset(t *testing.T) {
+	db := testDB(t)
+	if got := db.MaxTasksPerContext(); got != DefaultMaxTasksPerContext {
+		t.Fatalf("cap with no config: got %d, want %d", got, DefaultMaxTasksPerContext)
+	}
+	db.SetMaxTasksPerContext(0)
+	if got := db.MaxTasksPerContext(); got != DefaultMaxTasksPerContext {
+		t.Fatalf("cap set to 0: got %d, want the default %d", got, DefaultMaxTasksPerContext)
+	}
+}
