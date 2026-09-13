@@ -500,6 +500,16 @@ func runGateway(args []string) {
 		// channels share one execution path: CLI tool loop, memory, trace.
 		deps.Turn = tgBot.Handler()
 	}
+
+	// Answering a mention is a chat turn, not a task: it needs the turn engine
+	// above, so the watcher is built after it. Nil when this gateway has no
+	// shared database or no engine — Start and Poke are no-ops then.
+	var mentions *gateway.MentionWatcher
+	if cfg.Coord.AnswersMentions() {
+		mentions = gateway.NewMentionWatcher(deps)
+	} else {
+		log.Printf("mentions: answering off (coord.reply_to_mentions=false)")
+	}
 	// Everything running right now, from both sources: chat turns and claimed
 	// tasks. The tray's awake-while-running mode, `bomclaw status` and the
 	// dashboard all read this list — a task run missing from it meant the Mac
@@ -537,8 +547,21 @@ func runGateway(args []string) {
 				TaskID:    strings.TrimPrefix(s.ID, "task_"),
 			})
 		}
+		for _, s := range mentions.Live() {
+			info := s.RunInfo()
+			out = append(out, gateway.RunInfo{
+				ChatID:    s.ChatID,
+				SessionID: s.ID,
+				Task:      info.CurrentTask,
+				LastTool:  info.LastTool,
+				ToolCount: info.ToolCount,
+				StartedAt: info.StartedAt.Format(time.RFC3339),
+				Kind:      "channel",
+			})
+		}
 		return out
 	}
+	mentions.Start(ctx)
 	if sched != nil {
 		sched.SetBusy(func() bool { return len(deps.Runs()) > 0 })
 		sched.Start(ctx)
@@ -586,7 +609,13 @@ func runGateway(args []string) {
 		// is on by default, so every cross-agent poke was a 401. Mounted even
 		// when this agent does not claim tasks (runner nil → Poke is a no-op),
 		// so a peer never gets a 404 for ringing.
-		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(runner.Poke)))
+		// One doorbell, two listeners: work waiting in the queue and a line
+		// with this agent's name in it arrive the same way, and the ringer
+		// should not have to know which it is.
+		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(func() {
+			runner.Poke()
+			mentions.Poke()
+		})))
 	}
 
 	// Start Telegram bot polling in background.
