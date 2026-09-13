@@ -67,6 +67,18 @@ func PokeURL(wsAddr string) (string, error) {
 	return u.String(), nil
 }
 
+// PeerURL derives any loopback HTTP route on a peer from the WebSocket address
+// it registered, the same way PokeURL derives the doorbell. Two agents on one
+// machine are loopback to each other, which is what lets the settings screen
+// read and change a peer without a login.
+func PeerURL(wsAddr, path string) (string, error) {
+	u, err := PokeURL(wsAddr)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(u, "/api/tasks/poke") + path, nil
+}
+
 // PokeHandler is the HTTP side of the doorbell. poke is the local runner's
 // Poke; a nil-safe no-op when this agent does not claim tasks, so the route can
 // always be mounted and a peer never gets a 404 for ringing.

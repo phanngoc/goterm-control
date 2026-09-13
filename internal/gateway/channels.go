@@ -74,8 +74,17 @@ type channelPostParams struct {
 	ThreadRoot string `json:"thread_root,omitempty"`
 	Body       string `json:"body"`
 	TaskID     string `json:"task_id,omitempty"`
-	// As is who the message is from: "user" (default) or an agent id.
+	// As is who the message is from: "user" (default) or an agent id. The
+	// dashboard never sets it — a person at a browser is a person, and the
+	// only callers with a reason to speak as an agent are the agents, through
+	// their own CLI.
 	As string `json:"as,omitempty"`
+
+	// Notify addresses the message at agents without requiring the writer to
+	// spell their names into the prose. Picking "bomclaw2" from a dropdown and
+	// having to also type "@bomclaw2" is asking the same question twice, and
+	// forgetting the second half is silence.
+	Notify []string `json:"notify,omitempty"`
 }
 
 func handleChannelPost(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -87,9 +96,17 @@ func handleChannelPost(deps Deps, params json.RawMessage) (json.RawMessage, erro
 		return nil, err
 	}
 	kind, id := author(deps, p.As)
+	notify := make([]coord.Member, 0, len(p.Notify))
+	for _, who := range p.Notify {
+		if who == "" || who == id {
+			continue // nobody rings their own doorbell
+		}
+		notify = append(notify, coord.Member{Kind: coord.MemberAgent, ID: who})
+	}
 	msg, wake, err := deps.Coord.PostMessage(coord.NewChannelMessage{
 		ChannelID: p.ChannelID, ThreadRoot: p.ThreadRoot,
 		AuthorKind: kind, AuthorID: id, Body: p.Body, TaskID: p.TaskID,
+		Notify: notify,
 	})
 	if err != nil {
 		return nil, err

@@ -616,6 +616,11 @@ func runGateway(args []string) {
 		// One doorbell, two listeners: work waiting in the queue and a line
 		// with this agent's name in it arrive the same way, and the ringer
 		// should not have to know which it is.
+		// Peers read and change each other's backend over this, which is why it
+		// sits behind the same rule as the doorbell: a login, or a local
+		// caller. Two agents on one machine are local to each other.
+		srv.Handle("/api/settings", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
+		srv.Handle("/api/settings/model", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(func() {
 			runner.Poke()
 			mentions.Poke()

@@ -11,8 +11,6 @@ type Call = (method: string, params?: any) => Promise<any>
 // were not in the history at all. Here the human is an ordinary member: the
 // composer posts as "you" unless you deliberately speak as an agent.
 
-const OWNER = 'owner'
-
 export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask }: {
   call: Call; agents: string[]; selfID: string
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
@@ -26,7 +24,9 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // The thread keeps its own draft. One shared box meant typing a reply in the
   // panel on the right while the words appeared in the box on the left.
   const [threadBody, setThreadBody] = useState('')
-  const [as, setAs] = useState<string>(OWNER)
+  // Who the message is addressed to. From a browser the author is always the
+  // person at it; the only choice to make is which agent you are talking to.
+  const [to, setTo] = useState<string>('')
   const [err, setErr] = useState<string | null>(null)
   const sending = useRef(false)
   const bottom = useRef<HTMLDivElement>(null)
@@ -117,7 +117,8 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
     sending.current = true
     try {
       const posted: ChannelMessage = await call('channels.post', {
-        channel_id: active, body: text, as,
+        channel_id: active, body: text,
+        ...(to ? { notify: [to] } : {}),
         ...(inThread ? { thread_root: threadRoot } : {}),
       })
       if (inThread) setThreadBody(''); else setBody('')
@@ -186,8 +187,8 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
 
         <Composer
           value={body} onChange={setBody} onSend={() => post(false)}
-          as={as} setAs={setAs} agents={agents}
-          placeholder="Message the channel — @agent to wake one"
+          to={to} setTo={setTo} agents={agents}
+          placeholder="Message the channel"
         />
       </div>
 
@@ -211,7 +212,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
           {/* Typing happens where you are reading. */}
           <Composer
             value={threadBody} onChange={setThreadBody} onSend={() => post(true)}
-            as={as} setAs={setAs} agents={agents}
+            to={to} setTo={setTo} agents={agents}
             placeholder="Reply in thread"
           />
         </aside>
@@ -300,29 +301,28 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
   )
 }
 
-function Composer({ value, onChange, onSend, as, setAs, agents, placeholder }: {
+function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
   value: string; onChange: (s: string) => void; onSend: () => void
-  as: string; setAs: (s: string) => void; agents: string[]; placeholder: string
+  to: string; setTo: (s: string) => void; agents: string[]; placeholder: string
 }) {
   return (
     <div className="border-t border-gray-800 bg-gray-900/40">
       <div className="p-3 flex gap-2">
-        {/* Speaking as an agent changes what the room does with the line: an
-            agent's message wakes nobody, by the rule that keeps three agents
-            from answering each other forever. That is the right rule and the
-            wrong thing to leave invisible — a question typed here in the
-            owner's own hand, with the selector left on an agent, simply gets
-            no answer and nothing says why. So the unusual mode looks unusual. */}
+        {/* Who you are talking to. The author is always you — a person at a
+            browser is a person — so the only choice here is which agent the
+            line is addressed at. Picking one rings its doorbell without making
+            anyone type the name a second time; picking nobody leaves the room
+            readable and no one interrupted. */}
         <select
-          value={as}
-          onChange={e => setAs(e.target.value)}
-          title={as === OWNER ? 'Who this is from' : `Speaking as ${as} — an agent's line wakes nobody`}
+          value={to}
+          onChange={e => setTo(e.target.value)}
+          title="Which agent this is for"
           className={`px-2 py-2 text-sm bg-gray-950 rounded ring-1 outline-none ${
-            as === OWNER ? 'ring-gray-800 text-gray-300' : 'ring-amber-500/50 text-amber-300'
+            to ? 'ring-sky-500/50 text-sky-300' : 'ring-gray-800 text-gray-400'
           }`}
         >
-          <option value={OWNER}>you</option>
-          {agents.map(a => <option key={a} value={a}>as {a}</option>)}
+          <option value="">to: everyone</option>
+          {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
         </select>
         <input
           value={value}
@@ -334,18 +334,9 @@ function Composer({ value, onChange, onSend, as, setAs, agents, placeholder }: {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
           }}
-          placeholder={as === OWNER ? placeholder : `as ${as} — nobody is woken unless you @name them`}
+          placeholder={to ? `${placeholder} — ${to} will answer` : `${placeholder} — nobody is interrupted`}
           className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
         />
-        {as !== OWNER && (
-          <button
-            onClick={() => setAs(OWNER)}
-            title="Go back to speaking as yourself"
-            className="px-2 py-2 text-xs rounded ring-1 ring-amber-500/40 text-amber-300 hover:bg-amber-500/10 whitespace-nowrap"
-          >
-            speak as you
-          </button>
-        )}
         <button
           onClick={onSend}
           disabled={!value.trim()}

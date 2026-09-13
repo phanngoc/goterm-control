@@ -19,6 +19,8 @@ interface AgentSettings {
   choices: ModelChoice[]
   can_restart: boolean
   busy: boolean
+  reachable: boolean
+  error?: string
 }
 
 // Which backend this agent runs on, and changing it.
@@ -32,17 +34,12 @@ interface AgentSettings {
 // not another agent's config file, and a screen that pretended otherwise would
 // be editing a file nobody reloads.
 export default function SettingsPane({ call }: { call: Call }) {
-  const [data, setData] = useState<AgentSettings | null>(null)
+  const [agents, setAgents] = useState<AgentSettings[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  const [picked, setPicked] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [note, setNote] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const d: AgentSettings = await call('admin.settings')
-      setData(d)
-      setPicked(p => p || d.model)
+      setAgents((await call('admin.settings')) || [])
       setErr(null)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
@@ -51,18 +48,42 @@ export default function SettingsPane({ call }: { call: Call }) {
 
   useEffect(() => { load() }, [load])
 
+  if (err && !agents) return <div className="p-4 text-sm text-red-300">{err}</div>
+  if (!agents) return <div className="p-4 text-sm text-gray-500">Loading…</div>
+
+  return (
+    <div className="p-4 max-w-3xl space-y-4">
+      {err && <div className="text-xs text-red-300">{err}</div>}
+      {agents.map(a => <AgentCard key={a.agent_id} agent={a} call={call} onChanged={load} />)}
+      <p className="text-xs text-gray-600">
+        Mỗi gateway đọc file config của chính nó; những agent khác được hỏi qua loopback,
+        nên một agent đang tắt sẽ hiện là không liên lạc được chứ không biến mất khỏi danh sách.
+      </p>
+    </div>
+  )
+}
+
+function AgentCard({ agent, call, onChanged }: { agent: AgentSettings; call: Call; onChanged: () => void }) {
+  const [picked, setPicked] = useState(agent.model)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => { setPicked(agent.model) }, [agent.model])
+
   const apply = async (force: boolean) => {
-    if (!data || !picked || picked === data.model) return
+    if (!picked || picked === agent.model) return
     setBusy(true)
     setNote(null)
     try {
-      const r = await call('admin.set_model', { model: picked, ...(force ? { force: true } : {}) })
+      const r = await call('admin.set_model', {
+        agent_id: agent.agent_id, model: picked, ...(force ? { force: true } : {}),
+      })
       setErr(null)
       setNote(r?.restarted
-        ? `Đã ghi config và khởi động lại ${data.agent_id}. Đợi vài giây rồi tải lại trang.`
+        ? `Đã ghi config và khởi động lại ${agent.agent_id}.`
         : (r?.note ?? 'Đã ghi config.'))
-      // The gateway is restarting under us; give it a moment, then re-read.
-      setTimeout(load, 6000)
+      setTimeout(onChanged, 6000)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     } finally {
@@ -70,80 +91,75 @@ export default function SettingsPane({ call }: { call: Call }) {
     }
   }
 
-  if (err && !data) return <div className="p-4 text-sm text-red-300">{err}</div>
-  if (!data) return <div className="p-4 text-sm text-gray-500">Loading…</div>
+  if (!agent.reachable) {
+    return (
+      <div className="rounded-lg ring-1 ring-gray-800 bg-gray-900/40 p-3">
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm text-gray-300">{agent.agent_name || agent.agent_id}</span>
+          <span className="text-xs text-amber-300">không liên lạc được</span>
+        </div>
+        {agent.error && <p className="mt-1 text-xs text-gray-500 font-mono truncate">{agent.error}</p>}
+      </div>
+    )
+  }
 
-  const changed = picked !== data.model
-  const target = data.choices.find(c => c.id === picked)
+  const changed = picked !== agent.model
+  const target = agent.choices?.find(c => c.id === picked)
 
   return (
-    <div className="p-4 max-w-2xl space-y-4">
-      <div>
-        <h2 className="text-sm text-gray-200 font-medium">{data.agent_name || data.agent_id}</h2>
-        <p className="text-xs text-gray-500 font-mono">{data.config_path}</p>
+    <div className="rounded-lg ring-1 ring-gray-800 bg-gray-900/40 p-3 space-y-3">
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="text-sm text-gray-200 font-medium">{agent.agent_name || agent.agent_id}</span>
+        <span className="text-xs font-mono px-1.5 rounded bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/30">
+          {agent.provider}
+        </span>
+        <span className="text-xs text-gray-500 font-mono">{agent.model}</span>
+        {agent.busy && <span className="text-xs text-amber-300">đang chạy việc</span>}
+        <span className="ml-auto text-[11px] text-gray-600 font-mono truncate">{agent.config_path}</span>
       </div>
 
       {err && <div className="text-xs text-red-300">{err}</div>}
       {note && <div className="text-xs text-emerald-300">{note}</div>}
 
-      <dl className="grid grid-cols-2 gap-2 text-xs">
-        <div><dt className="text-gray-600">backend</dt><dd className="font-mono text-gray-200">{data.provider}</dd></div>
-        <div><dt className="text-gray-600">model</dt><dd className="font-mono text-gray-200">{data.model}</dd></div>
-      </dl>
-
-      <div className="space-y-2">
-        <label className="block text-xs text-gray-500">
-          Đổi model — backend đi theo model, không chọn riêng
-        </label>
+      <div className="flex items-center gap-2 flex-wrap">
         <select
           value={picked}
           onChange={e => setPicked(e.target.value)}
-          className="w-full px-2 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+          className="flex-1 min-w-0 px-2 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
         >
-          {data.choices.map(c => (
-            <option key={c.id} value={c.id}>
-              {c.name} — {c.provider} ({c.id})
-            </option>
+          {(agent.choices ?? []).map(c => (
+            <option key={c.id} value={c.id}>{c.name} — {c.provider} ({c.id})</option>
           ))}
         </select>
-        {changed && target && (
-          <p className="text-xs text-amber-300">
-            {data.provider === target.provider
-              ? `Cùng backend ${target.provider}, chỉ đổi model.`
-              : `Đổi backend ${data.provider} → ${target.provider}.`}
-            {' '}Agent sẽ khởi động lại{data.busy ? ' — và đang có việc chạy dở, nó sẽ bị cắt.' : '.'}
-          </p>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2">
         <button
           onClick={() => apply(false)}
-          disabled={!changed || busy || !data.can_restart}
+          disabled={!changed || busy || !agent.can_restart}
           className="px-3 py-2 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {busy ? 'Đang đổi…' : 'Đổi & khởi động lại'}
+          {busy ? 'Đang đổi…' : 'Đổi & restart'}
         </button>
-        {data.busy && changed && (
+        {agent.busy && changed && (
           <button
             onClick={() => apply(true)}
             disabled={busy}
             className="px-3 py-2 text-sm rounded ring-1 ring-amber-500/50 text-amber-300 hover:bg-amber-500/10"
           >
-            Cắt việc đang chạy và đổi
+            Cắt việc đang chạy
           </button>
-        )}
-        {!data.can_restart && (
-          <span className="text-xs text-gray-500">
-            Gateway này không chạy dưới service manager — đổi xong phải tự restart.
-          </span>
         )}
       </div>
 
-      <p className="text-xs text-gray-600">
-        Chỉ agent này. Mỗi gateway đọc file config của chính nó, nên đổi backend cho agent khác
-        thì mở dashboard của agent đó.
-      </p>
+      {changed && target && (
+        <p className="text-xs text-amber-300">
+          {agent.provider === target.provider
+            ? `Cùng backend ${target.provider}, chỉ đổi model.`
+            : `Đổi backend ${agent.provider} → ${target.provider}.`}
+          {' '}Agent sẽ khởi động lại{agent.busy ? ' — việc đang chạy sẽ bị cắt.' : '.'}
+        </p>
+      )}
+      {!agent.can_restart && (
+        <p className="text-xs text-gray-500">Không chạy dưới service manager — đổi xong phải tự restart.</p>
+      )}
     </div>
   )
 }
