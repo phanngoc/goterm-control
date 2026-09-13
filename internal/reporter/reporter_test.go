@@ -303,7 +303,7 @@ func TestNoThreadNoPost(t *testing.T) {
 	r.SetNotify(got.add)
 	r.Tick()
 
-	line, err := db.ChannelMessages(coord.GeneralChannelID, 10)
+	line, err := db.ChannelMessages(coord.GeneralChannelID, 10, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
