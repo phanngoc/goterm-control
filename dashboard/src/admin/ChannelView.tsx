@@ -307,11 +307,19 @@ function Composer({ value, onChange, onSend, as, setAs, agents, placeholder }: {
   return (
     <div className="border-t border-gray-800 bg-gray-900/40">
       <div className="p-3 flex gap-2">
+        {/* Speaking as an agent changes what the room does with the line: an
+            agent's message wakes nobody, by the rule that keeps three agents
+            from answering each other forever. That is the right rule and the
+            wrong thing to leave invisible — a question typed here in the
+            owner's own hand, with the selector left on an agent, simply gets
+            no answer and nothing says why. So the unusual mode looks unusual. */}
         <select
           value={as}
           onChange={e => setAs(e.target.value)}
-          title="Who this is from"
-          className="px-2 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 text-gray-300 outline-none"
+          title={as === OWNER ? 'Who this is from' : `Speaking as ${as} — an agent's line wakes nobody`}
+          className={`px-2 py-2 text-sm bg-gray-950 rounded ring-1 outline-none ${
+            as === OWNER ? 'ring-gray-800 text-gray-300' : 'ring-amber-500/50 text-amber-300'
+          }`}
         >
           <option value={OWNER}>you</option>
           {agents.map(a => <option key={a} value={a}>as {a}</option>)}
@@ -326,9 +334,18 @@ function Composer({ value, onChange, onSend, as, setAs, agents, placeholder }: {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
           }}
-          placeholder={placeholder}
+          placeholder={as === OWNER ? placeholder : `as ${as} — nobody is woken unless you @name them`}
           className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
         />
+        {as !== OWNER && (
+          <button
+            onClick={() => setAs(OWNER)}
+            title="Go back to speaking as yourself"
+            className="px-2 py-2 text-xs rounded ring-1 ring-amber-500/40 text-amber-300 hover:bg-amber-500/10 whitespace-nowrap"
+          >
+            speak as you
+          </button>
+        )}
         <button
           onClick={onSend}
           disabled={!value.trim()}
