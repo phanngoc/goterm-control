@@ -173,6 +173,12 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 
 	sess := session.New(channelChatID)
 	sess.ID = "ch_" + key
+	// The manager owns the database row, and messages has a foreign key to it.
+	// Without this the turn ran, the reply arrived, and both the question and
+	// the answer were dropped on the floor with a log line nobody was reading.
+	if w.deps.Sessions != nil {
+		sess = w.deps.Sessions.Adopt(sess)
+	}
 	// Resuming is what makes turn 2 remember turn 1. A ref from the other CLI
 	// — after a provider switch — is simply not used; only the CLI that owns
 	// a session can resume it.

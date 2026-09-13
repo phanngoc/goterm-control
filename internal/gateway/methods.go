@@ -303,7 +303,17 @@ func handleSessionsList(deps Deps) (json.RawMessage, error) {
 	// Reload sessions from disk to pick up sessions created by other processes (Telegram bot)
 	deps.Sessions.ReloadFromDisk()
 
-	all := deps.Sessions.List()
+	// Chat sessions only. Task runs (chat id -1) and channel threads (-2) are
+	// conversations the agent holds with the queue and with a room, not with
+	// the person reading this list — they are shown on the task board and in
+	// the channel, and putting them here buries the real ones. The negative
+	// chat id is what marks them; see taskrunner and gateway/mentions.
+	all := make([]*session.Session, 0)
+	for _, s := range deps.Sessions.List() {
+		if s.ChatID >= 0 {
+			all = append(all, s)
+		}
+	}
 
 	// Also scan transcript directory for sessions not in the store
 	transcriptDir := filepath.Join(deps.DataDir, "transcripts")
