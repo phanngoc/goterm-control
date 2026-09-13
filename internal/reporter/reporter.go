@@ -200,11 +200,33 @@ func (r *Reporter) reportToThread(t *coord.Task) {
 	if author == "" {
 		author = r.cfg.AgentID
 	}
+	body := Format(t) + r.artifactIndex(t)
 	if _, _, err := r.db.PostMessage(coord.NewChannelMessage{
-		ChannelID: channelID, ThreadRoot: rootID, AuthorID: author, Body: Format(t),
+		ChannelID: channelID, ThreadRoot: rootID, AuthorID: author, Body: body,
 	}); err != nil {
 		log.Printf("reporter: report %s into thread %s: %v", t.ID, rootID, err)
 	}
+}
+
+// artifactIndex lists what the task produced, by id.
+//
+// A result that says "the report is done" and stops leaves the reader to go
+// and find it. The ids are what make it findable later — from the thread, from
+// Telegram, and by the next agent asked to look at it.
+func (r *Reporter) artifactIndex(t *coord.Task) string {
+	arts, err := r.db.TaskArtifacts(t.ID)
+	if err != nil || len(arts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n📎 ")
+	for i, a := range arts {
+		if i > 0 {
+			b.WriteString(" · ")
+		}
+		fmt.Fprintf(&b, "`%s` %s", a.ID, a.Title)
+	}
+	return b.String()
 }
 
 // Format writes the line the owner sees.

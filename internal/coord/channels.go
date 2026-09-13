@@ -784,6 +784,10 @@ func (db *DB) DeleteMessage(id string) error {
 	return tx.Commit()
 }
 
+// GetMessage is getMessage for callers outside this package: the gateway needs
+// a thread's root to find the task, and through it what the work produced.
+func (db *DB) GetMessage(id string) (*ChannelMessage, error) { return db.getMessage(id) }
+
 func (db *DB) getMessage(id string) (*ChannelMessage, error) {
 	row := db.conn.QueryRow(`SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
 		FROM channel_messages WHERE id = ?`, id)

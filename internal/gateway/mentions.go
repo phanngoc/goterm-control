@@ -309,6 +309,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 	b.WriteString(w.threadContext(m, mem))
 
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
+	b.WriteString(w.threadArtifacts(m))
 	b.WriteString(w.roster())
 
 	b.WriteString("## How to answer\n\n")
@@ -317,12 +318,55 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		"about what you are about to do.\n")
 	b.WriteString("Name an agent with @ only when you actually need it to act: @ is a doorbell " +
 		"and wakes that agent.\n")
+	fmt.Fprintf(&b, "Anything you produce that outlives this message — a report, a patch, a "+
+		"page — attach it with `bomclaw artifact put --task <task> --file <path> --title <what it is>`. "+
+		"A path in prose is findable for about a day; an artifact is findable by id, survives the file "+
+		"moving, and is what the next agent asked to review it will open.\n")
 	fmt.Fprintf(&b, "If this asks for real work — something with steps, or longer than a few "+
 		"minutes — say so briefly and open a task for it with `bomclaw task new --thread %s`. "+
 		"The --thread is what keeps the work attached to this conversation: the thread shows "+
 		"the task it produced, and the result is posted back here when it finishes, so nobody "+
 		"has to watch the board for an answer they asked for in a room. The board is for work; "+
 		"this room is for talking about it.\n", key)
+	return b.String()
+}
+
+// threadArtifacts lists what this conversation has already produced.
+//
+// Without it an agent asked to "review the report" has a filename at best and
+// a guess at worst, and a second agent brought in later has neither. With it,
+// the work product of the thread is addressable by id: the same id the
+// producer wrote it under, readable with one command, and stable even after
+// somebody moves the file.
+func (w *MentionWatcher) threadArtifacts(m coord.ChannelMessage) string {
+	root := m.ThreadRoot
+	if root == "" {
+		root = m.ID
+	}
+	rootMsg, err := w.deps.Coord.GetMessage(root)
+	if err != nil || rootMsg.TaskID == "" {
+		return "" // a thread with no task behind it has produced nothing yet
+	}
+	task, err := w.deps.Coord.GetTask(rootMsg.TaskID)
+	if err != nil {
+		return ""
+	}
+	arts, err := w.deps.Coord.ContextArtifacts(task.ContextID)
+	if err != nil || len(arts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## What this conversation has produced\n\n")
+	for _, a := range arts {
+		fmt.Fprintf(&b, "- `%s` — %s, %s", a.ID, a.Kind, a.Title)
+		if a.Bytes > 0 {
+			fmt.Fprintf(&b, " (%d bytes)", a.Bytes)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nRead one with `bomclaw artifact get <id>` — by id, not by path, so it still " +
+		"resolves after the file moves. If you are asked to review one, read it first and say what " +
+		"is wrong with it; agreeing with a file you have not opened is worse than not answering.\n\n")
 	return b.String()
 }
 
