@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Channel, ChannelMessage } from './types'
+import type { Artifact, Channel, ChannelMessage } from './types'
 import { ago, clock } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -30,6 +30,9 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   const [to, setTo] = useState<string>('')
   useEffect(() => { setTo(t => t || agents[0] || '') }, [agents])
   const [err, setErr] = useState<string | null>(null)
+  // What this conversation has produced. A path named in prose is findable for
+  // about a day; these are findable by id and survive the file moving.
+  const [files, setFiles] = useState<Artifact[]>([])
   const sending = useRef(false)
   const bottom = useRef<HTMLDivElement>(null)
 
@@ -57,8 +60,13 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
 
   const loadThread = useCallback(async (rootID: string) => {
     try {
-      setThread((await call('channels.messages', { thread_root: rootID })) || [])
+      const msgs: ChannelMessage[] = (await call('channels.messages', { thread_root: rootID })) || []
+      setThread(msgs)
       setThreadRoot(rootID)
+      // Only a thread bound to a task can have produced anything; that binding
+      // is what #134 put on the root message.
+      const taskID = msgs[0]?.task_id
+      setFiles(taskID ? ((await call('artifacts.list', { task_id: taskID, tree: true })) || []) : [])
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
@@ -141,6 +149,22 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
     }
   }
 
+  // Asking for a review is an ordinary message in the thread, addressed to the
+  // agent you are talking to — not a special mode. The agent already sees the
+  // artifact list in its prompt, so the id is all it needs.
+  const reviewFile = async (a: Artifact) => {
+    if (!to || !threadRoot || !active) return
+    try {
+      await call('channels.post', {
+        channel_id: active, thread_root: threadRoot, notify: [to],
+        body: `Xem lại giúp mình artifact \`${a.id}\` (${a.title}) — đọc nội dung rồi nói thẳng chỗ nào sai, thiếu, hoặc đáng ngờ.`,
+      })
+      await loadThread(threadRoot)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    }
+  }
+
   const ordered = useMemo(() => [...msgs].reverse(), [msgs])
   const current = channels.find(c => c.id === active)
 
@@ -210,6 +234,18 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
               </div>
             ))}
           </div>
+          {files.length > 0 && (
+            <div className="border-t border-gray-800 px-3 py-2 space-y-1">
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">Files</div>
+              {files.map(a => (
+                <FileRow
+                  key={a.id} a={a} call={call}
+                  onReview={() => reviewFile(a)}
+                  reviewer={to}
+                />
+              ))}
+            </div>
+          )}
           {/* Typing happens where you are reading. */}
           <Composer
             value={threadBody} onChange={setThreadBody} onSend={() => post(true)}
@@ -343,6 +379,53 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
           Send
         </button>
       </div>
+    </div>
+  )
+}
+
+// FileRow is one piece of work product: open it, or ask an agent about it.
+function FileRow({ a, call, onReview, reviewer }: {
+  a: Artifact; call: Call; onReview: () => void; reviewer: string
+}) {
+  const [busy, setBusy] = useState(false)
+
+  // Opened in a tab rather than rendered here: these are reports and patches,
+  // and the thread panel is not the place to read one.
+  const open = async () => {
+    setBusy(true)
+    try {
+      if (a.kind === 'link' && a.url) {
+        window.open(a.url, '_blank', 'noopener')
+        return
+      }
+      const r = await call('artifacts.get', { id: a.id })
+      const body: string = r?.content ?? ''
+      const type = a.content_type || (a.title.endsWith('.html') ? 'text/html' : 'text/plain')
+      const blob = new Blob([body], { type: type + ';charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank', 'noopener')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (e) {
+      alert(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <button onClick={open} disabled={busy} className="min-w-0 flex-1 text-left truncate text-sky-300 hover:underline">
+        {a.title}
+      </button>
+      <span className="text-gray-600 shrink-0">{a.kind}</span>
+      <button
+        onClick={onReview}
+        disabled={!reviewer}
+        title={reviewer ? `Nhờ ${reviewer} xem lại` : 'Chọn một agent trước'}
+        className="shrink-0 px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40 disabled:opacity-40"
+      >
+        review
+      </button>
     </div>
   )
 }

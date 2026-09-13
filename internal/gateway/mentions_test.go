@@ -603,3 +603,75 @@ func TestThePromptNamesThePeers(t *testing.T) {
 		t.Error("the agent was listed among its own peers")
 	}
 }
+
+// TestTheThreadsOutputIsInThePrompt: an agent asked to review "the report" has
+// a filename at best and a guess at worst. The artifact index gives it an id
+// that survives the file moving, and the next agent brought in gets the same.
+func TestTheThreadsOutputIsInThePrompt(t *testing.T) {
+	turn := &recordingTurn{reply: "đã xem", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "tổng hợp việc làm IT Đà Nẵng",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := cdb.CreateTask(coord.NewTask{CreatedBy: "bomclaw", Title: "tổng hợp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cdb.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	art, err := cdb.PutArtifact(coord.NewArtifact{
+		TaskID: task.ID, Kind: coord.ArtifactDocument, Title: "index.html",
+		Content: []byte("<html>báo cáo</html>"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "review giúp mình", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.count() != 1 {
+		t.Fatalf("expected one turn, got %d", turn.count())
+	}
+	p := turn.prompts[0]
+	if !strings.Contains(p, art.ID) {
+		t.Errorf("the artifact id is not in the prompt:\n%s", p)
+	}
+	if !strings.Contains(p, "index.html") {
+		t.Error("the artifact title is missing")
+	}
+	if !strings.Contains(p, "artifact get") {
+		t.Error("the prompt does not say how to read it")
+	}
+}
+
+// A thread with no task behind it has produced nothing, and must not claim to.
+func TestAThreadWithNoTaskListsNoFiles(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "chào", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	if strings.Contains(turn.prompts[0], "has produced") {
+		t.Error("a thread with no work behind it listed files")
+	}
+}

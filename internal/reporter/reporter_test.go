@@ -311,3 +311,50 @@ func TestNoThreadNoPost(t *testing.T) {
 		t.Fatalf("a task with no conversation posted into one: %+v", line)
 	}
 }
+
+// TestTheReportNamesWhatItProduced: a result that says "the report is done"
+// and stops leaves the reader to go and find it. The ids are what make it
+// findable from the thread, from Telegram, and by the next agent asked to look.
+func TestTheReportNamesWhatItProduced(t *testing.T) {
+	db := openDB(t)
+	for _, id := range []string{"a1", "a2"} {
+		if err := db.RegisterAgent(coord.Agent{ID: id, DisplayName: id, WSAddr: "ws://127.0.0.1:0/ws"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, _, err := db.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@a1 làm hộ cái báo cáo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := delegate(t, db, "làm báo cáo", coord.TaskCompleted, "xong")
+	if err := db.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	art, err := db.PutArtifact(coord.NewArtifact{
+		TaskID: task.ID, Kind: coord.ArtifactDocument, Title: "index.html",
+		Content: []byte("<html>ok</html>"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got collector
+	r := New(db, Config{AgentID: "a2"})
+	r.SetNotify(got.add)
+	r.Tick()
+
+	thread, err := db.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := thread[len(thread)-1].Body
+	if !strings.Contains(report, art.ID) {
+		t.Errorf("the report does not name the artifact id:\n%s", report)
+	}
+	if !strings.Contains(report, "index.html") {
+		t.Errorf("the report does not name the file:\n%s", report)
+	}
+}
