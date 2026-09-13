@@ -188,6 +188,43 @@ func (m *Manager) NewSession(chatID int64) (*Session, error) {
 	return s, err
 }
 
+// Adopt registers a session the caller built itself and persists it now.
+//
+// Sessions created with New() outside the manager have no row in the database,
+// and the messages table has a foreign key to it — so every turn run on such a
+// session logged "FOREIGN KEY constraint failed" and dropped both the user
+// message and the reply. The turn still worked, because the reply reaches the
+// caller through the sink, which is why it stayed invisible: the only symptom
+// was a conversation with no history behind it.
+//
+// Idempotent: adopting the same session twice keeps the one already registered,
+// so a caller does not have to remember whether this is the first turn.
+func (m *Manager) Adopt(s *Session) *Session {
+	if s == nil {
+		return nil
+	}
+	m.mu.Lock()
+	cs, ok := m.chats[s.ChatID]
+	if !ok {
+		cs = &ChatState{NextSeq: 1, Sessions: map[string]*Session{}}
+		m.chats[s.ChatID] = cs
+	}
+	if existing, ok := cs.Sessions[s.ID]; ok {
+		m.mu.Unlock()
+		return existing
+	}
+	cs.Sessions[s.ID] = s
+	if cs.ActiveSessionID == "" {
+		cs.ActiveSessionID = s.ID
+	}
+	m.mu.Unlock()
+
+	// Now, not on the debounce: the row has to exist before the turn writes
+	// its first message, which is the next thing the caller does.
+	m.SaveNow()
+	return s
+}
+
 // newSession does NewSession's locked work.
 func (m *Manager) newSession(chatID int64) (*Session, error) {
 	m.mu.Lock()

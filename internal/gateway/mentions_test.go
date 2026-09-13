@@ -232,3 +232,74 @@ func TestPlainLineWakesNobody(t *testing.T) {
 		t.Fatal("a line with no @ woke an agent")
 	}
 }
+
+// TestTheChannelSessionIsRegistered: sessions built with session.New have no
+// database row, and the messages table has a foreign key to it — so every
+// channel turn logged "FOREIGN KEY constraint failed" and dropped both the
+// question and the answer. The turn still worked, which is exactly why it went
+// unnoticed: the only symptom was a conversation with nothing behind it.
+func TestTheChannelSessionIsRegistered(t *testing.T) {
+	turn := &recordingTurn{reply: "ừ", newID: "sess-1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 chào",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.calls != 1 {
+		t.Fatalf("expected one turn, got %d", turn.calls)
+	}
+	var found *session.Session
+	for _, s := range deps.Sessions.List() {
+		if s.ID == turn.sessions[0] {
+			found = s
+		}
+	}
+	if found == nil {
+		t.Fatalf("the session the turn ran on (%s) was never registered", turn.sessions[0])
+	}
+	if found.ChatID != channelChatID {
+		t.Errorf("channel session should sit on chat %d, got %d", channelChatID, found.ChatID)
+	}
+}
+
+// TestAdoptingTwiceKeepsOneSession: the second turn in a thread must not
+// register a second session under the same id, or the two halves of one
+// conversation end up in different rows.
+func TestAdoptingTwiceKeepsOneSession(t *testing.T) {
+	turn := &recordingTurn{reply: "ừ", newID: "sess-1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	w := NewMentionWatcher(deps)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 lần một",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background())
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "@bomclaw2 lần hai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background())
+
+	n := 0
+	for _, s := range deps.Sessions.List() {
+		if s.ChatID == channelChatID {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("one thread produced %d sessions", n)
+	}
+}
