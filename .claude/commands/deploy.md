@@ -32,6 +32,14 @@ artifacts into `~/.bomclaw/` and restart.
    binary swaps. Ad-hoc (`-s -`) is the fallback, but every ad-hoc rebuild is
    a NEW TCC identity and macOS re-asks for folder permissions.
 
+   **Sign by the identity's SHA-1, not its name.** `-s "BomClaw Code Signing"`
+   hung on the keychain dialog three times out of three on 2026-09-13, each
+   time leaving the binary ad-hoc; `-s 5364738D592D096F5F186640C4A41A0AD43D35B6`
+   returned instantly, twice out of twice, with no dialog at all. The identity
+   is the same one — looking it up by name is what asks the keychain a question
+   that can block. Confirm the hash is still current with:
+   `security find-identity -v -p codesigning`
+
    **Verify the signature landed BEFORE restarting.** `codesign` can hang on a
    keychain "allow access" dialog; a `timeout` kills it, and the file is left
    with Go's linker ad-hoc signature (`Identifier=a.out`). launchd then kills
@@ -40,12 +48,15 @@ artifacts into `~/.bomclaw/` and restart.
    `tail` inside an `if`: the `if` tests `tail`'s exit code, not codesign's.
    ```bash
    cp bomclaw ~/.bomclaw/bomclaw
-   timeout 30 codesign -f -s "BomClaw Code Signing" --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
+   timeout 30 codesign -f -s 5364738D592D096F5F186640C4A41A0AD43D35B6 --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
    echo "codesign exit=$?"       # 124 = hung on the keychain dialog, see below
    codesign -dv ~/.bomclaw/bomclaw 2>&1 | grep Identifier
    # MUST print Identifier=com.bomclaw.gateway. If it prints Identifier=a.out,
-   # do NOT restart. Either click "Always Allow" on the keychain dialog and
-   # sign again, or fall back to ad-hoc to restore service:
+   # do NOT restart. Nothing is broken yet at that point — the running
+   # gateways still hold the old binary — so there is time to fix it properly.
+   # Retry by hash first; only then click "Always Allow" on the keychain
+   # dialog; ad-hoc is the last resort to restore service, at the cost of a
+   # new TCC identity:
    #   codesign -f -s - --identifier com.bomclaw.gateway ~/.bomclaw/bomclaw
    rm -rf ~/.bomclaw/dashboard/dist && cp -R dashboard/dist ~/.bomclaw/dashboard/dist
    # Do NOT copy config.yaml / .env over the live ones. ~/.bomclaw/config.yaml
@@ -59,7 +70,7 @@ artifacts into `~/.bomclaw/` and restart.
    ln -sf ~/.bomclaw/bomclaw ~/.local/bin/bomclaw
    ```
 
-4. **Stop** the gateway and kill stale processes (orphaned `claude -p --resume`
+4. **Stop** the gateways — all three of them — and kill stale processes (orphaned `claude -p --resume`
    subprocesses hold Telegram's getUpdates poll and cause Conflict errors).
 
    The pattern MUST be `claude -p .*--resume`, not `claude.*--resume`. The
@@ -69,7 +80,9 @@ artifacts into `~/.bomclaw/` and restart.
    and interactive Claude Code never does, so `-p` is what separates them.
    Check before you kill: `pgrep -lf "claude -p .*--resume"`.
    ```bash
-   launchctl stop com.bomclaw.gateway
+   for l in com.bomclaw.gateway com.bomclaw2.gateway com.bomclaw3.gateway; do
+     launchctl stop $l
+   done
    sleep 1
    pkill -f "bomclaw gateway" 2>/dev/null || true
    pkill -f "claude -p .*--resume" 2>/dev/null || true
@@ -78,15 +91,17 @@ artifacts into `~/.bomclaw/` and restart.
 
 5. **Start** (KeepAlive usually respawns on its own — start is idempotent):
    ```bash
-   launchctl start com.bomclaw.gateway
-   sleep 3
-   pgrep -lf "bomclaw gateway"
+   for l in com.bomclaw.gateway com.bomclaw2.gateway com.bomclaw3.gateway; do
+     launchctl start $l
+   done
+   sleep 5
+   pgrep -lf "bomclaw gateway"   # expect three lines
    ```
    The process command line must show `/Users/ngocp/.bomclaw/bomclaw`.
 
 6. **Health check**:
    ```bash
-   curl -s http://127.0.0.1:18789/health
+   for p in 18789 18790 18791; do printf "%s: " $p; curl -s "http://127.0.0.1:$p/health"; echo; done
    ```
    Note: `bomclaw status` reports "offline" when dashboard auth is enabled
    (it dials /ws unauthenticated) — the health endpoint is the source of truth.
@@ -120,8 +135,9 @@ Report:
 - Service label: `com.bomclaw.gateway` (plist: `~/Library/LaunchAgents/com.bomclaw.gateway.plist`)
 - Runtime layout: `~/.bomclaw/{bomclaw,config.yaml,.env,dashboard/dist}`
 - Data/logs stay in `~/.goterm/`; workspace in `~/goterm-workspace` — all outside TCC paths
-- Second agent: label `com.bomclaw2.gateway`, config `~/.bomclaw2/`, data `~/.goterm2/`,
-  port 18790 — **shares the same binary**, so every deploy restarts both
+- Other agents: `com.bomclaw2.gateway` (config `~/.bomclaw2/`, data `~/.goterm2/`,
+  port 18790) and `com.bomclaw3.gateway` (`~/.bomclaw3/`, `~/.goterm3/`, 18791) —
+  all three **share one binary**, so every deploy restarts all three
 - Coordination (traces, tasks, notes, messages) is shared at `~/.goterm-shared/data/coord.db`;
   `agent.id` must differ per gateway or they overwrite each other's registration
 - NEVER point the LaunchAgent at a binary/config inside `~/Documents` — TCC
