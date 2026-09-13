@@ -11,6 +11,8 @@ type Call = (method: string, params?: any) => Promise<any>
 // were not in the history at all. Here the human is an ordinary member: the
 // composer posts as "you" unless you deliberately speak as an agent.
 
+const PAGE = 30
+
 export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask }: {
   call: Call; agents: string[]; selfID: string
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
@@ -33,7 +35,11 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // What this conversation has produced. A path named in prose is findable for
   // about a day; these are findable by id and survive the file moving.
   const [files, setFiles] = useState<Artifact[]>([])
+  const [more, setMore] = useState(false)
   const sending = useRef(false)
+  const loadingOlder = useRef(false)
+  const scroller = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(true)
   const bottom = useRef<HTMLDivElement>(null)
 
   const loadChannels = useCallback(async () => {
@@ -48,15 +54,48 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
     }
   }, [call])
 
+  // A page, not the whole room. A reader arrives wanting the end of the
+  // conversation; loading thousands of messages to show the last screenful is
+  // work nobody asked for and a wait nobody wanted.
   const loadMessages = useCallback(async (channelID: string) => {
     if (!channelID) return
     try {
-      setMsgs((await call('channels.messages', { channel_id: channelID, limit: 200 })) || [])
+      const page: ChannelMessage[] = (await call('channels.messages', { channel_id: channelID, limit: PAGE })) || []
+      setMsgs(page)
+      setMore(page.length === PAGE)
       setErr(null)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
   }, [call])
+
+  // Scrolling up asks for what came before the oldest message on screen. The
+  // scroll position is pinned across the insert, because a list that jumps
+  // when it grows upwards is a list you cannot read.
+  const loadOlder = useCallback(async () => {
+    const box = scroller.current
+    if (!box || !active || loadingOlder.current || !more) return
+    const oldest = msgs[msgs.length - 1]
+    if (!oldest) return
+    loadingOlder.current = true
+    const before = box.scrollHeight - box.scrollTop
+    try {
+      const page: ChannelMessage[] = (await call('channels.messages', {
+        channel_id: active, limit: PAGE, before: oldest.created_at,
+      })) || []
+      if (page.length) {
+        setMsgs(m => [...m, ...page])
+      }
+      setMore(page.length === PAGE)
+      requestAnimationFrame(() => {
+        if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight - before
+      })
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      loadingOlder.current = false
+    }
+  }, [active, call, more, msgs])
 
   const loadThread = useCallback(async (rootID: string) => {
     try {
@@ -84,6 +123,16 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
 
   useEffect(() => { loadMessages(active) }, [active, loadMessages])
 
+  // Land on the newest message when a room opens, and follow it while you are
+  // already at the bottom — but never yank the view down while somebody is
+  // reading further up.
+  useEffect(() => {
+    if (!msgs.length) return
+    if (atBottom.current) bottom.current?.scrollIntoView({ block: 'end' })
+  }, [msgs])
+
+  useEffect(() => { atBottom.current = true }, [active])
+
   // Arriving from the board: open the conversation the task came out of.
   useEffect(() => {
     if (!openThreadID) return
@@ -99,10 +148,15 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   }, [openThreadID, call, onOpenedThread])
 
   // Poll: an agent posting from its own shell has no way to push to this page.
+  //
+  // Only while you are at the bottom. The poll replaces the list with the
+  // newest page, so running it after somebody scrolled up would throw away the
+  // history they just asked for and drop them back at the end — twice a
+  // minute, while they were reading.
   useEffect(() => {
     const id = setInterval(() => {
       loadChannels()
-      loadMessages(active)
+      if (atBottom.current) loadMessages(active)
       if (threadRoot) loadThread(threadRoot)
     }, 4000)
     return () => clearInterval(id)
@@ -140,6 +194,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         // instead of behind a click nobody knew to make.
         await loadThread(posted.id)
       } else {
+        atBottom.current = true
         bottom.current?.scrollIntoView({ behavior: 'smooth' })
       }
     } catch (e: any) {
@@ -187,7 +242,20 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
           </span>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div
+          ref={scroller}
+          onScroll={e => {
+            const el = e.currentTarget
+            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+            if (el.scrollTop < 120) loadOlder()
+          }}
+          className="flex-1 overflow-y-auto p-4 space-y-3"
+        >
+          {more && (
+            <div className="text-center text-[11px] text-gray-600 py-1">
+              kéo lên để xem thêm…
+            </div>
+          )}
           {err && <div className="text-xs text-red-300">{err}</div>}
           {ordered.length === 0 && !err && (
             <div className="text-sm text-gray-500">

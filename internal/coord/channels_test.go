@@ -1,8 +1,10 @@
 package coord
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func registerTestAgents(t *testing.T, db *DB, ids ...string) {
@@ -126,7 +128,7 @@ func TestThreadsStayOneLevelDeep(t *testing.T) {
 
 	// The channel's main line shows the root once, with its reply count —
 	// not the replies as separate lines.
-	main, err := db.ChannelMessages(GeneralChannelID, 50)
+	main, err := db.ChannelMessages(GeneralChannelID, 50, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +321,7 @@ func TestMainLineCarriesTheNewestReply(t *testing.T) {
 	}
 
 	// No replies yet: no preview, and nothing pretending there is one.
-	line, err := db.ChannelMessages(GeneralChannelID, 10)
+	line, err := db.ChannelMessages(GeneralChannelID, 10, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +337,7 @@ func TestMainLineCarriesTheNewestReply(t *testing.T) {
 		}
 	}
 
-	line, err = db.ChannelMessages(GeneralChannelID, 10)
+	line, err = db.ChannelMessages(GeneralChannelID, 10, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +368,7 @@ func TestReplyPreviewIsCut(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	line, _ := db.ChannelMessages(GeneralChannelID, 10)
+	line, _ := db.ChannelMessages(GeneralChannelID, 10, time.Time{})
 	if n := len([]rune(line[0].LastReplyText)); n > ReplyPreviewRunes {
 		t.Fatalf("preview is %d runes, cap is %d", n, ReplyPreviewRunes)
 	}
@@ -500,7 +502,7 @@ func TestBindThreadToTask(t *testing.T) {
 	if gotRoot != root.ID || gotChannel != GeneralChannelID {
 		t.Fatalf("TaskThread: got %s in %s, want %s in %s", gotRoot, gotChannel, root.ID, GeneralChannelID)
 	}
-	line, _ := db.ChannelMessages(GeneralChannelID, 10)
+	line, _ := db.ChannelMessages(GeneralChannelID, 10, time.Time{})
 	if line[0].TaskID != task.ID {
 		t.Fatalf("thread root does not carry the task: %q", line[0].TaskID)
 	}
@@ -611,5 +613,99 @@ func TestNamingOneAgentInAThreadWakesOnlyThatOne(t *testing.T) {
 	}
 	if len(wake) != 3 {
 		t.Fatalf("an unaddressed reply should reach the thread, woke %v", wake)
+	}
+}
+
+// A reader arrives wanting the end of a conversation, and scrolls up for the
+// rest. Loading the whole room to show the last screenful is work nobody asked
+// for.
+func TestChannelMessagesPagesBackwards(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+
+	for i := 0; i < 25; i++ {
+		if _, _, err := db.PostMessage(NewChannelMessage{
+			ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+			Body: fmt.Sprintf("tin %02d", i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The newest page is the newest messages, not the oldest.
+	page1, err := db.ChannelMessages(GeneralChannelID, 10, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 10 {
+		t.Fatalf("page size: got %d", len(page1))
+	}
+	if page1[0].Body != "tin 24" {
+		t.Fatalf("the first page should start at the end: %q", page1[0].Body)
+	}
+
+	// Scrolling up asks for what came before the oldest one on screen.
+	page2, err := db.ChannelMessages(GeneralChannelID, 10, page1[len(page1)-1].CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 10 {
+		t.Fatalf("second page size: got %d", len(page2))
+	}
+	if page2[0].Body != "tin 14" {
+		t.Fatalf("the second page should continue where the first stopped: %q", page2[0].Body)
+	}
+	// No overlap, nothing skipped.
+	seen := map[string]bool{}
+	for _, m := range append(page1, page2...) {
+		if seen[m.ID] {
+			t.Fatalf("%s appeared on both pages", m.Body)
+		}
+		seen[m.ID] = true
+	}
+
+	// And the last page is short, which is how the reader knows it has ended.
+	page3, err := db.ChannelMessages(GeneralChannelID, 10, page2[len(page2)-1].CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page3) != 5 {
+		t.Fatalf("the last page should hold what is left: got %d", len(page3))
+	}
+}
+
+// The lines that only exist while something runs are swept at startup: a run
+// that died with its gateway leaves one saying it is still going, and nothing
+// else ever corrects it.
+func TestSweepClearsProgressLinesAndNothingElse(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+
+	real1, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: "một câu trả lời thật",
+	})
+	stale, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: ProgressPrefix + "_đang chạy_ `t_1`",
+	})
+	other, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw2", Body: ProgressPrefix + "_đang chạy_ `t_2`",
+	})
+
+	n, err := db.SweepProgressLines("bomclaw", ProgressPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("swept %d lines, expected 1", n)
+	}
+	if _, err := db.GetMessage(stale.ID); err == nil {
+		t.Error("the stale progress line survived")
+	}
+	if _, err := db.GetMessage(real1.ID); err != nil {
+		t.Error("a real message was swept")
+	}
+	// Another agent's line is its own business: it may still be running.
+	if _, err := db.GetMessage(other.ID); err != nil {
+		t.Error("another agent's progress line was swept")
 	}
 }

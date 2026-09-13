@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -79,7 +80,7 @@ func TestATaskWithNoThreadReportsNowhere(t *testing.T) {
 	if p := openProgress(db, claimed); p != nil {
 		t.Fatal("a task with no conversation opened a progress line somewhere")
 	}
-	line, _ := db.ChannelMessages(coord.GeneralChannelID, 10)
+	line, _ := db.ChannelMessages(coord.GeneralChannelID, 10, time.Time{})
 	if len(line) != 0 {
 		t.Fatalf("it posted into the channel anyway: %+v", line)
 	}

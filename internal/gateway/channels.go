@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -42,6 +43,10 @@ type channelMessagesParams struct {
 	ChannelID  string `json:"channel_id"`
 	ThreadRoot string `json:"thread_root,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
+	// Before pages backwards: the created_at of the oldest message already on
+	// screen. Empty asks for the newest page, which is where a reader wants to
+	// start — a conversation is read from its end.
+	Before string `json:"before,omitempty"`
 }
 
 func handleChannelMessages(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -62,7 +67,15 @@ func handleChannelMessages(deps Deps, params json.RawMessage) (json.RawMessage, 
 	if p.ChannelID == "" {
 		return nil, fmt.Errorf("channel_id is required")
 	}
-	msgs, err := deps.Coord.ChannelMessages(p.ChannelID, p.Limit)
+	var before time.Time
+	if p.Before != "" {
+		t, err := time.Parse(time.RFC3339Nano, p.Before)
+		if err != nil {
+			return nil, fmt.Errorf("before must be an RFC3339 timestamp: %w", err)
+		}
+		before = t
+	}
+	msgs, err := deps.Coord.ChannelMessages(p.ChannelID, p.Limit, before)
 	if err != nil {
 		return nil, err
 	}

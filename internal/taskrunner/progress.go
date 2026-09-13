@@ -24,7 +24,8 @@ import (
 // still said "working" would be a lie the rest of the time. The report the
 // reporter posts when the task finishes is the permanent record; this is only
 // the window while it happens.
-const progressPrefix = "⏳ "
+// progressPrefix is coord.ProgressPrefix; the startup sweep matches the same.
+const progressPrefix = coord.ProgressPrefix
 
 // progressLine owns the message a run keeps updated.
 type progressLine struct {

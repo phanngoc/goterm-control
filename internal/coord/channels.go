@@ -551,13 +551,29 @@ func (db *DB) resolveMentions(body string) ([]Member, error) {
 
 // ChannelMessages returns the channel's main line — top-level messages only,
 // newest first, each with its reply count so a thread announces itself.
-func (db *DB) ChannelMessages(channelID string, limit int) ([]ChannelMessage, error) {
+// ChannelMessages returns the newest page of a channel's main line. before is
+// the created_at of the oldest message already on screen, so scrolling up asks
+// for what came before it; empty means the newest page.
+//
+// Paged rather than "the last hundred": a busy room is thousands of messages,
+// and a reader arrives wanting the end of the conversation, not the start of
+// it. Loading everything to show the last screenful is work nobody asked for
+// and a wait nobody wanted.
+func (db *DB) ChannelMessages(channelID string, limit int, before time.Time) ([]ChannelMessage, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := db.conn.Query(`SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
-		FROM channel_messages WHERE channel_id = ? AND thread_root = ''
-		ORDER BY created_at DESC LIMIT ?`, channelID, limit)
+	query := `SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
+		FROM channel_messages WHERE channel_id = ? AND thread_root = ''`
+	args := []any{channelID}
+	if !before.IsZero() {
+		query += ` AND created_at < ?`
+		args = append(args, ts(before))
+	}
+	query += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("messages of %s: %w", channelID, err)
 	}
@@ -782,6 +798,45 @@ func (db *DB) DeleteMessage(id string) error {
 		return fmt.Errorf("delete %s: %w", id, err)
 	}
 	return tx.Commit()
+}
+
+// SweepProgressLines removes the "working on it" lines an agent left behind.
+//
+// A run that dies with its gateway — a deploy, a crash — leaves a message in
+// the room saying it is still going, and nothing ever corrects it. Sweeping at
+// startup is the only moment this is unambiguously safe: the process has just
+// begun, so any line it wrote is by definition from a run that no longer
+// exists.
+//
+// Matched on the prefix the progress lines carry rather than on a flag column,
+// because these are the only messages an agent writes that are meant to be
+// temporary — everything else it says, it meant.
+func (db *DB) SweepProgressLines(agentID, prefix string) (int, error) {
+	rows, err := db.conn.Query(`SELECT id FROM channel_messages
+		WHERE author_kind = ? AND author_id = ? AND body LIKE ? || '%'`,
+		MemberAgent, agentID, prefix)
+	if err != nil {
+		return 0, fmt.Errorf("sweep progress lines of %s: %w", agentID, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if err := db.DeleteMessage(id); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
 }
 
 // GetMessage is getMessage for callers outside this package: the gateway needs

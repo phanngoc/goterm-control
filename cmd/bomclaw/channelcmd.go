@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/gateway"
@@ -86,7 +87,7 @@ func runChannel(args []string) {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch read <channel-id> [--thread <message-id>]")
 			os.Exit(1)
 		}
-		msgs, err := db.ChannelMessages(channelID, *limit)
+		msgs, err := db.ChannelMessages(channelID, *limit, time.Time{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ch read: %v\n", err)
 			os.Exit(1)
