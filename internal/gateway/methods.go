@@ -60,6 +60,11 @@ type Deps struct {
 	// Nil when this agent does not claim tasks.
 	PokeTasks func()
 
+	// SchedulesRun is whether any gateway on this machine fires schedules. An
+	// agent told it can put work on a clock, on a machine where nothing runs
+	// the clock, produces rows that never fire — which looks like it worked.
+	SchedulesRun bool
+
 	// PokeSchedules asks the local scheduler loop to tick now (after a
 	// "run now"). Nil when schedules are disabled on this gateway; the row is
 	// still updated and another gateway's tick fires it.

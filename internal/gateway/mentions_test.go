@@ -25,6 +25,7 @@ type recordingTurn struct {
 	resumed  []string
 	reply    string
 	newID    string
+	err      error
 
 	// duringTurn runs against the sink before the reply is written, so a test
 	// can watch what the room sees while the turn is still going.
@@ -46,6 +47,9 @@ func (r *recordingTurn) RunTurn(ctx context.Context, sess *session.Session, chat
 
 	if newID != "" {
 		sess.SetSessionID(newID) // the CLI hands back the session it just wrote
+	}
+	if r.err != nil {
+		return nil, r.err
 	}
 	sink.Write(reply)
 	return &execution.RunResult{SessionID: sess.ID, Status: execution.RunSuccess}, nil
@@ -673,5 +677,96 @@ func TestAThreadWithNoTaskListsNoFiles(t *testing.T) {
 	NewMentionWatcher(deps).sweep(context.Background())
 	if strings.Contains(turn.prompts[0], "has produced") {
 		t.Error("a thread with no work behind it listed files")
+	}
+}
+
+// TestTheAgentIsToldItCanSchedule: asked to "check the price every five
+// minutes", an agent that has not been told about schedules either refuses or
+// promises to remember — and then does not, because it does not run between
+// turns. The command has existed since P1a; nothing ever said so in a prompt.
+func TestTheAgentIsToldItCanSchedule(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	deps.SchedulesRun = true
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body:   "tạo 1 schedule 5 phút 1 lần cho tôi nắm giá top 10 crypto",
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	p := turn.prompts[0]
+	for _, want := range []string{"schedule add", "--every", "--agent-task"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the prompt does not offer %q:\n%s", want, p)
+		}
+	}
+	// And the part that is easy to get wrong: the task it creates is claimed
+	// by some other agent, which will not have this conversation.
+	if !strings.Contains(p, "will not have this") {
+		t.Error("the prompt does not warn that the claiming agent lacks this context")
+	}
+}
+
+// A gateway that does not fire schedules must say so rather than let an agent
+// promise something nothing will run.
+func TestAGatewayThatDoesNotFireSchedulesSaysSo(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	deps.SchedulesRun = false
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "mỗi sáng gửi tôi tóm tắt", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	p := turn.prompts[0]
+	if !strings.Contains(p, "does not fire schedules") {
+		t.Errorf("the prompt hides that nothing here would run it:\n%s", p)
+	}
+}
+
+// TestShutdownDoesNotEatTheQuestion: a turn killed by a deploy is not an
+// answered question. Marking the mention read would lose it for good — the
+// person would have to notice and ask again.
+func TestShutdownDoesNotEatTheQuestion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	turn := &recordingTurn{reply: "không bao giờ tới"}
+	turn.duringTurn = func(TurnSink) { cancel() }
+	turn.err = context.Canceled
+
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "câu hỏi quan trọng", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(ctx)
+
+	// Still unread: the next gateway will answer it.
+	left, err := cdb.UnreadMentions(coord.MemberAgent, "bomclaw2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 {
+		t.Fatalf("a question interrupted by shutdown was consumed anyway (%d unread)", len(left))
+	}
+	// And no half-finished progress line was left in the room.
+	thread, _ := cdb.ChannelMessages(coord.GeneralChannelID, 10, time.Time{})
+	for _, m := range thread {
+		if strings.HasPrefix(m.Body, coord.ProgressPrefix) {
+			t.Fatal("a progress line outlived the interrupted turn")
+		}
 	}
 }
