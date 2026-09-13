@@ -129,9 +129,12 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// codex has always inherited the ambient environment; the account layers
 	// CODEX_HOME on top so each login keeps its own threads.
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
-	if c.workspace != "" {
-		_ = os.MkdirAll(c.workspace, 0755)
-		cmd.Dir = c.workspace
+	// The session's directory wins when it has one: a turn answering a
+	// project works in that project's folder, which is where the other
+	// agents and the person will look for what it produced.
+	if dir := chat.WorkspaceFor(sess, c.workspace); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+		cmd.Dir = dir
 	}
 	cmd.Stdin = strings.NewReader(prompt)
 

@@ -185,9 +185,12 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	// Set working directory so Claude creates files in the workspace,
 	// not in the bot's own source directory.
-	if c.workspace != "" {
-		_ = os.MkdirAll(c.workspace, 0755)
-		cmd.Dir = c.workspace
+	// The session's directory wins when it has one: a turn answering a
+	// project works in that project's folder, which is where the other
+	// agents and the person will look for what it produced.
+	if dir := chat.WorkspaceFor(sess, c.workspace); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+		cmd.Dir = dir
 	}
 
 	// Pass user message via stdin (safe for arbitrary text).

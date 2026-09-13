@@ -203,6 +203,12 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	if w.deps.Sessions != nil {
 		sess = w.deps.Sessions.Adopt(sess)
 	}
+	// Answering a project's room means working in that project's folder. A
+	// room with no project leaves this empty and the agent works where it
+	// always has.
+	if c, err := w.deps.Coord.GetChannel(m.ChannelID); err == nil {
+		sess.SetWorkspace(c.Workspace)
+	}
 	// Resuming is what makes turn 2 remember turn 1. A ref from the other CLI
 	// — after a provider switch — is simply not used; only the CLI that owns
 	// a session can resume it.

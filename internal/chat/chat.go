@@ -78,3 +78,19 @@ func ExtractScreenshotPath(cmd string) string {
 	}
 	return ""
 }
+
+// WorkspaceFor picks the directory a turn runs in: the session's when it has
+// one, the agent's own otherwise.
+//
+// A chat has no project and runs where the agent lives. A turn answering a
+// project's room runs in that project's folder — otherwise the work lands in
+// whichever agent happened to take the turn, and the next person to look for
+// it has three places to search and no way to know which.
+func WorkspaceFor(sess *session.Session, fallback string) string {
+	if sess != nil {
+		if dir := sess.GetWorkspace(); dir != "" {
+			return dir
+		}
+	}
+	return fallback
+}

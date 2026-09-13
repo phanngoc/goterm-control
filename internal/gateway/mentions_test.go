@@ -897,3 +897,51 @@ func TestAPlainRoomDescribesNoProject(t *testing.T) {
 		t.Errorf("#general was described as a project:\n%s", turn.prompts[0])
 	}
 }
+
+// TestATurnInAProjectRunsInItsFolder: telling an agent where the project is
+// and then running its tools somewhere else is the same as not telling it.
+func TestATurnInAProjectRunsInItsFolder(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	proj, err := cdb.CreateProject("Trading", "", "bomclaw", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: proj.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "bắt đầu", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	sess := deps.Sessions.GetByID(turn.sessions[0])
+	if sess == nil {
+		t.Fatal("the session was not registered")
+	}
+	if got := sess.GetWorkspace(); got != proj.Workspace {
+		t.Fatalf("the turn ran in %q, the project is at %q", got, proj.Workspace)
+	}
+}
+
+// A room that is not a project must not redirect the agent anywhere.
+func TestATurnInAPlainRoomKeepsTheAgentsWorkspace(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "chào", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	sess := deps.Sessions.GetByID(turn.sessions[0])
+	if sess != nil && sess.GetWorkspace() != "" {
+		t.Fatalf("#general redirected the agent to %q", sess.GetWorkspace())
+	}
+}
