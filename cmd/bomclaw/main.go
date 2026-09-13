@@ -810,7 +810,8 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 	// tasks and task_runs are the work ledger and are kept. Every gateway runs
 	// this — a DELETE below a cutoff is idempotent, so two of them are harmless.
 	traceDays, scheduleDays := cfg.Coord.TraceRetentionDays, cfg.Schedules.RunRetentionDays
-	if traceDays > 0 || scheduleDays > 0 {
+	artifactDays := cfg.Coord.ArtifactRetentionDays
+	if traceDays > 0 || scheduleDays > 0 || artifactDays > 0 {
 		go func() {
 			purge := func() {
 				if traceDays > 0 {
@@ -827,6 +828,14 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 						log.Printf("coord: purge schedule runs: %v", err)
 					} else if n > 0 {
 						log.Printf("coord: purged %d schedule runs older than %d days", n, scheduleDays)
+					}
+				}
+				if artifactDays > 0 {
+					rows, files, err := cdb.PurgeArtifacts(time.Now().AddDate(0, 0, -artifactDays))
+					if err != nil {
+						log.Printf("coord: purge artifacts: %v", err)
+					} else if rows > 0 {
+						log.Printf("coord: purged %d artifacts (%d files) from task trees finished over %d days ago", rows, files, artifactDays)
 					}
 				}
 			}

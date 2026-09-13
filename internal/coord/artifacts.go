@@ -2,6 +2,7 @@ package coord
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -355,6 +356,136 @@ func scanArtifactsWithRole(rows interface {
 		}
 		a.CreatedAt = parseTS(created)
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// PurgeArtifacts deletes the work product of task trees that finished more
+// than `before` ago, and reports how many rows and files went.
+//
+// Three rules, each with a reason:
+//
+//   - Only contexts where EVERY task has reached a terminal state. A tree with
+//     one task still open is work in progress, however old the rest of it is.
+//   - kind=document is kept. Patches, files and results are intermediate — the
+//     bytes a parent handed a child — while a document is the report someone
+//     asked for, and disk is cheaper than deleting that.
+//   - The row goes first, then the file. The other order is tempting because
+//     the bytes are the bulk, but a row whose file is gone is a broken read for
+//     anything that lists artifacts, while a file with no row is only disk.
+//
+// Safe to run from several gateways at once: the SELECT and the DELETE are one
+// transaction, so a second caller finds nothing left to take.
+func (db *DB) PurgeArtifacts(before time.Time) (rows, files int, err error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return 0, 0, fmt.Errorf("purge artifacts: %w", err)
+	}
+	defer tx.Rollback()
+
+	// A context qualifies when it has no non-terminal task left and its last
+	// movement is older than the cutoff. updated_at on a terminal task is when
+	// it stopped moving.
+	cur, err := tx.Query(`SELECT id, path FROM artifacts WHERE `+purgeableWhere,
+		purgeableArgs(before)...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("purge artifacts: %w", err)
+	}
+	var ids, paths []string
+	for cur.Next() {
+		var id, path string
+		if err := cur.Scan(&id, &path); err != nil {
+			cur.Close()
+			return 0, 0, fmt.Errorf("purge artifacts: %w", err)
+		}
+		ids = append(ids, id)
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	cur.Close()
+	if err := cur.Err(); err != nil {
+		return 0, 0, fmt.Errorf("purge artifacts: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, 0, nil
+	}
+
+	for _, id := range ids {
+		if _, err := tx.Exec(`DELETE FROM artifact_links WHERE artifact_id = ?`, id); err != nil {
+			return 0, 0, fmt.Errorf("purge artifact links: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM artifacts WHERE id = ?`, id); err != nil {
+			return 0, 0, fmt.Errorf("purge artifact %s: %w", id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, fmt.Errorf("purge artifacts: %w", err)
+	}
+
+	root := db.ArtifactsDir()
+	for _, rel := range paths {
+		full, ok := underRoot(root, rel)
+		if !ok {
+			// A stored path that climbs out of the artifacts root is not ours
+			// to delete, whatever put it there.
+			log.Printf("coord: refusing to delete artifact path outside %s: %q", root, rel)
+			continue
+		}
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			log.Printf("coord: delete artifact file %s: %v", full, err)
+			continue
+		}
+		files++
+		// The task directory, and then the context directory, if this was the
+		// last thing in them. Non-empty ones fail and are left alone.
+		dir := filepath.Dir(full)
+		os.Remove(dir)
+		os.Remove(filepath.Dir(dir))
+	}
+	return len(ids), files, nil
+}
+
+// underRoot resolves a stored relative path against the artifacts root and
+// reports whether it stayed inside. Filenames are sanitised on the way in, so
+// this guards the rows that predate that or were written by hand.
+func underRoot(root, rel string) (string, bool) {
+	full := filepath.Clean(filepath.Join(root, rel))
+	cleanRoot := filepath.Clean(root)
+	if full == cleanRoot {
+		return "", false
+	}
+	return full, strings.HasPrefix(full, cleanRoot+string(filepath.Separator))
+}
+
+// purgeableWhere is shared by the purge and its dry run, so what `--dry-run`
+// prints can never be a different set from what the purge takes.
+const purgeableWhere = `kind != ? AND context_id IN (
+	SELECT context_id FROM tasks
+	GROUP BY context_id
+	HAVING sum(CASE WHEN state IN (?, ?, ?, ?) THEN 0 ELSE 1 END) = 0
+	   AND max(updated_at) < ?
+)`
+
+func purgeableArgs(before time.Time) []any {
+	return []any{ArtifactDocument, TaskCompleted, TaskFailed, TaskCanceled, TaskRejected, ts(before)}
+}
+
+// PurgeableArtifacts lists what PurgeArtifacts would take, and deletes nothing.
+func (db *DB) PurgeableArtifacts(before time.Time) ([]Artifact, error) {
+	rows, err := db.conn.Query(`SELECT `+artifactCols+` FROM artifacts WHERE `+purgeableWhere+
+		` ORDER BY context_id, created_at`, purgeableArgs(before)...)
+	if err != nil {
+		return nil, fmt.Errorf("purgeable artifacts: %w", err)
+	}
+	defer rows.Close()
+	out := []Artifact{}
+	for rows.Next() {
+		a, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
 	}
 	return out, rows.Err()
 }

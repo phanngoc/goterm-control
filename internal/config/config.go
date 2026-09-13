@@ -68,6 +68,14 @@ type CoordConfig struct {
 	ArtifactsDir       string `yaml:"artifacts_dir"`        // default ~/goterm-shared/artifacts
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
 
+	// ArtifactRetentionDays is how long the work product of a FINISHED task
+	// tree is kept (default 30; 0 disables). Deliberately not the same number
+	// as traces: a trace answers "how did that run go", which stops mattering
+	// within the week, while an artifact is the thing the run produced. Tying
+	// them together means one of the two is always wrong. kind=document is
+	// never purged.
+	ArtifactRetentionDays int `yaml:"artifact_retention_days"`
+
 	// ReplyToMentions is whether being named in a channel makes this agent run
 	// a turn and answer. Pointer for the same reason as Enabled: absent means
 	// on. Turning it off leaves the room readable and the mention recorded —
@@ -318,6 +326,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Coord.TraceRetentionDays == 0 {
 		cfg.Coord.TraceRetentionDays = 7
+	}
+	if cfg.Coord.ArtifactRetentionDays == 0 {
+		cfg.Coord.ArtifactRetentionDays = 30
 	}
 	if cfg.Tasks.PollIntervalSeconds == 0 {
 		cfg.Tasks.PollIntervalSeconds = 60
