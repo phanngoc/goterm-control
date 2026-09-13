@@ -371,3 +371,102 @@ func TestReplyPreviewIsCut(t *testing.T) {
 		t.Fatalf("preview is %d runes, cap is %d", n, ReplyPreviewRunes)
 	}
 }
+
+// TestHumanReplyWakesTheThread: answering inside a thread is talking to the
+// agents already in it. Having to retype @bomclaw2 under its own reply is not
+// a conversation.
+func TestHumanReplyWakesTheThread(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2", "bomclaw3")
+
+	root, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+		Body: "@bomclaw2 xem hộ log",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw2", Body: "xong rồi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A follow-up with no @ at all.
+	_, wake, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "thế còn dòng cuối?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 1 || wake[0] != "bomclaw2" {
+		t.Fatalf("a person's follow-up should wake the agent in the thread, got %v", wake)
+	}
+	// And it must be readable as a summons, or the watcher never sees it.
+	unread, err := db.UnreadMentions(MemberAgent, "bomclaw2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 2 {
+		t.Fatalf("bomclaw2 should have the original mention and the follow-up, got %d", len(unread))
+	}
+
+	// An agent that never spoke in the thread stays out of it.
+	if u, _ := db.UnreadMentions(MemberAgent, "bomclaw3", 10); len(u) != 0 {
+		t.Fatalf("bomclaw3 was pulled into a thread it is not in: %v", u)
+	}
+}
+
+// TestAgentReplyDoesNotWakeTheThread guards the loop the mention rule exists to
+// prevent: three agents in one room answering each other's answers forever.
+func TestAgentReplyDoesNotWakeTheThread(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+
+	root, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+		Body: "@bomclaw2 bắt đầu đi",
+	})
+	if _, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw2", Body: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// bomclaw speaks in the thread without naming anyone.
+	_, wake, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw", Body: "mình cũng đang xem",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 0 {
+		t.Fatalf("an agent's thread reply woke %v — that is the ping-pong loop", wake)
+	}
+}
+
+// TestThreadFollowUpSkipsTheAuthor: nobody rings their own doorbell, and the
+// owner is not an agent to be woken.
+func TestThreadFollowUpSkipsTheAuthor(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw2")
+
+	root, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "@bomclaw2 hi",
+	})
+	_, wake, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "còn đó không",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the agent that spoke... and here none has, so nobody is woken: the
+	// root is the owner's own line.
+	for _, w := range wake {
+		if w == OwnerUserID {
+			t.Fatal("the owner was queued as an agent to wake")
+		}
+	}
+}

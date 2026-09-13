@@ -22,6 +22,9 @@ export default function ChannelView({ call, agents, selfID }: {
   const [thread, setThread] = useState<ChannelMessage[] | null>(null)
   const [threadRoot, setThreadRoot] = useState<string>('')
   const [body, setBody] = useState('')
+  // The thread keeps its own draft. One shared box meant typing a reply in the
+  // panel on the right while the words appeared in the box on the left.
+  const [threadBody, setThreadBody] = useState('')
   const [as, setAs] = useState<string>(OWNER)
   const [err, setErr] = useState<string | null>(null)
   const sending = useRef(false)
@@ -90,18 +93,21 @@ export default function ChannelView({ call, agents, selfID }: {
   // One post per press. The body is only cleared once the round trip is over,
   // so without this latch a second Enter arriving before the reply re-sends the
   // same text — which is how the room ended up with a line in it twice.
-  const post = async () => {
-    const text = body.trim()
+  // One sender for two boxes: the channel's main line, and a thread. Which one
+  // is decided by the caller, not by a mode the composer is left sitting in.
+  const post = async (inThread: boolean) => {
+    const text = (inThread ? threadBody : body).trim()
     if (!text || !active || sending.current) return
+    if (inThread && !threadRoot) return
     sending.current = true
     try {
       const posted: ChannelMessage = await call('channels.post', {
         channel_id: active, body: text, as,
-        ...(threadRoot ? { thread_root: threadRoot } : {}),
+        ...(inThread ? { thread_root: threadRoot } : {}),
       })
-      setBody('')
+      if (inThread) setThreadBody(''); else setBody('')
       await loadMessages(active)
-      if (threadRoot) {
+      if (inThread) {
         await loadThread(threadRoot)
       } else if (posted?.mentions?.length) {
         // Naming an agent is asking it something, and its answer goes into this
@@ -164,10 +170,9 @@ export default function ChannelView({ call, agents, selfID }: {
         </div>
 
         <Composer
-          value={body} onChange={setBody} onSend={post}
+          value={body} onChange={setBody} onSend={() => post(false)}
           as={as} setAs={setAs} agents={agents}
-          replyingTo={threadRoot ? thread?.[0] : undefined}
-          onCancelReply={() => { setThread(null); setThreadRoot('') }}
+          placeholder="Message the channel — @agent to wake one"
         />
       </div>
 
@@ -188,6 +193,12 @@ export default function ChannelView({ call, agents, selfID }: {
               </div>
             ))}
           </div>
+          {/* Typing happens where you are reading. */}
+          <Composer
+            value={threadBody} onChange={setThreadBody} onSend={() => post(true)}
+            as={as} setAs={setAs} agents={agents}
+            placeholder="Reply in thread"
+          />
         </aside>
       )}
     </div>
@@ -268,20 +279,12 @@ function Line({ m, selfID, compact, onThread }: {
   )
 }
 
-function Composer({ value, onChange, onSend, as, setAs, agents, replyingTo, onCancelReply }: {
+function Composer({ value, onChange, onSend, as, setAs, agents, placeholder }: {
   value: string; onChange: (s: string) => void; onSend: () => void
-  as: string; setAs: (s: string) => void; agents: string[]
-  replyingTo?: ChannelMessage; onCancelReply: () => void
+  as: string; setAs: (s: string) => void; agents: string[]; placeholder: string
 }) {
   return (
     <div className="border-t border-gray-800 bg-gray-900/40">
-      {replyingTo && (
-        <div className="px-3 pt-2 text-[11px] text-gray-500 flex items-center gap-2">
-          <span>replying in thread:</span>
-          <span className="truncate text-gray-400">{replyingTo.body.slice(0, 60)}</span>
-          <button onClick={onCancelReply} className="ml-auto hover:text-gray-300">cancel</button>
-        </div>
-      )}
       <div className="p-3 flex gap-2">
         <select
           value={as}
@@ -302,7 +305,7 @@ function Composer({ value, onChange, onSend, as, setAs, agents, replyingTo, onCa
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
           }}
-          placeholder="Message the channel — @agent to wake one"
+          placeholder={placeholder}
           className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
         />
         <button

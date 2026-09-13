@@ -393,6 +393,27 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 		}
 	}
 
+	// A person answering inside a thread is talking to the agents already in
+	// it, and having to retype @bomclaw2 under its own reply is not a
+	// conversation. Following a thread you have spoken in is Slack's rule and
+	// the right one here.
+	//
+	// Only a PERSON's reply does this. An agent's reply waking every other
+	// agent in the thread is the loop the mention rule exists to prevent —
+	// three agents in one room answering each other's answers. An agent that
+	// means to summon a peer still writes @, which is a decision it made.
+	if n.ThreadRoot != "" && n.AuthorKind == MemberUser {
+		followers, err := db.threadAgents(n.ThreadRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, who := range followers {
+			if !containsMember(addressed, who.Kind, who.ID) {
+				addressed = append(addressed, who)
+			}
+		}
+	}
+
 	var wake []string
 	for _, who := range addressed {
 		if err := db.JoinChannel(m.ChannelID, who.Kind, who.ID); err != nil {
@@ -410,6 +431,26 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 		}
 	}
 	return m, wake, nil
+}
+
+// threadAgents lists the agents that have spoken in a thread — its root
+// included, since the root is what started it.
+func (db *DB) threadAgents(rootID string) ([]Member, error) {
+	rows, err := db.conn.Query(`SELECT DISTINCT author_id FROM channel_messages
+		WHERE (id = ? OR thread_root = ?) AND author_kind = ?`, rootID, rootID, MemberAgent)
+	if err != nil {
+		return nil, fmt.Errorf("agents in thread %s: %w", rootID, err)
+	}
+	defer rows.Close()
+	var out []Member
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, Member{Kind: MemberAgent, ID: id})
+	}
+	return out, rows.Err()
 }
 
 // resolveMentions maps @names in a body to real members. An @name that is not
