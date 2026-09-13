@@ -770,3 +770,79 @@ func TestShutdownDoesNotEatTheQuestion(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAbandonedTurnStopsWriting: the engine stops WAITING for a turn when
+// its deadline passes, but the turn keeps running in its lane. Its sink was
+// still writing into the room afterwards, so a line this code had already
+// closed came back to life saying "working" — and stayed that way, which is
+// exactly what a thread showed after a three-minute timeout.
+func TestAnAbandonedTurnStopsWriting(t *testing.T) {
+	turn := &recordingTurn{err: context.DeadlineExceeded}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	// The turn keeps a handle on its sink and writes after giving the caller
+	// back its error, the way a lane goroutine does.
+	var escaped TurnSink
+	turn.duringTurn = func(sink TurnSink) { escaped = sink }
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "việc dài", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	// Whatever it says now must not reach the room.
+	if escaped == nil {
+		t.Fatal("the test never got hold of the sink")
+	}
+	escaped.NoteTool("Bash")
+	escaped.Write(strings.Repeat("vẫn đang chạy đây. ", 20))
+
+	thread, err := cdb.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range thread {
+		if strings.HasPrefix(m.Body, coord.ProgressPrefix) {
+			t.Fatalf("an abandoned turn revived its progress line: %q", m.Body)
+		}
+		if strings.Contains(m.Body, "vẫn đang chạy") {
+			t.Fatalf("an abandoned turn published text: %q", m.Body)
+		}
+	}
+}
+
+// And a timeout says what to do about it: "deadline exceeded" is not something
+// a person can act on.
+func TestATimeoutSuggestsATask(t *testing.T) {
+	turn := &recordingTurn{err: context.DeadlineExceeded}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "việc dài", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	thread, _ := cdb.ThreadMessages(root.ID)
+	var said string
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			said = m.Body
+		}
+	}
+	if !strings.Contains(said, "task") {
+		t.Errorf("a timeout should point at the lane that can finish it: %q", said)
+	}
+	if strings.Contains(said, "deadline exceeded") {
+		t.Errorf("the raw error is not an instruction: %q", said)
+	}
+}
