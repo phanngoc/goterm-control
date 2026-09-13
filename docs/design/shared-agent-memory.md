@@ -1,6 +1,6 @@
 # Design: Bộ nhớ & điều phối dùng chung cho nhiều agent
 
-> Trạng thái: DRAFT — thiết kế, chưa triển khai.
+> Trạng thái: **đã ship**, trừ P1. P0, P2, P3, P4 xong ở PR #66–#70. P1 (gộp bảng session vào một DB) **cố ý bỏ** — vùng điều phối đã tách sang `~/.goterm-shared/data/coord.db`, nên lý do tồn tại của P1 không còn. Chi tiết §12.
 > Phạm vi: agent 1 (`bomclaw`, :18789) và agent 2 (`bomclaw2`, :18790) chạy song song trên cùng một máy Mac, cùng user, cùng binary.
 > Mục tiêu cuối: hai agent **thấy chung một bộ nhớ** và **giao việc được cho nhau**, thay vì hai ốc đảo như hôm nay.
 

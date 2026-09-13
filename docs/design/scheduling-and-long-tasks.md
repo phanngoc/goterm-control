@@ -1,6 +1,6 @@
 # Design: Việc theo lịch, và nhiều agent cùng làm một việc dài
 
-> Trạng thái: DRAFT — thiết kế, chưa triển khai. Kèm kế hoạch P0 chi tiết ở §10.
+> Trạng thái: **đã ship toàn bộ lộ trình** — P0 (PR #88–#91), P1a/P1b/P1c (#103, #104), P2+P3 (#105). Ghi chú triển khai ở §9b/§9c là những chỗ lệch với thiết kế và lý do; bảng §9 là nguồn chính xác.
 > Phạm vi: tầng điều phối (`internal/coord`, `internal/taskrunner`) và gateway. Kế thừa trực tiếp `docs/design/shared-agent-memory.md` (đã ship, PR #66–#70) và **là bản triển khai của S5 "Heartbeat & trạng thái"** trong `docs/design/sessions-and-workspaces.md` §10 — cộng thêm hai thứ S5 chưa có tên: lịch, và task cha–con.
 > Tham chiếu: OpenClaw (heartbeat, automations, background tasks, sub-agents) và Paperclip (heartbeat protocol, tách trạng thái việc khỏi trạng thái run). Chi tiết §3.
 
