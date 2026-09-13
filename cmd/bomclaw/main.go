@@ -502,6 +502,7 @@ func runGateway(args []string) {
 		Trace:         gwTrace,
 		PokeTasks:     runner.Poke,
 		PokeSchedules: sched.Poke,
+		SchedulesRun:  cfg.Schedules.Enabled,
 		NotesFile:     cfg.Coord.NotesFile,
 		Conversations: conversations,
 		ConfigPath:    absPath(*configPath),

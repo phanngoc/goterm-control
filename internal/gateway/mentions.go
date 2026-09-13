@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -237,6 +238,17 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	sess.MarkIdle()
 	w.live.Delete(m.ID)
 	if err != nil {
+		// A turn killed by shutdown is not an answered question. The gateway
+		// was restarting — a deploy, usually — and the person asked something
+		// that nobody will ever come back to if the mention is marked read
+		// here. Leave it: the next gateway sweeps unread mentions at startup
+		// and picks it up. Our own timeout is a different thing and does count,
+		// because retrying it forever would just burn the same three minutes.
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			log.Printf("mentions: %s interrupted by shutdown — leaving it unread for the next run", m.ID)
+			w.finishProgress(progress, "")
+			return
+		}
 		log.Printf("mentions: turn for %s: %v", m.ID, err)
 		w.finishProgress(progress, "⚠️ lượt này hỏng giữa chừng: "+truncateLine(err.Error(), 200))
 		clear("")
@@ -311,6 +323,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
 	b.WriteString(w.threadArtifacts(m))
+	b.WriteString(w.schedules())
 	b.WriteString(w.roster())
 
 	b.WriteString("## How to answer\n\n")
@@ -368,6 +381,42 @@ func (w *MentionWatcher) threadArtifacts(m coord.ChannelMessage) string {
 	b.WriteString("\nRead one with `bomclaw artifact get <id>` — by id, not by path, so it still " +
 		"resolves after the file moves. If you are asked to review one, read it first and say what " +
 		"is wrong with it; agreeing with a file you have not opened is worse than not answering.\n\n")
+	return b.String()
+}
+
+// schedules tells the agent it can put work on a clock, and whether anything
+// on this machine would actually run it.
+//
+// Asked to "check the price every five minutes", an agent that has not been
+// told about schedules will either refuse or promise to remember — and then
+// not, because it does not run between turns. The command has existed since
+// P1a; nothing ever said so in a prompt.
+//
+// The second half matters as much: a schedule row is inert unless some gateway
+// has schedules.enabled. Letting an agent create one into a machine where
+// nothing fires it is worse than refusing, because it looks like it worked.
+func (w *MentionWatcher) schedules() string {
+	var b strings.Builder
+	b.WriteString("## Work on a clock\n\n")
+	if !w.deps.SchedulesRun {
+		// Accurate rather than sweeping: this gateway knows its own config and
+		// not its peers'. A row created here is not wrong, it is waiting — and
+		// saying which of those it is beats guessing for the whole machine.
+		b.WriteString("This gateway does not fire schedules (`schedules.enabled` is off here). " +
+			"You can still create one — `bomclaw schedule add` writes to the shared database — but it " +
+			"waits for a gateway that does run them. Say that when you create one, so nobody is left " +
+			"expecting it to go off.\n\n")
+		return b.String()
+	}
+	b.WriteString("`bomclaw schedule add --name <short-name> --every 5m --agent-task \"<what to do>\" " +
+		"[--body \"<detail>\"] [--to <agent>]` puts work on a clock. `--cron \"0 8 * * 1-5\"` for a " +
+		"time of day, `--at <RFC3339>` for once.\n")
+	b.WriteString("A schedule does not run a model by itself: at each tick it creates an ordinary " +
+		"task, and whichever agent claims it does the work. So write the task title as an " +
+		"instruction someone else could follow — the agent that claims it will not have this " +
+		"conversation.\n")
+	b.WriteString("`bomclaw schedule list|show|disable|remove` for the rest. Tell the person the " +
+		"name you gave it, so they can turn it off without asking you.\n\n")
 	return b.String()
 }
 
