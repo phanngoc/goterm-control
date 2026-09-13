@@ -72,10 +72,14 @@ type AgentConfig struct {
 type CoordConfig struct {
 	// Enabled is a pointer so an absent key means "on" while an explicit
 	// `enabled: false` still turns it off — a plain bool cannot tell those apart.
-	Enabled            *bool  `yaml:"enabled"`
-	Path               string `yaml:"path"`                 // default ~/.goterm-shared/data/coord.db
-	NotesFile          string `yaml:"notes_file"`           // default ~/goterm-shared/NOTES.md
-	ArtifactsDir       string `yaml:"artifacts_dir"`        // default ~/goterm-shared/artifacts
+	Enabled      *bool  `yaml:"enabled"`
+	Path         string `yaml:"path"`          // default ~/.goterm-shared/data/coord.db
+	NotesFile    string `yaml:"notes_file"`    // default ~/goterm-shared/NOTES.md
+	ArtifactsDir string `yaml:"artifacts_dir"` // default ~/goterm-shared/artifacts
+	// ProjectsDir is where a channel's project folder is created; default
+	// ~/goterm-projects. Outside any agent's own workspace on purpose: a
+	// project belongs to everyone working on it.
+	ProjectsDir        string `yaml:"projects_dir"`
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
 
 	// ArtifactRetentionDays is how long the work product of a FINISHED task

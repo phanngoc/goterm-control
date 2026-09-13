@@ -100,7 +100,11 @@ func handleTraceGet(deps Deps, params json.RawMessage) (json.RawMessage, error) 
 type tasksListParams struct {
 	State   string `json:"state,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
+	// ChannelID scopes the board to one project; "-" asks for work belonging
+	// to no project, which is where everything queued before projects existed
+	// lives.
+	ChannelID string `json:"channel_id,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
 }
 
 func handleTasksList(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -114,7 +118,7 @@ func handleTasksList(deps Deps, params json.RawMessage) (json.RawMessage, error)
 		}
 	}
 	tasks, err := deps.Coord.ListTasks(coord.TaskFilter{
-		State: p.State, AgentID: p.AgentID, Limit: p.Limit,
+		State: p.State, AgentID: p.AgentID, ChannelID: p.ChannelID, Limit: p.Limit,
 	})
 	if err != nil {
 		return nil, err
@@ -285,6 +289,9 @@ type taskCreateParams struct {
 	AssignedTo string `json:"assigned_to,omitempty"`
 	Priority   int    `json:"priority,omitempty"`
 	ParentID   string `json:"parent_id,omitempty"` // set: a child of that task, same rules as `bomclaw task sub`
+	// ChannelID files the task under a project. A child ignores it and
+	// inherits its parent's, because a piece of a task is the same work.
+	ChannelID string `json:"channel_id,omitempty"`
 }
 
 func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -301,6 +308,7 @@ func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error
 		Title:      p.Title,
 		Body:       p.Body,
 		Priority:   p.Priority,
+		ChannelID:  p.ChannelID,
 	}
 	var task *coord.Task
 	var err error

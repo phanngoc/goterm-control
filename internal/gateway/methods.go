@@ -47,6 +47,10 @@ type Deps struct {
 	ProviderName string          // "claude" | "codex", for trace metadata
 	Trace        *trace.Recorder // nil-safe: nil disables tracing on this path
 
+	// ProjectsDir is where project folders are created. Empty uses
+	// coord.DefaultProjectsDir.
+	ProjectsDir string
+
 	// ConfigPath is this agent's own config file. The settings screen edits it;
 	// nothing else writes it.
 	ConfigPath string

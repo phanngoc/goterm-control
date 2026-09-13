@@ -61,6 +61,12 @@ const (
 	// that has been busy all day must still fit in front of a model.
 	MaxThreadContextRunes = 24000
 
+	// MaxProjectBriefRunes bounds how much of a project's AGENTS.md travels
+	// into every prompt. It is read before every turn in the room, so a brief
+	// that grows into a manual costs on each one; past this the agent reads
+	// the file itself.
+	MaxProjectBriefRunes = 6000
+
 	// mentionTurnTimeout bounds one reply. A channel turn is a conversation,
 	// not a task — but conversations here routinely involve reading a few
 	// files, and three minutes turned out to be shorter than an ordinary
@@ -344,6 +350,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 	b.WriteString(w.threadContext(m, mem))
 
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
+	b.WriteString(w.project(m.ChannelID))
 	b.WriteString(w.threadArtifacts(m))
 	b.WriteString(w.schedules())
 	b.WriteString(w.roster())
@@ -364,6 +371,38 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		"the task it produced, and the result is posted back here when it finishes, so nobody "+
 		"has to watch the board for an answer they asked for in a room. The board is for work; "+
 		"this room is for talking about it.\n", key)
+	return b.String()
+}
+
+// project describes the room as what it is: a piece of work with a folder, a
+// goal, and people who have decided who does what.
+//
+// The brief comes from AGENTS.md in the project folder rather than from a
+// column, because the agents edit it the way they edit anything else and it
+// belongs in the thing it describes. An agent that reads it before working is
+// an agent that does not have to ask what the project is for.
+func (w *MentionWatcher) project(channelID string) string {
+	c, err := w.deps.Coord.GetChannel(channelID)
+	if err != nil || c.Workspace == "" {
+		return "" // a room that is only a room
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Dự án: %s\n\n", c.Name)
+	if c.Purpose != "" {
+		fmt.Fprintf(&b, "%s\n\n", c.Purpose)
+	}
+	fmt.Fprintf(&b, "Thư mục của dự án là `%s` — source, artifact, mọi thứ các agent làm ra đều ở đó. "+
+		"Làm việc bên trong nó, đừng rải ra workspace riêng của bạn: người khác và agent khác sẽ đi tìm ở đây.\n\n",
+		c.Workspace)
+
+	if brief := strings.TrimSpace(w.deps.Coord.ProjectBrief(channelID)); brief != "" {
+		b.WriteString("### " + coord.AgentsFile + " của dự án\n\n")
+		b.WriteString(truncateRunes(brief, MaxProjectBriefRunes))
+		b.WriteString("\n\n")
+	} else {
+		fmt.Fprintf(&b, "Dự án chưa có `%s`. Nếu bạn hiểu đủ để viết, viết giúp — "+
+			"mục tiêu, thành phần, ai lo mảng nào.\n\n", coord.AgentsFile)
+	}
 	return b.String()
 }
 

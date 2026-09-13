@@ -71,6 +71,10 @@ type Channel struct {
 	CreatedAt  time.Time `json:"created_at"`
 	ArchivedAt time.Time `json:"archived_at,omitempty"`
 
+	// Workspace is where this project's work lives on disk — source, artifacts,
+	// whatever the agents produce. Empty for rooms that are only rooms.
+	Workspace string `json:"workspace,omitempty"`
+
 	// Filled by ListChannels for the member asking.
 	Members       []Member  `json:"members,omitempty"`
 	Unread        int       `json:"unread"`   // messages since this member last read
@@ -204,7 +208,7 @@ func (db *DB) LeaveChannel(channelID, kind, id string) error {
 
 // GetChannel returns one room with its members.
 func (db *DB) GetChannel(id string) (*Channel, error) {
-	row := db.conn.QueryRow(`SELECT id, name, kind, purpose, created_by, created_at, archived_at
+	row := db.conn.QueryRow(`SELECT id, name, kind, purpose, created_by, created_at, archived_at, workspace
 		FROM channels WHERE id = ?`, id)
 	c, err := scanChannel(row)
 	if err != nil {
@@ -220,7 +224,7 @@ func (db *DB) GetChannel(id string) (*Channel, error) {
 // ListChannels returns the rooms a member is in, most recently active first.
 // An empty memberID lists every channel — what the admin page shows.
 func (db *DB) ListChannels(memberKind, memberID string) ([]Channel, error) {
-	q := `SELECT c.id, c.name, c.kind, c.purpose, c.created_by, c.created_at, c.archived_at
+	q := `SELECT c.id, c.name, c.kind, c.purpose, c.created_by, c.created_at, c.archived_at, c.workspace
 		FROM channels c`
 	var args []any
 	if memberID != "" {
@@ -859,7 +863,7 @@ func (db *DB) getMessage(id string) (*ChannelMessage, error) {
 func scanChannel(s scanner) (*Channel, error) {
 	var c Channel
 	var created, archived string
-	if err := s.Scan(&c.ID, &c.Name, &c.Kind, &c.Purpose, &c.CreatedBy, &created, &archived); err != nil {
+	if err := s.Scan(&c.ID, &c.Name, &c.Kind, &c.Purpose, &c.CreatedBy, &created, &archived, &c.Workspace); err != nil {
 		return nil, err
 	}
 	c.CreatedAt, c.ArchivedAt = parseTS(created), parseTS(archived)

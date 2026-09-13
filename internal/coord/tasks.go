@@ -107,6 +107,11 @@ type Task struct {
 	// never scoped — so the bar travels with the work instead of staying in
 	// the head of the agent that split it up.
 	Acceptance string `json:"acceptance,omitempty"`
+
+	// v8: the project this work belongs to. A board that shows every task on
+	// the machine is a board nobody can read once there is more than one
+	// project. Empty for work that belongs to no project.
+	ChannelID string `json:"channel_id,omitempty"`
 }
 
 // SessionRef names the CLI session a task's work lives in. Both CLIs keep the
@@ -144,7 +149,7 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	priority, title, body, result, trace_id, lease_until, attempts,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-	max_continuations, blocked_on, fail_reason, reported_at, acceptance`
+	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -174,6 +179,10 @@ type NewTask struct {
 	MaxContinuations int
 	// Acceptance is how the claimer knows it is done. Required for a sub-task.
 	Acceptance string
+	// ChannelID is the project this work belongs to. Empty for work that
+	// belongs to no project — a one-off from the CLI, or a schedule set up
+	// before projects existed.
+	ChannelID string
 	// Inputs are artifact ids handed down with the work; CreateSubTask links
 	// them with role=input so the child can read them without being told a path.
 	Inputs []string
@@ -207,6 +216,7 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 		ParentID:         n.ParentID,
 		Kind:             n.Kind,
 		ScheduleID:       n.ScheduleID,
+		ChannelID:        n.ChannelID,
 		MaxContinuations: DefaultMaxContinuations,
 		Acceptance:       strings.TrimSpace(n.Acceptance),
 	}
@@ -225,13 +235,13 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 		 title, body, result, trace_id, lease_until, attempts, max_attempts, depth,
 		 created_at, updated_at,
 		 parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-		 max_continuations, blocked_on, fail_reason, acceptance)
+		 max_continuations, blocked_on, fail_reason, acceptance, channel_id)
 		VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, '', '', ?, 0, ?, ?, ?, ?,
-		        ?, ?, ?, '', '', 0, ?, '', '', ?)`,
+		        ?, ?, ?, '', '', 0, ?, '', '', ?, ?)`,
 		t.ID, t.ContextID, t.CreatedBy, t.AssignedTo, t.State, t.Priority,
 		t.Title, t.Body, ts(t.LeaseUntil), t.MaxAttempts, t.Depth,
 		ts(t.CreatedAt), ts(t.UpdatedAt),
-		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations, t.Acceptance)
+		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations, t.Acceptance, t.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
 	}
@@ -400,8 +410,15 @@ func (db *DB) cancelOpenChildren(parentID, now string) ([]string, error) {
 type TaskFilter struct {
 	State   string
 	AgentID string // matches either the creator or the claimer
-	Limit   int
+	// ChannelID scopes the board to one project. The sentinel "-" asks for the
+	// opposite: work that belongs to no project, which would otherwise have
+	// nowhere to be seen once the board defaults to a project.
+	ChannelID string
+	Limit     int
 }
+
+// NoChannel is the ChannelID that means "work belonging to no project".
+const NoChannel = "-"
 
 // ListTasks returns tasks newest first.
 func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
@@ -418,6 +435,15 @@ func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
 	if f.AgentID != "" {
 		where = append(where, "(created_by = ? OR claimed_by = ? OR assigned_to = ?)")
 		args = append(args, f.AgentID, f.AgentID, f.AgentID)
+	}
+	switch f.ChannelID {
+	case "":
+		// every project, which is what the board showed before projects existed
+	case NoChannel:
+		where = append(where, "channel_id = ''")
+	default:
+		where = append(where, "channel_id = ?")
+		args = append(args, f.ChannelID)
 	}
 	args = append(args, limit)
 
@@ -729,7 +755,8 @@ func scanTask(s scanner) (*Task, error) {
 		&t.State, &t.Priority, &t.Title, &t.Body, &t.Result, &t.TraceID,
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
-		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance); err != nil {
+		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance,
+		&t.ChannelID); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)

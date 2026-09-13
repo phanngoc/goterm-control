@@ -846,3 +846,54 @@ func TestATimeoutSuggestsATask(t *testing.T) {
 		t.Errorf("the raw error is not an instruction: %q", said)
 	}
 }
+
+// An agent working in a project's room should arrive knowing what the project
+// is and where its files live — without being told again in every message.
+func TestThePromptDescribesTheProject(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	proj, err := cdb.CreateProject("Trading", "Bot giao dịch", "bomclaw", t.TempDir(), []coord.Member{
+		{Kind: coord.MemberAgent, ID: "bomclaw2"},
+		{Kind: coord.MemberUser, ID: coord.OwnerUserID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: proj.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "bắt đầu đi", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	p := turn.prompts[0]
+	for _, want := range []string{"Trading", "Bot giao dịch", proj.Workspace, coord.AgentsFile} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the prompt does not carry %q:\n%s", want, p)
+		}
+	}
+}
+
+// A room that is only a room says nothing about projects — #general is where
+// things too small to organise go, and describing it as a project would invite
+// work into it.
+func TestAPlainRoomDescribesNoProject(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "chào", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if strings.Contains(turn.prompts[0], "Dự án:") {
+		t.Errorf("#general was described as a project:\n%s", turn.prompts[0])
+	}
+}

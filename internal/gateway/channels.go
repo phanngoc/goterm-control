@@ -135,6 +135,10 @@ type channelCreateParams struct {
 	Name    string   `json:"name"`
 	Purpose string   `json:"purpose,omitempty"`
 	Members []string `json:"members,omitempty"` // agent ids; the owner always joins
+	// Plain makes a room with no project folder behind it, the way #general
+	// is. The default is a project, because that is what people are making
+	// when they create a room: somewhere for a piece of work to live.
+	Plain bool `json:"plain,omitempty"`
 }
 
 func handleChannelCreate(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -149,7 +153,13 @@ func handleChannelCreate(deps Deps, params json.RawMessage) (json.RawMessage, er
 	for _, id := range p.Members {
 		members = append(members, coord.Member{Kind: coord.MemberAgent, ID: id})
 	}
-	c, err := deps.Coord.CreateChannel("", p.Name, coord.ChannelPublic, p.Purpose, coord.OwnerUserID, members)
+	var c *coord.Channel
+	var err error
+	if p.Plain {
+		c, err = deps.Coord.CreateChannel("", p.Name, coord.ChannelPublic, p.Purpose, coord.OwnerUserID, members)
+	} else {
+		c, err = deps.Coord.CreateProject(p.Name, p.Purpose, coord.OwnerUserID, deps.ProjectsDir, members)
+	}
 	if err != nil {
 		return nil, err
 	}

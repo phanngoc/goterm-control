@@ -72,6 +72,11 @@ type Schedule struct {
 	LastRunAt           time.Time       `json:"last_run_at,omitzero"` // omitzero: omitempty never drops a struct
 	LastStatus          string          `json:"last_status,omitempty"`
 	ConsecutiveFailures int             `json:"consecutive_failures"`
+
+	// v8: the project this clock belongs to. Timed work is work — "check the
+	// prices every five minutes" belongs to the trading project the same way a
+	// task does. Empty for a machine-wide clock like the heartbeat.
+	ChannelID string `json:"channel_id,omitempty"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
 
@@ -133,6 +138,9 @@ type NewSchedule struct {
 	SkipMissed  bool
 	System      bool
 	NextRunAt   time.Time
+	// ChannelID is the project this clock belongs to; empty for a machine-wide
+	// one like the heartbeat.
+	ChannelID string
 }
 
 // CreateSchedule stores a schedule. It validates shape, not calendar: the spec
@@ -175,6 +183,7 @@ func (db *DB) CreateSchedule(n NewSchedule) (*Schedule, error) {
 		Enabled:     true,
 		System:      n.System,
 		SkipMissed:  n.SkipMissed,
+		ChannelID:   n.ChannelID,
 		NextRunAt:   n.NextRunAt,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -183,10 +192,10 @@ func (db *DB) CreateSchedule(n NewSchedule) (*Schedule, error) {
 	_, err = db.conn.Exec(`INSERT INTO schedules
 		(id, name, created_by, owner_agent, kind, spec, tz, payload_kind, payload,
 		 enabled, system, skip_missed, next_run_at, last_run_at, last_status,
-		 consecutive_failures, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, '', '', 0, ?, ?)`,
+		 consecutive_failures, created_at, updated_at, channel_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, '', '', 0, ?, ?, ?)`,
 		s.ID, s.Name, s.CreatedBy, s.OwnerAgent, s.Kind, s.Spec, s.TZ, s.PayloadKind, string(s.Payload),
-		b2i(s.System), b2i(s.SkipMissed), s.nextRaw, ts(now), ts(now))
+		b2i(s.System), b2i(s.SkipMissed), s.nextRaw, ts(now), ts(now), s.ChannelID)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return nil, fmt.Errorf("coord: a schedule named %q already exists", s.Name)
@@ -305,7 +314,7 @@ func (db *DB) OpenScheduledTask(scheduleID string) (*Task, error) {
 
 const scheduleCols = `id, name, created_by, owner_agent, kind, spec, tz, payload_kind, payload,
 	enabled, system, skip_missed, next_run_at, last_run_at, last_status,
-	consecutive_failures, created_at, updated_at`
+	consecutive_failures, created_at, updated_at, channel_id`
 
 // GetSchedule fetches by id.
 func (db *DB) GetSchedule(id string) (*Schedule, error) {
@@ -628,7 +637,7 @@ func scanSchedule(s scanner) (*Schedule, error) {
 	var enabled, system, skip int
 	if err := s.Scan(&sc.ID, &sc.Name, &sc.CreatedBy, &sc.OwnerAgent, &sc.Kind, &sc.Spec, &sc.TZ,
 		&sc.PayloadKind, &payload, &enabled, &system, &skip, &next, &last, &sc.LastStatus,
-		&sc.ConsecutiveFailures, &created, &updated); err != nil {
+		&sc.ConsecutiveFailures, &created, &updated, &sc.ChannelID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}

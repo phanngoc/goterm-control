@@ -111,6 +111,10 @@ func (db *DB) CreateSubTask(parentID, byAgent string, n NewTask) (*Task, error) 
 	}
 	n.ParentID = parentID
 	n.ContextID = parent.ContextID
+	// A child belongs to the same project as its parent. It is the same piece
+	// of work, split up; landing half of it on a different board would be a
+	// filing error nobody would think to look for.
+	n.ChannelID = parent.ChannelID
 	n.Depth = parent.Depth + 1
 	n.Kind = KindSub
 	if n.CreatedBy == "" {
