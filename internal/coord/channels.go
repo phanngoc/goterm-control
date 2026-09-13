@@ -52,6 +52,11 @@ const (
 	ChannelDM     = "dm"
 )
 
+// ReplyPreviewRunes is how much of the newest reply travels with the main line.
+// Enough to see that an agent answered and roughly what it said; the thread is
+// one click away for the rest.
+const ReplyPreviewRunes = 160
+
 // GeneralChannelID is the room that always exists, so a fresh agent has
 // somewhere to say hello without anyone creating a channel first.
 const GeneralChannelID = "ch_general"
@@ -96,6 +101,13 @@ type ChannelMessage struct {
 	Mentions []string  `json:"mentions,omitempty"`
 	Replies  int       `json:"replies,omitempty"`
 	LastAt   time.Time `json:"last_reply_at,omitempty"`
+
+	// The newest reply, in the main line, so a room shows that it was answered
+	// without anyone opening anything. A count alone says an answer exists; it
+	// does not say what the answer was, and "1 reply" next to a question you
+	// asked an agent reads exactly like silence.
+	LastReplyBy   string `json:"last_reply_by,omitempty"`
+	LastReplyText string `json:"last_reply_text,omitempty"`
 }
 
 // NewChannelMessage is the input to PostMessage.
@@ -501,6 +513,15 @@ func (db *DB) decorate(msgs []ChannelMessage, withReplies bool) ([]ChannelMessag
 			return nil, fmt.Errorf("replies of %s: %w", msgs[i].ID, err)
 		}
 		msgs[i].LastAt = parseTS(last)
+		if msgs[i].Replies == 0 {
+			continue
+		}
+		if err := db.conn.QueryRow(`SELECT author_id, body FROM channel_messages
+			WHERE thread_root = ? ORDER BY created_at DESC LIMIT 1`, msgs[i].ID).
+			Scan(&msgs[i].LastReplyBy, &msgs[i].LastReplyText); err != nil {
+			return nil, fmt.Errorf("last reply of %s: %w", msgs[i].ID, err)
+		}
+		msgs[i].LastReplyText = truncateRunes(msgs[i].LastReplyText, ReplyPreviewRunes)
 	}
 	return msgs, nil
 }
