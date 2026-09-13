@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Artifact, Channel, ChannelMessage } from './types'
+import MessageMarkdown from '../components/MessageMarkdown'
 import { ago, clock } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -366,7 +367,11 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
         ))}
         <span className="ml-auto" title={ago(m.created_at)}>{clock(m.created_at)}</span>
       </div>
-      <div className="mt-1 text-sm text-gray-100 whitespace-pre-wrap break-words">{m.body}</div>
+      {/* The agents write markdown — tables, code, headings — and a thread that
+          shows it raw is a thread where a comparison table is a wall of pipes. */}
+      <div className="mt-1 text-sm text-gray-100 break-words">
+        <MessageMarkdown>{m.body}</MessageMarkdown>
+      </div>
 
       {/* An answered message shows its answer. A count on its own reads like
           silence next to a question you asked an agent — which is exactly how
@@ -449,8 +454,12 @@ function FileRow({ a, call, onReview, reviewer }: {
 }) {
   const [busy, setBusy] = useState(false)
 
-  // Opened in a tab rather than rendered here: these are reports and patches,
-  // and the thread panel is not the place to read one.
+  const [content, setContent] = useState<string | null>(null)
+  const [truncated, setTruncated] = useState(false)
+
+  // Markdown and text open in a modal, wide, rendered — these are reports, and
+  // reading one in a 24rem side panel is not reading it. HTML and links go to
+  // a tab: a page wants a browser, not a box inside one.
   const open = async () => {
     setBusy(true)
     try {
@@ -460,11 +469,15 @@ function FileRow({ a, call, onReview, reviewer }: {
       }
       const r = await call('artifacts.get', { id: a.id })
       const body: string = r?.content ?? ''
-      const type = a.content_type || (a.title.endsWith('.html') ? 'text/html' : 'text/plain')
-      const blob = new Blob([body], { type: type + ';charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      window.open(url, '_blank', 'noopener')
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      if (isPage(a)) {
+        const blob = new Blob([body], { type: 'text/html;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        window.open(url, '_blank', 'noopener')
+        setTimeout(() => URL.revokeObjectURL(url), 60_000)
+        return
+      }
+      setContent(body)
+      setTruncated(Boolean(r?.truncated))
     } catch (e) {
       alert(String(e))
     } finally {
@@ -474,6 +487,9 @@ function FileRow({ a, call, onReview, reviewer }: {
 
   return (
     <div className="flex items-center gap-2 text-xs">
+      {content !== null && (
+        <ArtifactModal a={a} content={content} truncated={truncated} onClose={() => setContent(null)} />
+      )}
       <button onClick={open} disabled={busy} className="min-w-0 flex-1 text-left truncate text-sky-300 hover:underline">
         {a.title}
       </button>
@@ -486,6 +502,51 @@ function FileRow({ a, call, onReview, reviewer }: {
       >
         review
       </button>
+    </div>
+  )
+}
+
+function isPage(a: Artifact): boolean {
+  return a.content_type?.includes('html') === true || a.title.toLowerCase().endsWith('.html')
+}
+
+// ArtifactModal is where a report is actually read: wide, scrollable, and
+// rendered rather than shown as source. Escape and the backdrop both close it,
+// because a modal you can only leave through one small button is a modal that
+// feels like a trap.
+function ArtifactModal({ a, content, truncated, onClose }: {
+  a: Artifact; content: string; truncated: boolean; onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
+      >
+        <header className="flex items-baseline gap-3 px-5 py-3 border-b border-gray-800">
+          <span className="text-sm text-gray-200 font-medium truncate">{a.title}</span>
+          <span className="text-[11px] text-gray-600 font-mono">{a.kind} · {a.bytes} bytes</span>
+          <span className="ml-auto text-[11px] text-gray-600 font-mono">{a.id}</span>
+          <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">close</button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          <MessageMarkdown wide>{content}</MessageMarkdown>
+          {truncated && (
+            <p className="mt-4 text-xs text-amber-300">
+              Bản xem trước bị cắt — đọc trọn vẹn bằng <code className="font-mono">bomclaw artifact get {a.id}</code>
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
