@@ -44,6 +44,7 @@ func runSchedule(args []string) {
 		timeoutS := fs.Int("timeout", 0, "Seconds a --command may run (default: gateway's schedules.command_timeout_seconds)")
 		owner := fs.String("owner", "", "Only this gateway fires it (default: whichever gateway sees it first)")
 		skipMissed := fs.Bool("skip-missed", false, "After downtime, re-arm instead of running the missed firing once")
+		channel := fs.String("channel", "", "Project this clock belongs to (a channel id)")
 		fs.Parse(rest)
 
 		kind, spec, err := pickSpec(*cronSpec, *every, *at)
@@ -71,6 +72,7 @@ func runSchedule(args []string) {
 		n := coord.NewSchedule{
 			Name: *name, CreatedBy: orAny(*agent, "cli"), OwnerAgent: *owner,
 			Kind: kind, Spec: spec, TZ: *tz, SkipMissed: *skipMissed, NextRunAt: next,
+			ChannelID: *channel,
 		}
 		if *agentTask != "" {
 			n.PayloadKind = coord.PayloadAgent
@@ -97,7 +99,7 @@ func runSchedule(args []string) {
 
 		db := openCoord(*dbPath)
 		defer db.Close()
-		all, err := db.ListSchedules()
+		all, err := db.ListSchedules("")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "schedule list: %v\n", err)
 			os.Exit(1)

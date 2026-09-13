@@ -207,6 +207,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelMessages(deps, params)
 		case "channels.post":
 			return handleChannelPost(deps, params)
+		case "channels.brief":
+			return handleProjectBrief(deps, params)
 		case "channels.create":
 			return handleChannelCreate(deps, params)
 		case "channels.read":
@@ -220,7 +222,7 @@ func NewMethodHandler(deps Deps) MethodHandler {
 		case "notes.add":
 			return handleNoteAdd(deps, params)
 		case "schedules.list":
-			return handleSchedulesList(deps)
+			return handleSchedulesList(deps, params)
 		case "schedules.get":
 			return handleScheduleGet(deps, params)
 		case "schedules.create":

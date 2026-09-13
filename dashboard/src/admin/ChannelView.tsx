@@ -37,6 +37,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // about a day; these are findable by id and survive the file moving.
   const [files, setFiles] = useState<Artifact[]>([])
   const [more, setMore] = useState(false)
+  const [briefFor, setBriefFor] = useState('')
   const sending = useRef(false)
   const loadingOlder = useRef(false)
   const scroller = useRef<HTMLDivElement>(null)
@@ -239,6 +240,15 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         <header className="px-4 py-2 border-b border-gray-800 flex items-baseline gap-3">
           <span className="text-sm text-gray-200 font-medium">{current?.name ?? '—'}</span>
           {current?.purpose && <span className="text-xs text-gray-500 truncate">{current.purpose}</span>}
+          {current?.workspace && (
+            <button
+              onClick={() => setBriefFor(current.id)}
+              title={current.workspace}
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              AGENTS.md
+            </button>
+          )}
           <span className="ml-auto text-[11px] text-gray-600 font-mono">
             {current?.members?.map(m => m.id).join(' · ')}
           </span>
@@ -278,6 +288,8 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
           placeholder="Message the channel"
         />
       </div>
+
+      {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
 
       {/* Thread */}
       {thread && (
@@ -612,6 +624,85 @@ function NewProject({ call, onCreated }: { call: Call; onCreated: () => void }) 
       <p className="text-[11px] text-gray-600">
         Tạo kèm một thư mục và file {'AGENTS.md'} — agent đọc nó trước khi làm.
       </p>
+    </div>
+  )
+}
+
+// BriefEditor edits the file the agents read before working on a project.
+//
+// A textarea over the raw markdown rather than a form of fields: what a project
+// needs said differs per project, and a form would decide that in advance. The
+// file is the source of truth — agents edit it with their own tools too — so
+// this saves the whole document and whoever wrote last wins, the way a shared
+// file in a repository always has.
+function BriefEditor({ call, channelID, onClose }: { call: Call; channelID: string; onClose: () => void }) {
+  const [body, setBody] = useState<string | null>(null)
+  const [path, setPath] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    call('channels.brief', { channel_id: channelID })
+      .then((r: any) => { setBody(r?.body ?? ''); setPath(r?.path ?? '') })
+      .catch((e: any) => setErr(String(e?.message ?? e)))
+  }, [call, channelID])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const save = async () => {
+    if (body === null || busy) return
+    setBusy(true)
+    try {
+      await call('channels.brief', { channel_id: channelID, body })
+      setErr(null); setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
+      <div
+        onClick={e => e.stopPropagation()}
+        className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
+      >
+        <header className="flex items-baseline gap-3 px-5 py-3 border-b border-gray-800">
+          <span className="text-sm text-gray-200 font-medium">AGENTS.md</span>
+          <span className="text-[11px] text-gray-600 font-mono truncate">{path}</span>
+          <button onClick={onClose} className="ml-auto text-xs text-gray-500 hover:text-gray-300">close</button>
+        </header>
+        <div className="flex-1 min-h-0 p-4">
+          {body === null ? (
+            <div className="text-sm text-gray-500">Loading…</div>
+          ) : (
+            <textarea
+              value={body}
+              onChange={e => setBody(e.target.value)}
+              spellCheck={false}
+              className="w-full h-[60vh] px-3 py-2 text-sm font-mono bg-gray-900 rounded ring-1 ring-gray-800 text-gray-200 outline-none focus:ring-gray-600 resize-none"
+            />
+          )}
+        </div>
+        <footer className="flex items-center gap-3 px-5 py-3 border-t border-gray-800">
+          {err && <span className="text-xs text-red-300">{err}</span>}
+          {saved && <span className="text-xs text-emerald-300">đã lưu</span>}
+          <span className="ml-auto text-[11px] text-gray-600">
+            Agent đọc file này trước khi làm việc trong dự án.
+          </span>
+          <button
+            onClick={save} disabled={busy || body === null}
+            className="px-3 py-1.5 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
+          >{busy ? 'đang lưu…' : 'Lưu'}</button>
+        </footer>
+      </div>
     </div>
   )
 }

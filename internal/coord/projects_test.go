@@ -166,3 +166,52 @@ func TestAChildInheritsTheProject(t *testing.T) {
 		t.Fatalf("the child landed on project %q, parent is on %q", child.ChannelID, proj.ID)
 	}
 }
+
+// The brief is a file, and people and agents both edit it. Writing it has to
+// replace the whole document atomically: an agent reading mid-save would
+// otherwise get half a brief and act on it.
+func TestWriteProjectBriefReplacesTheFile(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+	proj, err := db.CreateProject("Trading", "", "bomclaw", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	written := "# Trading\n\n## Mục tiêu\n\nChạy được một chiến lược có backtest.\n"
+	if err := db.WriteProjectBrief(proj.ID, written); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.ProjectBrief(proj.ID); got != written {
+		t.Fatalf("read back:\n%s", got)
+	}
+	// On disk, under the name the agents look for.
+	onDisk, err := os.ReadFile(filepath.Join(proj.Workspace, AgentsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != written {
+		t.Fatal("the file on disk does not match what was saved")
+	}
+	// And the save left nothing behind: a half-written temp file in a project
+	// folder is a file somebody will eventually open and believe.
+	entries, _ := os.ReadDir(proj.Workspace)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".AGENTS-") {
+			t.Fatalf("a temp file survived the save: %s", e.Name())
+		}
+	}
+}
+
+// A room with no folder has nowhere to put one, and says so rather than
+// writing into whatever directory happens to be current.
+func TestWritingABriefToAPlainRoomIsRefused(t *testing.T) {
+	db := testDB(t)
+	err := db.WriteProjectBrief(GeneralChannelID, "# nope")
+	if err == nil {
+		t.Fatal("writing a brief to #general was allowed")
+	}
+	if !strings.Contains(err.Error(), "room") {
+		t.Errorf("the error should say why: %v", err)
+	}
+}

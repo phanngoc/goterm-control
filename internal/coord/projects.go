@@ -87,6 +87,44 @@ func seedAgentsFile(workspace string, c *Channel, purpose string) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
+// WriteProjectBrief replaces a project's AGENTS.md.
+//
+// The file is the source of truth, not a database column, so this writes the
+// file — and it is the same file the agents read and edit with their own
+// tools. Whoever wrote last wins, which is how a shared document in a
+// repository has always worked.
+func (db *DB) WriteProjectBrief(channelID, body string) error {
+	c, err := db.GetChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if c.Workspace == "" {
+		return fmt.Errorf("coord: %s is a room, not a project — it has no folder to write into", c.Name)
+	}
+	if err := os.MkdirAll(c.Workspace, 0o755); err != nil {
+		return fmt.Errorf("project folder %s: %w", c.Workspace, err)
+	}
+	path := filepath.Join(c.Workspace, AgentsFile)
+	tmp, err := os.CreateTemp(c.Workspace, ".AGENTS-*.md")
+	if err != nil {
+		return fmt.Errorf("write brief: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write brief: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write brief: %w", err)
+	}
+	// Replaced whole, never truncated-then-written: an agent reading the file
+	// mid-save would otherwise get half a brief and act on it.
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("replace %s: %w", path, err)
+	}
+	return nil
+}
+
 // ProjectBrief reads a project's AGENTS.md, or "" when there is none. Missing
 // is normal — a project whose brief nobody has written yet — and not an error
 // worth failing a turn over.
