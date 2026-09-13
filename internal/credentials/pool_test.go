@@ -293,3 +293,72 @@ func hasPrefix(ss []string, prefix string) bool {
 	}
 	return false
 }
+
+// An account can sit in the pool without being in the rotation. A colleague's
+// login is the case: usable by name, never the answer to "start a chat", or
+// every other new conversation quietly lands on somebody else's quota.
+func TestAnOptedOutAccountIsNeverChosenOnItsOwn(t *testing.T) {
+	p, err := NewPool("claude", []Account{
+		{Name: "default", Provider: "claude", ConfigDir: "/tmp/a"},
+		{Name: "tam", Provider: "claude", ConfigDir: "/tmp/b", NoRotate: true},
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		got, err := p.Pick("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Name == "tam" {
+			t.Fatalf("an opted-out account was picked automatically on try %d", i+1)
+		}
+	}
+	// But naming it still works — that is the whole point of it being here.
+	got, err := p.Pick("tam")
+	if err != nil {
+		t.Fatalf("pinning an opted-out account should work: %v", err)
+	}
+	if got.Name != "tam" {
+		t.Fatalf("got %q", got.Name)
+	}
+}
+
+// Not even by exhaustion: a rate limit on the rotation must not silently
+// promote the account that was kept out of it.
+func TestCooldownDoesNotPromoteAnOptedOutAccount(t *testing.T) {
+	p, err := NewPool("claude", []Account{
+		{Name: "default", Provider: "claude", ConfigDir: "/tmp/a"},
+		{Name: "tam", Provider: "claude", ConfigDir: "/tmp/b", NoRotate: true},
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.MarkFailure("default", errors.New("429 rate limit"))
+	got, err := p.Pick("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name == "tam" {
+		t.Fatal("the opted-out account was reached by exhaustion")
+	}
+}
+
+// The zero value has to mean what every pool meant before the field existed.
+func TestAccountsRotateByDefault(t *testing.T) {
+	p, err := NewPool("claude", []Account{
+		{Name: "a", Provider: "claude", ConfigDir: "/tmp/a"},
+		{Name: "b", Provider: "claude", ConfigDir: "/tmp/b"},
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 6; i++ {
+		got, _ := p.Pick("")
+		seen[got.Name] = true
+	}
+	if !seen["a"] || !seen["b"] {
+		t.Fatalf("a pool built without the field stopped rotating: %v", seen)
+	}
+}

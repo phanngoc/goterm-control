@@ -177,6 +177,7 @@ func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
 			ConfigDir: a.ConfigDir,
 			APIKey:    a.APIKey,
 			APIKeyEnv: a.APIKeyEnv,
+			NoRotate:  a.Rotate != nil && !*a.Rotate,
 		})
 	}
 	cooldown := time.Duration(cfg.Accounts.CooldownMinutes) * time.Minute
