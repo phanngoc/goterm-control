@@ -5,6 +5,7 @@ import TraceExplorer from './TraceExplorer'
 import TaskBoard from './TaskBoard'
 import ChannelView from './ChannelView'
 import NotesPane from './NotesPane'
+import SettingsPane from './SettingsPane'
 import SchedulesPane from './SchedulesPane'
 import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
@@ -19,6 +20,7 @@ const LABELS: Record<Pane, string> = {
   schedules: 'Schedules',
   notes: 'Notes',
   messages: 'Messages',
+  settings: 'Settings',
 }
 
 const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
@@ -107,6 +109,7 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
         )}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
+        {pane === 'settings' && <SettingsPane call={call} />}
         {pane === 'messages' && (
           <ChannelView
             call={call} agents={agentIDs} selfID={selfID}

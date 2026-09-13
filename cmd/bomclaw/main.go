@@ -496,6 +496,8 @@ func runGateway(args []string) {
 		PokeSchedules: sched.Poke,
 		NotesFile:     cfg.Coord.NotesFile,
 		Conversations: conversations,
+		ConfigPath:    absPath(*configPath),
+		Restart:       restartSelf(cfg.Agent.ID),
 	}
 	if tgBot != nil {
 		// Dashboard messages run through the bot's turn engine, so both
@@ -1486,4 +1488,31 @@ func findToolSchema(name string) map[string]any {
 		return s
 	}
 	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+
+// absPath makes the config path usable from a settings handler that may run
+// long after the process changed directory.
+func absPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
+
+// restartSelf returns the function the settings screen uses to apply a backend
+// change, or nil when this gateway is not under a service manager — in which
+// case the screen says the config was written and a restart is the operator's
+// to do, rather than pretending the change took effect.
+func restartSelf(agentID string) func() error {
+	svc, err := daemon.Resolve(agentID)
+	if err != nil {
+		log.Printf("settings: no service manager for %s (%v) — backend changes will need a manual restart", agentID, err)
+		return nil
+	}
+	return func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return svc.Restart(ctx)
+	}
 }
