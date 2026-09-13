@@ -209,6 +209,10 @@ type projectFilesParams struct {
 	Path      string `json:"path,omitempty"` // relative to the project folder; "" is its root
 	// Read asks for one file's contents instead of a directory listing.
 	Read bool `json:"read,omitempty"`
+	// Body set means write that file. Separate from Read so an empty file is
+	// a thing you can save: "" is a legitimate document, and a bare string
+	// field could not tell it from "not writing".
+	Body *string `json:"body,omitempty"`
 }
 
 // handleProjectFiles browses a project's folder — the place the work actually
@@ -223,6 +227,18 @@ func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, err
 	}
 	if p.ChannelID == "" {
 		return nil, fmt.Errorf("channel_id is required")
+	}
+	if p.Body != nil {
+		if err := deps.Coord.WriteProjectFile(p.ChannelID, p.Path, *p.Body); err != nil {
+			return nil, err
+		}
+		body, truncated, binary, err := deps.Coord.ReadProjectFile(p.ChannelID, p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{
+			"path": p.Path, "body": body, "truncated": truncated, "binary": binary, "saved": true,
+		})
 	}
 	if !p.Read {
 		entries, err := deps.Coord.ProjectFiles(p.ChannelID, p.Path)

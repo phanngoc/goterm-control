@@ -45,6 +45,13 @@ func (db *DB) projectPath(channelID, rel string) (string, error) {
 	if c.Workspace == "" {
 		return "", fmt.Errorf("coord: %s is a room, not a project — it has no folder", c.Name)
 	}
+	// An absolute path is refused rather than quietly reinterpreted. Join would
+	// treat "/tmp/x" as "<workspace>/tmp/x" — safe, but surprising: the caller
+	// asked for one thing and got a nested directory they did not mean to
+	// create. A test wrote /tmp/victim.txt into a project this way.
+	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") {
+		return "", fmt.Errorf("coord: %q must be relative to the project folder", rel)
+	}
 	root, err := filepath.EvalSymlinks(c.Workspace)
 	if err != nil {
 		root = filepath.Clean(c.Workspace)
@@ -98,6 +105,56 @@ func (db *DB) ProjectFiles(channelID, rel string) ([]ProjectEntry, error) {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out, nil
+}
+
+// WriteProjectFile replaces a file inside a project, creating it if it is not
+// there yet.
+//
+// Confined like the reads, and atomic for the same reason the brief is: agents
+// have this folder open and one reading mid-save would get half a file and act
+// on it.
+//
+// It refuses to overwrite a binary file. The browser could not show you one, so
+// a save that lands on it is a save made blind — most likely a path typed by
+// hand, and the outcome is a destroyed asset with no undo.
+func (db *DB) WriteProjectFile(channelID, rel, body string) error {
+	if strings.TrimSpace(rel) == "" {
+		return fmt.Errorf("coord: which file?")
+	}
+	full, err := db.projectPath(channelID, rel)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(full); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("coord: %s is a directory", rel)
+		}
+		mode = info.Mode()
+		if _, _, binary, err := db.ReadProjectFile(channelID, rel); err == nil && binary {
+			return fmt.Errorf("coord: %s is a binary file — editing it here would destroy it", rel)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", rel, err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(full), ".edit-*")
+	if err != nil {
+		return fmt.Errorf("write %s: %w", rel, err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write %s: %w", rel, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write %s: %w", rel, err)
+	}
+	_ = os.Chmod(tmp.Name(), mode)
+	if err := os.Rename(tmp.Name(), full); err != nil {
+		return fmt.Errorf("replace %s: %w", rel, err)
+	}
+	return nil
 }
 
 // ReadProjectFile returns a file's text, whether it was cut, and whether it is

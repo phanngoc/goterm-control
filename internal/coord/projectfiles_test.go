@@ -130,3 +130,82 @@ func TestBrowsingAPlainRoomIsRefused(t *testing.T) {
 		t.Fatal("#general was browsable")
 	}
 }
+
+func TestWriteProjectFileReplacesAndCreates(t *testing.T) {
+	db, c := projectWith(t, map[string]string{"src/main.go": "package main"})
+
+	if err := db.WriteProjectFile(c.ID, "src/main.go", "package main // sửa rồi"); err != nil {
+		t.Fatal(err)
+	}
+	body, _, _, err := db.ReadProjectFile(c.ID, "src/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "package main // sửa rồi" {
+		t.Fatalf("read back %q", body)
+	}
+
+	// A new file, in a directory that does not exist yet.
+	if err := db.WriteProjectFile(c.ID, "docs/notes.md", "# ghi chú"); err != nil {
+		t.Fatal(err)
+	}
+	if body, _, _, _ := db.ReadProjectFile(c.ID, "docs/notes.md"); body != "# ghi chú" {
+		t.Fatalf("new file: %q", body)
+	}
+
+	// The save left nothing behind: a half-written temp file in a project
+	// folder is something an agent will eventually read and believe.
+	entries, _ := os.ReadDir(filepath.Join(c.Workspace, "src"))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".edit-") {
+			t.Fatalf("temp file survived: %s", e.Name())
+		}
+	}
+}
+
+// The same guard as the reads, because a write that escapes is worse than a
+// read that does.
+func TestWriteProjectFileCannotEscape(t *testing.T) {
+	db, c := projectWith(t, nil)
+	outside := filepath.Join(filepath.Dir(c.Workspace), "victim.txt")
+	if err := os.WriteFile(outside, []byte("nguyên vẹn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"../victim.txt", "/tmp/victim.txt", "src/../../victim.txt"} {
+		if err := db.WriteProjectFile(c.ID, bad, "bị ghi đè"); err == nil {
+			t.Errorf("%q was written", bad)
+		}
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "nguyên vẹn" {
+		t.Fatal("a file outside the project was overwritten")
+	}
+}
+
+// The browser cannot show a binary file, so a save landing on one is a save
+// made blind — and the outcome is a destroyed asset with no undo.
+func TestWritingOverABinaryFileIsRefused(t *testing.T) {
+	db, c := projectWith(t, map[string]string{"logo.png": "\x89PNG\x00\x01binary"})
+	err := db.WriteProjectFile(c.ID, "logo.png", "oops")
+	if err == nil {
+		t.Fatal("a binary file was overwritten with text")
+	}
+	if !strings.Contains(err.Error(), "binary") {
+		t.Errorf("the error should say why: %v", err)
+	}
+	body, _ := os.ReadFile(filepath.Join(c.Workspace, "logo.png"))
+	if !strings.Contains(string(body), "PNG") {
+		t.Fatal("the file was damaged anyway")
+	}
+}
+
+// An empty document is a document. A field that could not tell "" from "not
+// writing" would make clearing a file impossible.
+func TestAnEmptyFileCanBeSaved(t *testing.T) {
+	db, c := projectWith(t, map[string]string{"notes.md": "có nội dung"})
+	if err := db.WriteProjectFile(c.ID, "notes.md", ""); err != nil {
+		t.Fatal(err)
+	}
+	if body, _, _, _ := db.ReadProjectFile(c.ID, "notes.md"); body != "" {
+		t.Fatalf("clearing the file left %q", body)
+	}
+}
