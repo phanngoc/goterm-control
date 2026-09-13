@@ -62,8 +62,15 @@ const (
 	MaxThreadContextRunes = 24000
 
 	// mentionTurnTimeout bounds one reply. A channel turn is a conversation,
-	// not a task: if it needs longer than this it needs a task.
-	mentionTurnTimeout = 3 * time.Minute
+	// not a task — but conversations here routinely involve reading a few
+	// files, and three minutes turned out to be shorter than an ordinary
+	// answer: an agent asked to set something up spent its whole budget on
+	// the setting up. Eight is long enough for real tool work and still well
+	// under the task lane's fifteen, which is where genuinely long work goes.
+	//
+	// The cost is real and worth stating: the watcher answers one mention at a
+	// time, so a turn using its whole budget holds up the next question.
+	mentionTurnTimeout = 8 * time.Minute
 )
 
 // MentionWatcher answers the mentions addressed to one agent.
@@ -235,6 +242,12 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	sess.MarkRunning("channel: " + truncateLine(m.Body, 40))
 	w.live.Store(m.ID, sess)
 	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), prompt, sink)
+	// The engine stops WAITING for a turn when the deadline passes; the turn
+	// itself keeps going in its lane. Its sink was still writing into the room
+	// afterwards, so a line this code had already closed came back to life
+	// saying "working" — and stayed that way. Nothing this turn produces from
+	// here is ours to publish.
+	sink.stop()
 	sess.MarkIdle()
 	w.live.Delete(m.ID)
 	if err != nil {
@@ -250,7 +263,16 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 			return
 		}
 		log.Printf("mentions: turn for %s: %v", m.ID, err)
-		w.finishProgress(progress, "⚠️ lượt này hỏng giữa chừng: "+truncateLine(err.Error(), 200))
+		note := "⚠️ lượt này hỏng giữa chừng: " + truncateLine(err.Error(), 200)
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Say what to do about it. "Deadline exceeded" tells the person
+			// nothing they can act on; the shape of the fix is a task, which
+			// has five times the budget and survives across runs.
+			note = fmt.Sprintf("⌛ hết %s cho một lượt trả lời — việc này dài hơn một câu trả lời. "+
+				"Nhờ lại và bảo mở task (`bomclaw task new --thread ...`), task chạy được lâu hơn và "+
+				"giữ tiến độ qua nhiều lượt.", mentionTurnTimeout)
+		}
+		w.finishProgress(progress, note)
 		clear("")
 		return
 	}
@@ -577,6 +599,15 @@ type replySink struct {
 	onProgress func(tools []string, partial string, since time.Time)
 
 	preview *chat.StreamPreview
+	done    bool
+}
+
+// stop ends progress reporting. A turn whose caller has given up keeps running
+// in its lane, and anything it writes after that belongs to nobody.
+func (r *replySink) stop() {
+	r.mu.Lock()
+	r.done = true
+	r.mu.Unlock()
 }
 
 const progressEvery = 2 * time.Second
@@ -609,7 +640,7 @@ func (r *replySink) NoteTool(label string) {
 
 func (r *replySink) report(now bool) {
 	r.mu.Lock()
-	if r.onProgress == nil {
+	if r.onProgress == nil || r.done {
 		r.mu.Unlock()
 		return
 	}
