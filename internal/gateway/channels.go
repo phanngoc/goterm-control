@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
@@ -164,6 +165,43 @@ func handleChannelCreate(deps Deps, params json.RawMessage) (json.RawMessage, er
 		return nil, err
 	}
 	return json.Marshal(c)
+}
+
+type projectBriefParams struct {
+	ChannelID string `json:"channel_id"`
+	// Body set means write; absent means read. One method rather than two
+	// because the screen does both and the permission is the same.
+	Body *string `json:"body,omitempty"`
+}
+
+// handleProjectBrief reads or replaces a project's AGENTS.md — the file the
+// agents read before working, and edit with their own tools.
+func handleProjectBrief(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p projectBriefParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ChannelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	c, err := deps.Coord.GetChannel(p.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	if p.Body != nil {
+		if err := deps.Coord.WriteProjectBrief(p.ChannelID, *p.Body); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(map[string]any{
+		"channel_id": c.ID,
+		"workspace":  c.Workspace,
+		"path":       filepath.Join(c.Workspace, coord.AgentsFile),
+		"body":       deps.Coord.ProjectBrief(p.ChannelID),
+	})
 }
 
 type channelReadParams struct {

@@ -95,7 +95,7 @@ func TestUpsertSystemScheduleRealignsOnlyWhenChanged(t *testing.T) {
 		t.Errorf("cadence change: changed=%v spec=%s next=%v", changed, s.Spec, s.NextRunAt)
 	}
 	// Still one row, still not removable from the CLI.
-	all, _ := db.ListSchedules()
+	all, _ := db.ListSchedules("")
 	if len(all) != 1 {
 		t.Errorf("upsert made %d rows", len(all))
 	}

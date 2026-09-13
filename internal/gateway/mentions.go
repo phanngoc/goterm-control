@@ -85,6 +85,10 @@ type MentionWatcher struct {
 	poke chan struct{}
 	mu   sync.Mutex // one turn at a time; the engine queues anyway, this keeps sweeps honest
 	live sync.Map   // message id -> *session.Session, for StatusResult.Runs
+
+	// channelOf is the project of the room being answered, while a prompt is
+	// being built. Only the sweep writes it and only one sweep runs at a time.
+	channelOf string
 }
 
 // NewMentionWatcher returns nil when this gateway cannot answer — no shared
@@ -358,7 +362,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
 	b.WriteString(w.project(m.ChannelID))
 	b.WriteString(w.threadArtifacts(m))
-	b.WriteString(w.schedules())
+	b.WriteString(w.schedulesFor(m.ChannelID))
 	b.WriteString(w.roster())
 
 	b.WriteString("## How to answer\n\n")
@@ -462,7 +466,11 @@ func (w *MentionWatcher) threadArtifacts(m coord.ChannelMessage) string {
 // The second half matters as much: a schedule row is inert unless some gateway
 // has schedules.enabled. Letting an agent create one into a machine where
 // nothing fires it is worse than refusing, because it looks like it worked.
-func (w *MentionWatcher) schedules() string {
+func (w *MentionWatcher) schedulesFor(channelID string) string {
+	w.channelOf = ""
+	if c, err := w.deps.Coord.GetChannel(channelID); err == nil && c.Workspace != "" {
+		w.channelOf = c.ID
+	}
 	var b strings.Builder
 	b.WriteString("## Work on a clock\n\n")
 	if !w.deps.SchedulesRun {
@@ -478,6 +486,10 @@ func (w *MentionWatcher) schedules() string {
 	b.WriteString("`bomclaw schedule add --name <short-name> --every 5m --agent-task \"<what to do>\" " +
 		"[--body \"<detail>\"] [--to <agent>]` puts work on a clock. `--cron \"0 8 * * 1-5\"` for a " +
 		"time of day, `--at <RFC3339>` for once.\n")
+	if w.channelOf != "" {
+		fmt.Fprintf(&b, "Add `--channel %s` so the clock belongs to this project — otherwise it "+
+			"lands on the machine-wide list and nobody looking at the project will find it.\n", w.channelOf)
+	}
 	b.WriteString("A schedule does not run a model by itself: at each tick it creates an ordinary " +
 		"task, and whichever agent claims it does the work. So write the task title as an " +
 		"instruction someone else could follow — the agent that claims it will not have this " +

@@ -336,9 +336,23 @@ func (db *DB) FindSchedule(idOrName string) (*Schedule, error) {
 }
 
 // ListSchedules returns every schedule, soonest first; disabled ones last.
-func (db *DB) ListSchedules() ([]Schedule, error) {
-	rows, err := db.conn.Query(`SELECT ` + scheduleCols + ` FROM schedules
-		ORDER BY enabled DESC, next_run_at, name`)
+// ListSchedules returns the clocks, soonest first. channelID scopes to one
+// project; the NoChannel sentinel asks for the machine-wide ones — the
+// heartbeat and anything set up before projects existed — which would
+// otherwise be invisible the day the screen starts scoping.
+func (db *DB) ListSchedules(channelID string) ([]Schedule, error) {
+	q := `SELECT ` + scheduleCols + ` FROM schedules`
+	var args []any
+	switch channelID {
+	case "":
+	case NoChannel:
+		q += ` WHERE channel_id = ''`
+	default:
+		q += ` WHERE channel_id = ?`
+		args = append(args, channelID)
+	}
+	q += ` ORDER BY enabled DESC, next_run_at, name`
+	rows, err := db.conn.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list schedules: %w", err)
 	}
