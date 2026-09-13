@@ -207,6 +207,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelMessages(deps, params)
 		case "channels.post":
 			return handleChannelPost(deps, params)
+		case "channels.files":
+			return handleProjectFiles(deps, params)
 		case "channels.brief":
 			return handleProjectBrief(deps, params)
 		case "channels.create":
