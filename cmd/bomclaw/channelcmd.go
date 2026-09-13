@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -135,6 +136,8 @@ func runChannel(args []string) {
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		purpose := fs.String("purpose", "", "What this channel is for")
 		members := fs.String("members", "", "Comma-separated agent ids to add (the owner is always in)")
+		plain := fs.Bool("no-workspace", false, "A room with no project folder behind it")
+		projectsDir := fs.String("projects-dir", "", "Where project folders live (default ~/goterm-projects)")
 		name, _ := parseLeading(fs, rest)
 		if name == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch new <name> [--purpose ...] [--members a,b]")
@@ -153,12 +156,27 @@ func runChannel(args []string) {
 				list = append(list, coord.Member{Kind: coord.MemberAgent, ID: id})
 			}
 		}
-		c, err := db.CreateChannel("", name, coord.ChannelPublic, *purpose, me, list)
+		// A new room is a project by default: a folder, a brief, somewhere for
+		// the work to land. --no-workspace opts out for a room that is only a
+		// room, the way #general is.
+		var (
+			c   *coord.Channel
+			err error
+		)
+		if *plain {
+			c, err = db.CreateChannel("", name, coord.ChannelPublic, *purpose, me, list)
+		} else {
+			c, err = db.CreateProject(name, *purpose, me, *projectsDir, list)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ch new: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Println(c.ID)
+		if c.Workspace != "" {
+			fmt.Printf("workspace: %s\n", c.Workspace)
+			fmt.Printf("brief:     %s\n", filepath.Join(c.Workspace, coord.AgentsFile))
+		}
 
 	case "join":
 		fs := flag.NewFlagSet("ch join", flag.ExitOnError)

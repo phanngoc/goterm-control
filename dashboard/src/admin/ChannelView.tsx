@@ -231,6 +231,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         {channels.length === 0 && (
           <div className="px-3 py-2 text-xs text-gray-600">No channels yet.</div>
         )}
+        <NewProject call={call} onCreated={loadChannels} />
       </aside>
 
       {/* Main line */}
@@ -547,6 +548,70 @@ function ArtifactModal({ a, content, truncated, onClose }: {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// NewProject makes a room with a folder behind it. A project rather than a bare
+// room by default, because that is what someone is making when they create a
+// place for a piece of work: somewhere for the files to land and a brief
+// saying what the work is.
+function NewProject({ call, onCreated }: { call: Call; onCreated: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [purpose, setPurpose] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const create = async () => {
+    if (!name.trim() || busy) return
+    setBusy(true)
+    try {
+      await call('channels.create', { name: name.trim(), purpose: purpose.trim() })
+      setName(''); setPurpose(''); setOpen(false); setErr(null)
+      onCreated()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full text-left px-3 py-1.5 mt-2 text-xs text-gray-500 hover:text-sky-300"
+      >
+        + dự án mới
+      </button>
+    )
+  }
+  return (
+    <div className="px-3 py-2 space-y-1.5">
+      <input
+        autoFocus value={name} onChange={e => setName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) create(); if (e.key === 'Escape') setOpen(false) }}
+        placeholder="tên dự án"
+        className="w-full px-2 py-1 text-sm bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+      />
+      <input
+        value={purpose} onChange={e => setPurpose(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) create(); if (e.key === 'Escape') setOpen(false) }}
+        placeholder="dự án này để làm gì"
+        className="w-full px-2 py-1 text-xs bg-gray-950 rounded ring-1 ring-gray-800 text-gray-300 outline-none"
+      />
+      {err && <div className="text-[11px] text-red-300">{err}</div>}
+      <div className="flex gap-2">
+        <button
+          onClick={create} disabled={!name.trim() || busy}
+          className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-900 disabled:opacity-40"
+        >{busy ? 'đang tạo…' : 'tạo'}</button>
+        <button onClick={() => setOpen(false)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-300">huỷ</button>
+      </div>
+      <p className="text-[11px] text-gray-600">
+        Tạo kèm một thư mục và file {'AGENTS.md'} — agent đọc nó trước khi làm.
+      </p>
     </div>
   )
 }

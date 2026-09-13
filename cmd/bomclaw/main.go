@@ -505,6 +505,7 @@ func runGateway(args []string) {
 		SchedulesRun:  cfg.Schedules.Enabled,
 		NotesFile:     cfg.Coord.NotesFile,
 		Conversations: conversations,
+		ProjectsDir:   cfg.Coord.ProjectsDir,
 		ConfigPath:    absPath(*configPath),
 		Restart:       restartSelf(cfg.Agent.ID),
 	}

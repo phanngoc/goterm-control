@@ -94,15 +94,23 @@ func runTask(args []string) {
 		depth := fs.Int("depth", 0, "Chain depth when an agent spawns follow-up work")
 		context := fs.String("context", "", "Existing context id to attach this task to")
 		thread := fs.String("thread", "", "Root message id of the conversation this work came out of")
+		channel := fs.String("channel", "", "Project this work belongs to (default: the thread's)")
 		fs.Parse(rest)
 
 		db := openCoord(*dbPath)
 		defer db.Close()
 
 		me := requireAgent(*agent)
+		// Work opened from a conversation belongs to that conversation's
+		// project. Without this the board loses it the moment it is scoped.
+		channelID := *channel
+		if channelID == "" && *thread != "" {
+			channelID = threadChannel(db, *thread)
+		}
 		task, err := db.CreateTask(coord.NewTask{
 			CreatedBy: me, AssignedTo: *to, Title: *title, Body: *body,
 			Priority: *priority, Depth: *depth, ContextID: *context,
+			ChannelID: channelID,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "task new: %v\n", err)

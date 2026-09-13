@@ -217,6 +217,10 @@ func (s *Scheduler) fireAgent(sc *coord.Schedule, now time.Time) {
 		Body:       agentBody(sc, &p),
 		Kind:       coord.KindScheduled,
 		ScheduleID: sc.ID,
+		// The task a clock produces belongs to the clock's project, or the
+		// board would lose track of work the moment it stopped being typed by
+		// hand.
+		ChannelID: sc.ChannelID,
 	})
 	if err != nil {
 		s.failed(sc, now, "create task: "+err.Error())

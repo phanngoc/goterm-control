@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Task, TaskDetail } from './types'
+import type { Channel, Task, TaskDetail } from './types'
 import { ago, runLivenessStyle, taskStateStyle, truncate } from './format'
 import { useStore } from '../stores/store'
 
@@ -486,14 +486,26 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
     onOpenedTask?.()
   }, [openTaskID, onOpenedTask])
 
+  // Which project's board this is. "" is every project, which is what the
+  // board was before projects existed; "-" is the work that belongs to none,
+  // and it needs its own entry or it disappears the day scoping arrives.
+  const [project, setProject] = useState('')
+  const [projects, setProjects] = useState<Channel[]>([])
+
+  useEffect(() => {
+    call('channels.list')
+      .then((cs: Channel[]) => setProjects((cs || []).filter(c => c.workspace)))
+      .catch(() => {})
+  }, [call])
+
   const load = useCallback(async () => {
     try {
-      setTasks((await call('tasks.list', { limit: 200 })) || [])
+      setTasks((await call('tasks.list', { limit: 200, ...(project ? { channel_id: project } : {}) })) || [])
       setErr(null)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
-  }, [call])
+  }, [call, project])
 
   useEffect(() => {
     load()
@@ -511,7 +523,12 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
   const create = async () => {
     if (!title.trim()) return
     try {
-      await call('tasks.create', { title, body, assigned_to: to || undefined })
+      await call('tasks.create', {
+        title, body, assigned_to: to || undefined,
+        // Created on a project's board, it belongs to that project. Filing it
+        // anywhere else would put it somewhere the person cannot see it.
+        ...(project && project !== '-' ? { channel_id: project } : {}),
+      })
       setTitle(''); setBody(''); setTo('')
       load()
     } catch (e: any) {
@@ -521,7 +538,21 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 border-b border-gray-800 bg-gray-900/40">
+      <div className="p-4 border-b border-gray-800 bg-gray-900/40 space-y-2">
+        {projects.length > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-gray-500">dự án</span>
+            <select
+              value={project}
+              onChange={e => setProject(e.target.value)}
+              className="px-2 py-1 bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+            >
+              <option value="">tất cả</option>
+              {projects.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <option value="-">việc lẻ (không thuộc dự án nào)</option>
+            </select>
+          </div>
+        )}
         <div className="flex gap-2">
           <input
             value={title}

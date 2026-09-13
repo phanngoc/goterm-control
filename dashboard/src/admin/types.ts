@@ -115,6 +115,7 @@ export interface Task {
   max_continuations: number
   blocked_on?: 'children' | 'human' | ''
   fail_reason?: 'exhausted' | 'continuations-exhausted' | 'empty-exhausted' | ''
+  channel_id?: string
 }
 
 export interface TaskEvent {
@@ -247,6 +248,7 @@ export interface Channel {
   unread: number
   mentions: number
   last_message_at?: string
+  workspace?: string
 }
 
 export interface ChannelMessage {

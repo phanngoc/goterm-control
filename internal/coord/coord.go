@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -438,6 +438,35 @@ var v5Columns = []struct{ name, decl string }{
 	{"reported_at", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v8 turns a channel into a project: a room with a folder behind it, and tasks
+// that belong to it.
+//
+// Two columns rather than a new table. A project IS a channel — the
+// conversation, the work and the files are the same thing seen from three
+// sides, and modelling them apart would mean keeping three names in step.
+var v8ChannelColumns = []struct{ name, decl string }{
+	// Where this project's work lives on disk: source, artifacts, whatever the
+	// agents produce. Empty for rooms that are only rooms (#general, DMs).
+	{"workspace", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v8TaskColumns: which project a task belongs to.
+//
+// context_id already groups a task with its own children; it does not say
+// which piece of work the tree is part of. A board showing every task on the
+// machine is a board nobody can read once there is more than one project.
+var v8TaskColumns = []struct{ name, decl string }{
+	{"channel_id", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v8ScheduleColumns: which project a schedule belongs to. Timed work is work —
+// "check the prices every five minutes" belongs to the trading project the
+// same way a task does, and a Schedules tab listing every clock on the machine
+// has the same problem as a board listing every task.
+var v8ScheduleColumns = []struct{ name, decl string }{
+	{"channel_id", "TEXT NOT NULL DEFAULT ''"},
+}
+
 // v6Columns: the acceptance bar a child is judged against. Paperclip's rule —
 // a child a reviewer could call "half done" was never scoped — so the bar is
 // recorded with the work, not left in the parent's head.
@@ -447,6 +476,10 @@ var v6Columns = []struct{ name, decl string }{
 
 var v3Indexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id, state)`,
+	// Same rule, v8: this indexes a column the ALTERs above add, so it cannot
+	// sit in ddl — a fresh database would build it before the column exists.
+	// The test suite said so within a minute of it being put there.
+	`CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id, state)`,
 }
 
 func (db *DB) migrate() error {
@@ -472,6 +505,21 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v6Columns {
 		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v8ChannelColumns {
+		if err := db.ensureColumn("channels", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v8TaskColumns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v8ScheduleColumns {
+		if err := db.ensureColumn("schedules", c.name, c.decl); err != nil {
 			return err
 		}
 	}
