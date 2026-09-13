@@ -167,9 +167,9 @@ func NewMethodHandler(deps Deps) MethodHandler {
 		case "accounts.use":
 			return handleAccountsUse(deps, params)
 		case "admin.settings":
-			return handleAdminSettings(deps)
+			return handleAdminSettingsAll(deps)
 		case "admin.set_model":
-			return handleAdminSetModel(deps, params)
+			return handleAdminSetModelOn(deps, params)
 		case "admin.overview":
 			return handleAdminOverview(deps)
 		case "traces.list":

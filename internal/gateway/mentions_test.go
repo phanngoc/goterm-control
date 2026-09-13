@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -301,5 +302,54 @@ func TestAdoptingTwiceKeepsOneSession(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("one thread produced %d sessions", n)
+	}
+}
+
+// TestAddressingAnAgentWakesItWithoutTyping: picking an agent from a dropdown
+// and then also having to write "@bomclaw2" is asking the same question twice,
+// and forgetting the second half is silence — which is exactly what happened
+// the first time somebody used the picker.
+func TestAddressingAnAgentWakesItWithoutTyping(t *testing.T) {
+	turn := &recordingTurn{reply: "ừ", newID: "s1"}
+	deps, _ := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	raw, err := handleChannelPost(deps, json.RawMessage(
+		`{"channel_id":"`+coord.GeneralChannelID+`","body":"về kinh tế VN 3 tháng qua","notify":["bomclaw2"]}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	var posted coord.ChannelMessage
+	if err := json.Unmarshal(raw, &posted); err != nil {
+		t.Fatal(err)
+	}
+	// The author is the person, not the agent they addressed.
+	if posted.AuthorKind != coord.MemberUser || posted.AuthorID != coord.OwnerUserID {
+		t.Fatalf("a dashboard post was attributed to %s/%s", posted.AuthorKind, posted.AuthorID)
+	}
+	// And the body is untouched: addressing is structure, not prose.
+	if posted.Body != "về kinh tế VN 3 tháng qua" {
+		t.Fatalf("the body was rewritten: %q", posted.Body)
+	}
+
+	NewMentionWatcher(deps).sweep(context.Background())
+	if turn.count() != 1 {
+		t.Fatalf("the addressed agent did not answer (%d turns)", turn.count())
+	}
+}
+
+// Addressing nobody still leaves the room readable and nobody interrupted.
+func TestAddressingNobodyWakesNobody(t *testing.T) {
+	turn := &recordingTurn{reply: "không nên nói gì"}
+	deps, _ := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, err := handleChannelPost(deps, json.RawMessage(
+		`{"channel_id":"`+coord.GeneralChannelID+`","body":"ghi chú cho cả phòng"}`)); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	if turn.count() != 0 {
+		t.Fatal("a line addressed to nobody woke an agent")
 	}
 }
