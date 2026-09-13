@@ -32,13 +32,17 @@ artifacts into `~/.bomclaw/` and restart.
    binary swaps. Ad-hoc (`-s -`) is the fallback, but every ad-hoc rebuild is
    a NEW TCC identity and macOS re-asks for folder permissions.
 
-   **Sign by the identity's SHA-1, not its name.** `-s "BomClaw Code Signing"`
-   hung on the keychain dialog three times out of three on 2026-09-13, each
-   time leaving the binary ad-hoc; `-s 5364738D592D096F5F186640C4A41A0AD43D35B6`
-   returned instantly, twice out of twice, with no dialog at all. The identity
-   is the same one — looking it up by name is what asks the keychain a question
-   that can block. Confirm the hash is still current with:
-   `security find-identity -v -p codesigning`
+   **The keychain dialog comes back, and nothing here prevents it.** On
+   2026-09-13 `-s "BomClaw Code Signing"` hung three times running; the same
+   identity by SHA-1 (`-s 5364738D592D096F5F186640C4A41A0AD43D35B6`) then
+   signed instantly four times, and hung on the fifth. So the hash is worth
+   trying first — it has been faster more often — but treat it as a habit, not
+   a fix. What actually clears it is clicking **Always Allow** on the dialog
+   macOS is showing, which only the person at the machine can do.
+   `security find-identity -v -p codesigning` confirms the hash is current.
+
+   Whatever you sign with, the rule below does not change: verify before
+   restarting. A hang leaves the binary ad-hoc and exits 124.
 
    **Verify the signature landed BEFORE restarting.** `codesign` can hang on a
    keychain "allow access" dialog; a `timeout` kills it, and the file is left
