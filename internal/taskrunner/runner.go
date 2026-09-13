@@ -362,7 +362,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// this task while nobody was running it, both belong in front of the model.
 	children, _ := r.db.Children(task.ID)
 	inbox := r.taskMail(task.ID)
-	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox)
+	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers())
 	span.SetInputs(prompt)
 	if tid := span.TraceID(); tid != "" {
 		if err := r.db.AttachTrace(task.ID, tid); err != nil {
@@ -590,7 +590,25 @@ func (r *Runner) taskMail(taskID string) []coord.Message {
 	return mine
 }
 
-func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message) string {
+// peers is who else could take work, read from the agents table rather than
+// from a paragraph someone remembered to update. An agent that does not know a
+// colleague exists cannot hand anything to it — which is how a machine ends up
+// running three agents and using two.
+func (r *Runner) peers() []coord.Agent {
+	all, err := r.db.ListAgents()
+	if err != nil {
+		return nil
+	}
+	out := make([]coord.Agent, 0, len(all))
+	for _, a := range all {
+		if a.ID != r.cfg.AgentID {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message, peers []coord.Agent) string {
 	var b strings.Builder
 	if t.Continuations > 0 || resumed {
 		fmt.Fprintf(&b, "You are continuing a task from the shared queue (run %d).\n\n", t.Continuations+1)
@@ -634,6 +652,23 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 			}
 		}
 	}
+	if len(peers) > 0 {
+		b.WriteString("\n## The other agents you can hand work to\n\n")
+		for _, p := range peers {
+			state := "online"
+			if !p.Online {
+				state = "offline right now"
+			}
+			backend := p.Provider
+			if p.Model != "" {
+				backend = fmt.Sprintf("%s · %s", p.Provider, p.Model)
+			}
+			fmt.Fprintf(&b, "- **%s** — %s (%s)\n", p.ID, backend, state)
+		}
+		b.WriteString("\nDifferent backends, so different strengths and different costs. " +
+			"`bomclaw task new --to <agent>` hands a piece over; omit --to and any of them may take it.\n")
+	}
+
 	if len(inbox) > 0 {
 		b.WriteString("\n## Messages about this task\n\n")
 		for _, m := range inbox {

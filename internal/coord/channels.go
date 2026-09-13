@@ -742,6 +742,48 @@ func (db *DB) SaveThreadSession(threadKey, agentID, provider, sessionID string) 
 	return nil
 }
 
+// UpdateMessageBody rewrites a message in place.
+//
+// It exists for one thing: an agent working on an answer puts a line in the
+// thread saying what it is doing, and that line becomes the answer when the
+// answer arrives. Posting progress as separate messages would leave a room
+// full of "I am reading the log" under every real reply — the progress is
+// interesting while it is happening and noise the moment it is not.
+//
+// created_at is deliberately left alone. The message keeps its place in the
+// thread: it was said when it was said, and a reply that jumped to the bottom
+// on every edit would reorder a conversation as it was being read.
+func (db *DB) UpdateMessageBody(id, body string) error {
+	res, err := db.conn.Exec(`UPDATE channel_messages SET body = ? WHERE id = ?`, body, id)
+	if err != nil {
+		return fmt.Errorf("update %s: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("message %s: no such message", id)
+	}
+	return nil
+}
+
+// DeleteMessage removes a message and the mentions that pointed at it.
+//
+// Only for a progress line whose turn produced nothing: leaving "working on
+// it…" in a thread forever is worse than never having said it. Real messages
+// are not deleted — a room where things vanish cannot be read back.
+func (db *DB) DeleteMessage(id string) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("delete %s: %w", id, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM channel_mentions WHERE message_id = ?`, id); err != nil {
+		return fmt.Errorf("delete mentions of %s: %w", id, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM channel_messages WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete %s: %w", id, err)
+	}
+	return tx.Commit()
+}
+
 func (db *DB) getMessage(id string) (*ChannelMessage, error) {
 	row := db.conn.QueryRow(`SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
 		FROM channel_messages WHERE id = ?`, id)

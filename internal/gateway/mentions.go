@@ -199,29 +199,70 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	turnCtx, cancel := context.WithTimeout(ctx, mentionTurnTimeout)
 	defer cancel()
 
+	// Build the prompt BEFORE announcing anything. The progress line is a
+	// message from this agent, so posting it first would make the thread look
+	// as though this agent had just spoken — and "what was said while you were
+	// away" would come back empty every time. A test caught exactly that.
+	prompt := w.prompt(m, mem, key)
+
+	// Say something before doing anything. A turn that reads six files takes
+	// long enough that a silent thread is indistinguishable from a broken one,
+	// and the person watching has no way to tell which. This line is a real
+	// message in the thread, and it becomes the answer when the answer exists
+	// — progress is worth seeing while it happens and noise the moment it
+	// stops, so it is edited rather than added to.
+	progress, _, err := w.deps.Coord.PostMessage(coord.NewChannelMessage{
+		ChannelID: m.ChannelID, ThreadRoot: key,
+		AuthorKind: coord.MemberAgent, AuthorID: w.deps.AgentID,
+		Body: workingLine(nil, "", time.Time{}),
+	})
+	if err != nil {
+		log.Printf("mentions: could not open a progress line: %v", err)
+		progress = nil // the turn still runs; it just runs unseen
+	}
+
 	sink := &replySink{}
+	if progress != nil {
+		sink.onProgress = func(tools []string, partial string, since time.Time) {
+			if err := w.deps.Coord.UpdateMessageBody(progress.ID, workingLine(tools, partial, since)); err != nil {
+				log.Printf("mentions: progress update: %v", err)
+			}
+		}
+	}
+
 	sess.MarkRunning("channel: " + truncateLine(m.Body, 40))
 	w.live.Store(m.ID, sess)
-	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), w.prompt(m, mem, key), sink)
+	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), prompt, sink)
 	sess.MarkIdle()
 	w.live.Delete(m.ID)
 	if err != nil {
 		log.Printf("mentions: turn for %s: %v", m.ID, err)
+		w.finishProgress(progress, "⚠️ lượt này hỏng giữa chừng: "+truncateLine(err.Error(), 200))
 		clear("")
 		return
 	}
 
 	reply := strings.TrimSpace(sink.Text())
 	if reply == "" {
+		// Nothing to say, so nothing should be left saying it is thinking.
+		w.finishProgress(progress, "")
 		clear("turn produced nothing to say")
 		return
 	}
 
-	// The reply belongs where the mention was: in the thread if the mention was
-	// in one, otherwise starting a thread under it — so the main line stays
-	// readable and the exchange stays in one place. That place is the same key
-	// the session is kept under, which is what makes the next turn remember.
-	if _, wake, err := w.deps.Coord.PostMessage(coord.NewChannelMessage{
+	// The answer takes the place of the progress line: same message, same spot
+	// in the thread, so the conversation reads as one reply rather than a
+	// running commentary with the point at the end.
+	if progress != nil {
+		if err := w.deps.Coord.UpdateMessageBody(progress.ID, reply); err != nil {
+			log.Printf("mentions: could not land the reply in place: %v", err)
+		}
+		// Mentions inside the final text still have to ring: the progress line
+		// was written before the agent knew what it would say.
+		for _, who := range w.mentionedAgents(reply) {
+			NotifyAgents(w.deps.Coord, who, w.deps.AgentID, "about a mention in "+m.ChannelID)
+		}
+	} else if _, wake, err := w.deps.Coord.PostMessage(coord.NewChannelMessage{
 		ChannelID:  m.ChannelID,
 		ThreadRoot: key,
 		AuthorKind: coord.MemberAgent,
@@ -268,6 +309,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 	b.WriteString(w.threadContext(m, mem))
 
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
+	b.WriteString(w.roster())
 
 	b.WriteString("## How to answer\n\n")
 	b.WriteString("Reply in plain prose. What you write is posted into that thread as your " +
@@ -281,6 +323,53 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		"the task it produced, and the result is posted back here when it finishes, so nobody "+
 		"has to watch the board for an answer they asked for in a room. The board is for work; "+
 		"this room is for talking about it.\n", key)
+	return b.String()
+}
+
+// roster is who else is here, generated from the agents table.
+//
+// It used to be a paragraph in each agent's config, hand-written and copied.
+// That shape guarantees drift and duly delivered it: agent 1 and agent 2 were
+// still describing a two-agent machine months after the third arrived, and
+// agent 1 said so out loud in a thread — "bomclaw3 là agent nào thì em vẫn
+// chưa biết". A roster that has to be edited in three files when a fourth
+// agent appears is a roster that will be wrong.
+//
+// Generated, it cannot drift: the same table `bomclaw agents` reads, which
+// every gateway writes to at startup with its own provider and model.
+func (w *MentionWatcher) roster() string {
+	agents, err := w.deps.Coord.ListAgents()
+	if err != nil || len(agents) <= 1 {
+		return ""
+	}
+	var lines []string
+	for _, a := range agents {
+		if a.ID == w.deps.AgentID {
+			continue
+		}
+		state := "online"
+		if !a.Online {
+			state = "offline right now"
+		}
+		backend := a.Provider
+		if a.Model != "" {
+			backend = fmt.Sprintf("%s · %s", a.Provider, a.Model)
+		}
+		lines = append(lines, fmt.Sprintf("- **%s** — %s (%s)", a.ID, backend, state))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## The other agents on this machine\n\n")
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nThey run different backends, so they are good at different things and cost " +
+		"different amounts. Name one with @ to bring it into this thread — it arrives having read " +
+		"the conversation. Hand work over with `bomclaw task new --to <agent>`; " +
+		"`bomclaw agents` is the same list, live.\n\n")
 	return b.String()
 }
 
@@ -375,17 +464,70 @@ func truncateRunes(s string, n int) string {
 	return s
 }
 
-// replySink collects a turn's text. A channel has no stream to write to: the
-// reply is one message, posted when the turn is done.
+// replySink collects a turn's text and, if the caller asked for one, reports
+// progress as it goes.
+//
+// Throttled on purpose. The interesting thing about a long turn is WHICH tools
+// it is reaching for, and that changes on the order of seconds; writing the
+// room a new line per token would cost a database write per token to tell the
+// reader something they cannot read that fast anyway.
 type replySink struct {
-	mu sync.Mutex
-	b  strings.Builder
+	mu      sync.Mutex
+	b       strings.Builder
+	tools   []string
+	started time.Time
+	last    time.Time
+
+	// onProgress is called with the tools used so far and the reply as it
+	// stands. Nil when nobody is watching.
+	onProgress func(tools []string, partial string, since time.Time)
 }
+
+const progressEvery = 2 * time.Second
 
 func (r *replySink) Write(chunk string) {
 	r.mu.Lock()
 	r.b.WriteString(chunk)
 	r.mu.Unlock()
+	r.report(false)
+}
+
+// NoteTool is the part worth watching: "reading the log" says more about what
+// a turn is doing than the half-sentence it has written so far, so a new tool
+// always reports immediately rather than waiting out the interval.
+func (r *replySink) NoteTool(label string) {
+	if label == "" {
+		return
+	}
+	r.mu.Lock()
+	if len(r.tools) == 0 || r.tools[len(r.tools)-1] != label {
+		r.tools = append(r.tools, label)
+	}
+	r.mu.Unlock()
+	r.report(true)
+}
+
+func (r *replySink) report(now bool) {
+	r.mu.Lock()
+	if r.onProgress == nil {
+		r.mu.Unlock()
+		return
+	}
+	if r.started.IsZero() {
+		r.started = time.Now()
+	}
+	if !now && time.Since(r.last) < progressEvery {
+		r.mu.Unlock()
+		return
+	}
+	r.last = time.Now()
+	tools := append([]string(nil), r.tools...)
+	partial := r.b.String()
+	started := r.started
+	fn := r.onProgress
+	r.mu.Unlock()
+
+	fn(tools, partial, started)
 }
 
 func (r *replySink) Text() string {
@@ -394,10 +536,70 @@ func (r *replySink) Text() string {
 	return r.b.String()
 }
 
-func (r *replySink) NoteTool(string)          {}
 func (r *replySink) Flush()                   {}
 func (r *replySink) SendPhoto(string, string) {}
 func (r *replySink) Finalize()                {}
+
+// workingLine is what the room sees while the agent is still working.
+func workingLine(tools []string, partial string, since time.Time) string {
+	var b strings.Builder
+	b.WriteString("⏳ _đang làm_")
+	if !since.IsZero() {
+		fmt.Fprintf(&b, " · %s", time.Since(since).Round(time.Second))
+	}
+	if len(tools) > 0 {
+		// The last few, newest last: what it is doing now matters more than
+		// what it did first, and the whole list gets long on a real task.
+		from := 0
+		if len(tools) > 5 {
+			from = len(tools) - 5
+		}
+		fmt.Fprintf(&b, " · %s", strings.Join(tools[from:], " → "))
+	}
+	if p := strings.TrimSpace(partial); p != "" {
+		b.WriteString("\n\n")
+		b.WriteString(truncateRunes(p, 600))
+	}
+	return b.String()
+}
+
+// finishProgress replaces the progress line with its final form, or removes it
+// when there is nothing to replace it with. A thread must never be left with
+// an agent that is permanently about to say something.
+func (w *MentionWatcher) finishProgress(progress *coord.ChannelMessage, body string) {
+	if progress == nil {
+		return
+	}
+	if strings.TrimSpace(body) == "" {
+		if err := w.deps.Coord.DeleteMessage(progress.ID); err != nil {
+			log.Printf("mentions: could not remove the progress line: %v", err)
+		}
+		return
+	}
+	if err := w.deps.Coord.UpdateMessageBody(progress.ID, body); err != nil {
+		log.Printf("mentions: could not close the progress line: %v", err)
+	}
+}
+
+// mentionedAgents finds the peers named in a finished reply. The progress line
+// was posted before the agent knew what it would write, so its @ names were
+// not there to be resolved at post time.
+func (w *MentionWatcher) mentionedAgents(body string) []string {
+	agents, err := w.deps.Coord.ListAgents()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range agents {
+		if a.ID == w.deps.AgentID {
+			continue
+		}
+		if strings.Contains(body, "@"+a.ID) {
+			out = append(out, a.ID)
+		}
+	}
+	return out
+}
 
 func truncateLine(s string, n int) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
