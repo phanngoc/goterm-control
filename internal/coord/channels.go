@@ -398,11 +398,17 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 	// conversation. Following a thread you have spoken in is Slack's rule and
 	// the right one here.
 	//
+	// But only when nothing was named. Naming someone — in the prose or by
+	// picking them — is a narrower statement than "whoever is in here", and
+	// the narrower one has to win: a person who picks one agent and watches
+	// three answer will stop picking. So this is a default for an unaddressed
+	// reply, not an addition to an addressed one.
+	//
 	// Only a PERSON's reply does this. An agent's reply waking every other
 	// agent in the thread is the loop the mention rule exists to prevent —
 	// three agents in one room answering each other's answers. An agent that
 	// means to summon a peer still writes @, which is a decision it made.
-	if n.ThreadRoot != "" && n.AuthorKind == MemberUser {
+	if n.ThreadRoot != "" && n.AuthorKind == MemberUser && len(addressed) == 0 {
 		followers, err := db.threadAgents(n.ThreadRoot)
 		if err != nil {
 			return nil, nil, err

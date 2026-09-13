@@ -551,3 +551,65 @@ func TestTaskWithoutAThread(t *testing.T) {
 		t.Fatalf("a task with no conversation reported one: %s / %s", root, channel)
 	}
 }
+
+// TestNamingOneAgentInAThreadWakesOnlyThatOne: following a thread is a default
+// for a reply that named nobody, not an addition to one that did. A person who
+// picks one agent and watches three answer will stop picking.
+func TestNamingOneAgentInAThreadWakesOnlyThatOne(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2", "bomclaw3")
+
+	root, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+		Body: "@bomclaw2 bắt đầu đi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// All three end up in the thread.
+	for _, who := range []string{"bomclaw", "bomclaw2", "bomclaw3"} {
+		if _, _, err := db.PostMessage(NewChannelMessage{
+			ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: who, Body: "mình đây",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Picked from a dropdown: structure, not prose.
+	_, wake, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "reply đi",
+		Notify: []Member{{Kind: MemberAgent, ID: "bomclaw3"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 1 || wake[0] != "bomclaw3" {
+		t.Fatalf("picking one agent woke %v", wake)
+	}
+
+	// Same rule when the name is written in the prose.
+	_, wake, err = db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "@bomclaw2 còn bạn?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 1 || wake[0] != "bomclaw2" {
+		t.Fatalf("naming one agent in prose woke %v", wake)
+	}
+
+	// And an unaddressed reply still reaches everyone in the thread — that is
+	// the case the rule was written for.
+	_, wake, err = db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "ai rảnh thì xem giúp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 3 {
+		t.Fatalf("an unaddressed reply should reach the thread, woke %v", wake)
+	}
+}
