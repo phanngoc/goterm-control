@@ -15,6 +15,7 @@ import (
 	// not left to whoever happens to import a provider for another reason.
 	_ "github.com/ngocp/goterm-control/internal/claude"
 	_ "github.com/ngocp/goterm-control/internal/codex"
+	_ "github.com/ngocp/goterm-control/internal/opencode"
 	"gopkg.in/yaml.v3"
 )
 
@@ -449,8 +450,9 @@ func Load(path string) (*Config, error) {
 
 // Supported provider keys.
 const (
-	ProviderClaude = "claude"
-	ProviderCodex  = "codex"
+	ProviderClaude   = "claude"
+	ProviderCodex    = "codex"
+	ProviderOpenCode = "opencode"
 )
 
 func (c *Config) Validate() error {
@@ -493,6 +495,8 @@ func providerFor(api models.ModelAPI) string {
 		return ProviderClaude
 	case models.APICodexCLI:
 		return ProviderCodex
+	case models.APIOpenCodeCLI:
+		return ProviderOpenCode
 	}
 	return ""
 }

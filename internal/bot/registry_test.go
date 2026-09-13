@@ -95,3 +95,18 @@ func TestPoolsAreBuiltPerProvider(t *testing.T) {
 		t.Fatalf("PoolFromConfig should return this agent's provider pool, got %v", one.Names())
 	}
 }
+
+// TestAThirdBackendNeedsNoChangeHere is what #125 was for. opencode is
+// registered by its own package and reached through the registry; if this test
+// ever needs a branch added to internal/bot to pass, the registry has stopped
+// doing its job.
+func TestAThirdBackendNeedsNoChangeHere(t *testing.T) {
+	c := cfgFor(config.ProviderOpenCode, "oc-sonnet")
+	c.Models.Custom = []models.Model{{
+		ID: "oc-sonnet", Name: "opencode", API: models.APIOpenCodeCLI,
+	}}
+	client := NewChatClientWithPool(c, nil, nil)
+	if got := client.Name(); got != "opencode" {
+		t.Fatalf("the opencode config resolved to %q", got)
+	}
+}

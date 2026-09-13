@@ -4,10 +4,11 @@ package models
 type ModelAPI string
 
 const (
-	APIClaudeCLI ModelAPI = "claude-cli" // Claude Code CLI subprocess
-	APICodexCLI  ModelAPI = "codex-cli"  // OpenAI Codex CLI subprocess
-	APIAnthropic ModelAPI = "anthropic"  // Anthropic Messages API (future)
-	APIOpenAI    ModelAPI = "openai"     // OpenAI-compatible completions (future)
+	APIClaudeCLI   ModelAPI = "claude-cli"   // Claude Code CLI subprocess
+	APICodexCLI    ModelAPI = "codex-cli"    // OpenAI Codex CLI subprocess
+	APIOpenCodeCLI ModelAPI = "opencode-cli" // opencode CLI subprocess
+	APIAnthropic   ModelAPI = "anthropic"    // Anthropic Messages API (future)
+	APIOpenAI      ModelAPI = "openai"       // OpenAI-compatible completions (future)
 )
 
 // InputType describes what a model can accept.
@@ -21,16 +22,16 @@ const (
 
 // Model describes an AI model's capabilities, cost, and routing info.
 type Model struct {
-	ID            string    `yaml:"id" json:"id"`                         // canonical ID (e.g. "claude-opus-4-6")
-	Name          string    `yaml:"name" json:"name"`                     // display name
-	Provider      string    `yaml:"provider" json:"provider"`             // provider key (e.g. "anthropic", "openai")
-	API           ModelAPI  `yaml:"api" json:"api"`                       // wire protocol
-	Aliases       []string  `yaml:"aliases,omitempty" json:"aliases"`     // shorthand names (e.g. "opus", "o4")
-	ContextWindow int       `yaml:"context_window" json:"context_window"` // max input tokens
-	MaxTokens     int       `yaml:"max_tokens" json:"max_tokens"`         // max output tokens
-	Reasoning     bool      `yaml:"reasoning" json:"reasoning"`           // extended thinking support
-	Input         []InputType `yaml:"input" json:"input"`                 // supported modalities
-	Cost          ModelCost `yaml:"cost" json:"cost"`                     // pricing per 1M tokens
+	ID            string      `yaml:"id" json:"id"`                         // canonical ID (e.g. "claude-opus-4-6")
+	Name          string      `yaml:"name" json:"name"`                     // display name
+	Provider      string      `yaml:"provider" json:"provider"`             // provider key (e.g. "anthropic", "openai")
+	API           ModelAPI    `yaml:"api" json:"api"`                       // wire protocol
+	Aliases       []string    `yaml:"aliases,omitempty" json:"aliases"`     // shorthand names (e.g. "opus", "o4")
+	ContextWindow int         `yaml:"context_window" json:"context_window"` // max input tokens
+	MaxTokens     int         `yaml:"max_tokens" json:"max_tokens"`         // max output tokens
+	Reasoning     bool        `yaml:"reasoning" json:"reasoning"`           // extended thinking support
+	Input         []InputType `yaml:"input" json:"input"`                   // supported modalities
+	Cost          ModelCost   `yaml:"cost" json:"cost"`                     // pricing per 1M tokens
 }
 
 // ModelCost holds per-1M-token pricing.
@@ -134,5 +135,19 @@ func BuiltinModels() []Model {
 			Reasoning:     true,
 			Input:         []InputType{InputText, InputImage},
 		},
+
+		// opencode ships no builtin on purpose. Its --model takes a
+		// provider/model pair resolved against whatever the user has
+		// authenticated in opencode itself, so any id invented here would be
+		// right for one install and a 400 for the next. Add your own:
+		//
+		//   models:
+		//     default: "anthropic/claude-opus-5"
+		//     custom:
+		//       - id: "anthropic/claude-opus-5"
+		//         name: "Opus 5 via opencode"
+		//         api: "opencode-cli"
+		//
+		// The id is passed to --model verbatim.
 	}
 }
