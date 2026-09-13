@@ -121,3 +121,43 @@ func TestAStaleProgressLineIsSweptByTheNextRun(t *testing.T) {
 		t.Fatalf("expected exactly one progress line, found %d", working)
 	}
 }
+
+// The tool names say what it is reaching for; this is what it is actually
+// saying. A person waiting wants the second one, and until now the thread
+// showed only the first.
+func TestTheRoomSeesTheAnswerForming(t *testing.T) {
+	db := progressDB(t)
+	root, _, _ := db.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "nghiên cứu giúp mình",
+	})
+	task, _ := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "nghiên cứu", AssignedTo: "a1"})
+	if err := db.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, _ := db.ClaimTask("a1")
+	p := openProgress(db, claimed)
+	if p == nil {
+		t.Fatal("no progress line")
+	}
+
+	// Below the threshold nothing is redrawn: a write per token tells the
+	// reader something they cannot read that fast.
+	p.Text("Bắt đầu. ")
+	thread, _ := db.ThreadMessages(root.ID)
+	if strings.Contains(thread[1].Body, "Bắt đầu") {
+		t.Error("redrew after a few characters")
+	}
+
+	// Past it, the room sees what is being written.
+	p.Text(strings.Repeat("Phân tích giai đoạn thị trường. ", 8))
+	thread, _ = db.ThreadMessages(root.ID)
+	if !strings.Contains(thread[1].Body, "Phân tích giai đoạn thị trường") {
+		t.Fatalf("the forming answer is not in the room:\n%s", thread[1].Body)
+	}
+	// And it is still a progress line, not the answer: the answer is what the
+	// reporter posts when the task is done.
+	if !strings.HasPrefix(thread[1].Body, progressPrefix) {
+		t.Error("the progress line stopped announcing itself as one")
+	}
+}
