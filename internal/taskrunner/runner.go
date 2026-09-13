@@ -339,6 +339,13 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// under this id, so resuming it is what makes run 2 remember run 1.
 	sess := session.New(taskChatID)
 	sess.ID = "task_" + task.ID
+	// Work filed under a project runs in that project's folder, the same as a
+	// turn in its room. A task with no project runs where the agent lives.
+	if task.ChannelID != "" {
+		if c, err := r.db.GetChannel(task.ChannelID); err == nil {
+			sess.SetWorkspace(c.Workspace)
+		}
+	}
 	resumed := false
 	if ref := coord.ParseSessionRef(task.SessionRef); ref.Provider != "" {
 		// Only the same CLI can resume its own session; a ref from the other

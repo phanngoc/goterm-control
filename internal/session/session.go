@@ -15,6 +15,14 @@ type Session struct {
 	ClaudeSessionID string    `json:"claude_session_id,omitempty"`
 	Provider        string    `json:"provider,omitempty"` // CLI that owns ClaudeSessionID ("claude", "codex")
 	Account         string    `json:"account,omitempty"`  // credential pool entry this session is pinned to
+	// Workspace is where this conversation's CLI runs. Empty means the agent's
+	// own workspace — which is right for a chat and wrong for a project: work
+	// on a project belongs in the project's folder, where the other agents and
+	// the person will look for it.
+	//
+	// Not persisted: it is derived from the room the turn is answering, and a
+	// stale value would silently run a project's work somewhere else.
+	Workspace string `json:"-"`
 	MessageCount    int       `json:"message_count"`
 	InputTokens     int       `json:"input_tokens"`
 	OutputTokens    int       `json:"output_tokens"`
@@ -125,6 +133,22 @@ func (s *Session) SetProvider(name string) {
 	defer s.mu.Unlock()
 	s.Provider = name
 	s.UpdatedAt = time.Now()
+}
+
+// SetWorkspace points this conversation's CLI at a directory. Call it before
+// the turn; the clients read it when they spawn.
+func (s *Session) SetWorkspace(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Workspace = dir
+}
+
+// GetWorkspace returns the directory this conversation runs in, or "" for the
+// agent's own.
+func (s *Session) GetWorkspace() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Workspace
 }
 
 // GetAccount returns the credential pool entry this session is pinned to.
