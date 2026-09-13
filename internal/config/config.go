@@ -166,6 +166,13 @@ type AccountConfig struct {
 	// so the secret need not sit in config.yaml.
 	APIKey    string `yaml:"api_key"`
 	APIKeyEnv string `yaml:"api_key_env"`
+
+	// Rotate is whether new sessions may land here on their own. Pointer so an
+	// absent key means yes — every pool that exists today is a rotation and
+	// must keep behaving like one. Set false for a login that should be used
+	// only when named: a colleague's account belongs in the pool so it can be
+	// chosen, and out of the rotation so it is never chosen for you.
+	Rotate *bool `yaml:"rotate"`
 }
 
 // BrowserConfig groups browser control. Extension is the Browser Bridge: a

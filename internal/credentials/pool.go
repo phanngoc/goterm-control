@@ -39,6 +39,16 @@ type Account struct {
 	// the key itself need not sit in config.yaml.
 	APIKey    string
 	APIKeyEnv string
+
+	// NoRotate keeps this account in the pool and out of the rotation: usable
+	// by name and never chosen for you, which is what a colleague's login
+	// needs.
+	//
+	// Negative, so the zero value is the behaviour every pool had before this
+	// existed. A positive Rotate bool would have silently emptied the rotation
+	// of any account built by a caller that had not heard of the field — which
+	// a test caught immediately, and production would have caught at 3am.
+	NoRotate bool
 }
 
 // resolvedKey returns the API key, from the env var when one is named.
@@ -211,6 +221,13 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 	var best *accountState
 	for i := range p.accts {
 		s := p.accts[(p.next+i)%len(p.accts)]
+		// An account can be in the pool without being in the rotation. A
+		// colleague's login is the case that needs it: usable on purpose, and
+		// never the answer to "start a chat" — otherwise every other new
+		// conversation quietly lands on somebody else's quota.
+		if s.acct.NoRotate {
+			continue
+		}
 		if now.Before(s.coolUntil) {
 			continue
 		}
@@ -219,14 +236,24 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 		}
 	}
 	if best == nil {
-		// Everything is cooling down. Hand back whichever recovers soonest and
-		// let the turn try: a cooldown is a guess about someone else's rate
-		// limiter, not a fact, and refusing outright would idle the agent.
+		// Everything in the rotation is cooling down. Hand back whichever
+		// recovers soonest and let the turn try: a cooldown is a guess about
+		// someone else's rate limiter, not a fact, and refusing outright would
+		// idle the agent. Opted-out accounts stay out — being unreachable by
+		// exhaustion is the whole point of opting out.
 		for _, s := range p.accts {
+			if s.acct.NoRotate {
+				continue
+			}
 			if best == nil || s.coolUntil.Before(best.coolUntil) {
 				best = s
 			}
 		}
+	}
+	if best == nil {
+		// Everything is opted out. The ambient credentials are what is left,
+		// and they are what an install with no pool uses anyway.
+		return Account{}, nil
 	}
 	best.lastUsed = now
 	p.next = (p.next + 1) % len(p.accts)
