@@ -302,3 +302,72 @@ func TestAnAgentCanLeaveItselfANote(t *testing.T) {
 		t.Errorf("wake = %v, want none — nobody rings their own doorbell", wake)
 	}
 }
+
+// TestMainLineCarriesTheNewestReply: a count on its own reads like silence next
+// to a question you asked an agent — which is how the first working reply was
+// missed on the dashboard.
+func TestMainLineCarriesTheNewestReply(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+
+	root, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+		Body: "@bomclaw2 kênh đã thông chưa",
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+
+	// No replies yet: no preview, and nothing pretending there is one.
+	line, err := db.ChannelMessages(GeneralChannelID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line[0].Replies != 0 || line[0].LastReplyBy != "" || line[0].LastReplyText != "" {
+		t.Fatalf("unanswered message carries a reply preview: %+v", line[0])
+	}
+
+	for _, body := range []string{"đang xem", "rồi nhé, thông rồi"} {
+		if _, _, err := db.PostMessage(NewChannelMessage{
+			ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw2", Body: body,
+		}); err != nil {
+			t.Fatalf("reply: %v", err)
+		}
+	}
+
+	line, err = db.ChannelMessages(GeneralChannelID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line[0].Replies != 2 {
+		t.Fatalf("replies: got %d, want 2", line[0].Replies)
+	}
+	// The NEWEST one — an answer two replies old is worse than none.
+	if line[0].LastReplyBy != "bomclaw2" || line[0].LastReplyText != "rồi nhé, thông rồi" {
+		t.Fatalf("preview should be the newest reply, got %q by %q", line[0].LastReplyText, line[0].LastReplyBy)
+	}
+
+	// Replies stay out of the main line: the room is roots, threads are threads.
+	if len(line) != 1 {
+		t.Fatalf("thread replies leaked into the main line: %d messages", len(line))
+	}
+}
+
+// TestReplyPreviewIsCut keeps one long reply from pushing the room off screen.
+func TestReplyPreviewIsCut(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+	root, _, _ := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "@bomclaw2 báo cáo đi",
+	})
+	if _, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw2",
+		Body: strings.Repeat("báo cáo rất dài ", 100),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	line, _ := db.ChannelMessages(GeneralChannelID, 10)
+	if n := len([]rune(line[0].LastReplyText)); n > ReplyPreviewRunes {
+		t.Fatalf("preview is %d runes, cap is %d", n, ReplyPreviewRunes)
+	}
+}

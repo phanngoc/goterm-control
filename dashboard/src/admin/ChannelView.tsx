@@ -95,14 +95,22 @@ export default function ChannelView({ call, agents, selfID }: {
     if (!text || !active || sending.current) return
     sending.current = true
     try {
-      await call('channels.post', {
+      const posted: ChannelMessage = await call('channels.post', {
         channel_id: active, body: text, as,
         ...(threadRoot ? { thread_root: threadRoot } : {}),
       })
       setBody('')
       await loadMessages(active)
-      if (threadRoot) await loadThread(threadRoot)
-      else bottom.current?.scrollIntoView({ behavior: 'smooth' })
+      if (threadRoot) {
+        await loadThread(threadRoot)
+      } else if (posted?.mentions?.length) {
+        // Naming an agent is asking it something, and its answer goes into this
+        // message's thread. Open that thread now so the reply arrives in view
+        // instead of behind a click nobody knew to make.
+        await loadThread(posted.id)
+      } else {
+        bottom.current?.scrollIntoView({ behavior: 'smooth' })
+      }
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     } finally {
@@ -229,12 +237,31 @@ function Line({ m, selfID, compact, onThread }: {
         <span className="ml-auto" title={ago(m.created_at)}>{clock(m.created_at)}</span>
       </div>
       <div className="mt-1 text-sm text-gray-100 whitespace-pre-wrap break-words">{m.body}</div>
-      {!compact && (
+
+      {/* An answered message shows its answer. A count on its own reads like
+          silence next to a question you asked an agent — which is exactly how
+          the first working reply was missed. */}
+      {!compact && !!m.replies && (
+        <button
+          onClick={onThread}
+          className="mt-2 w-full text-left rounded-md pl-2 py-1 border-l-2 border-sky-500/40 bg-sky-500/5 hover:bg-sky-500/10 group"
+        >
+          <div className="flex items-baseline gap-2 text-[11px]">
+            <span className="font-mono text-sky-300">{m.last_reply_by}</span>
+            <span className="text-gray-600">{ago(m.last_reply_at)}</span>
+            <span className="ml-auto text-gray-500 group-hover:text-sky-300">
+              {m.replies} repl{m.replies === 1 ? 'y' : 'ies'} →
+            </span>
+          </div>
+          <div className="text-xs text-gray-300 line-clamp-2 break-words">{m.last_reply_text}</div>
+        </button>
+      )}
+      {!compact && !m.replies && (
         <button
           onClick={onThread}
           className="mt-1 text-[11px] text-gray-500 hover:text-sky-300"
         >
-          {m.replies ? `${m.replies} repl${m.replies === 1 ? 'y' : 'ies'} · ${ago(m.last_reply_at)}` : 'reply in thread'}
+          reply in thread
         </button>
       )}
     </div>

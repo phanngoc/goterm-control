@@ -251,6 +251,8 @@ export interface ChannelMessage {
   mentions?: string[]
   replies?: number
   last_reply_at?: string
+  last_reply_by?: string
+  last_reply_text?: string
 }
 
 // --- artifacts --------------------------------------------------------------
