@@ -395,7 +395,7 @@ func TestTwoGatewaysFireOnce(t *testing.T) {
 		}(s)
 	}
 	wg.Wait()
-	all, _ := a.ListSchedules()
+	all, _ := a.ListSchedules("")
 	for _, sc := range all {
 		runs, _ := a.ScheduleRuns(sc.ID, 10)
 		if len(runs) != 1 {
