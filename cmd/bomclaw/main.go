@@ -309,6 +309,14 @@ func runGateway(args []string) {
 		} else {
 			defer coordDB.Close()
 			log.Printf("coord: shared database at %s (agent=%s)", coordDB.Path(), cfg.Agent.ID)
+			// A run that died with the last gateway left a line in the room
+			// saying it was still working. Nothing else ever corrects it, and
+			// startup is the one moment clearing it is unambiguously safe.
+			if n, err := coordDB.SweepProgressLines(cfg.Agent.ID, coord.ProgressPrefix); err != nil {
+				log.Printf("coord: sweep progress lines: %v", err)
+			} else if n > 0 {
+				log.Printf("coord: cleared %d progress line(s) left by a previous run", n)
+			}
 			startCoordUpkeep(ctx, coordDB, cfg, *bind, *port, resolver.Default())
 			gwTrace = trace.New(coordDB, cfg.Agent.ID)
 			defer gwTrace.Close()

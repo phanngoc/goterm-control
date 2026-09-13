@@ -594,7 +594,7 @@ func (r *replySink) Finalize()                {}
 // workingLine is what the room sees while the agent is still working.
 func workingLine(tools []string, partial string, since time.Time) string {
 	var b strings.Builder
-	b.WriteString("⏳ _đang làm_")
+	b.WriteString(coord.ProgressPrefix + "_đang làm_")
 	if !since.IsZero() {
 		fmt.Fprintf(&b, " · %s", time.Since(since).Round(time.Second))
 	}

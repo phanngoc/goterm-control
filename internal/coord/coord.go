@@ -28,6 +28,11 @@ import (
 
 const schemaVersion = 7
 
+// ProgressPrefix marks a message that exists only while something is running.
+// It lives here because two packages write these lines — the mention watcher
+// and the task runner — and the startup sweep has to recognise both.
+const ProgressPrefix = "⏳ "
+
 // DB is the shared coordination database.
 type DB struct {
 	conn *sql.DB
