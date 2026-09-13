@@ -25,10 +25,17 @@ type recordingTurn struct {
 	resumed  []string
 	reply    string
 	newID    string
+
+	// duringTurn runs against the sink before the reply is written, so a test
+	// can watch what the room sees while the turn is still going.
+	duringTurn func(TurnSink)
 }
 
 func (r *recordingTurn) RunTurn(ctx context.Context, sess *session.Session, chatID int64,
 	modelID, userText string, sink TurnSink) (*execution.RunResult, error) {
+	if r.duringTurn != nil {
+		r.duringTurn(sink)
+	}
 	r.mu.Lock()
 	r.calls++
 	r.prompts = append(r.prompts, userText)
@@ -456,5 +463,143 @@ func TestAReturningAgentGetsOnlyWhatItMissed(t *testing.T) {
 	// Its own earlier line is not pasted back at it: it resumes and remembers.
 	if strings.Count(p, "câu hỏi mở đầu") > 0 {
 		t.Error("the thread was replayed to an agent that already remembers it")
+	}
+}
+
+// TestTheRoomSeesWorkInProgress: a turn that reads six files takes long enough
+// that a silent thread is indistinguishable from a broken one. The progress
+// line is what tells them apart — and it must become the answer, not sit above
+// it, or every reply ends up with a running commentary attached.
+func TestTheRoomSeesWorkInProgress(t *testing.T) {
+	var duringBody string
+	turn := &recordingTurn{reply: "xong rồi, đây là kết quả", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "xem hộ log", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn.duringTurn = func(sink TurnSink) {
+		// A tool reports immediately: which tool it reached for says more than
+		// the half-sentence it has written.
+		sink.NoteTool("Read")
+		sink.NoteTool("Bash")
+		thread, err := cdb.ThreadMessages(root.ID)
+		if err != nil {
+			t.Errorf("thread: %v", err)
+			return
+		}
+		for _, m := range thread {
+			if m.AuthorID == "bomclaw2" {
+				duringBody = m.Body
+			}
+		}
+	}
+
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if duringBody == "" {
+		t.Fatal("the room saw nothing while the agent worked")
+	}
+	if !strings.Contains(duringBody, "đang làm") {
+		t.Errorf("progress line does not say it is working: %q", duringBody)
+	}
+	for _, tool := range []string{"Read", "Bash"} {
+		if !strings.Contains(duringBody, tool) {
+			t.Errorf("progress line does not name %s: %q", tool, duringBody)
+		}
+	}
+
+	// And when it is done, the progress is gone: one message, holding the
+	// answer, in the place the progress line had.
+	thread, err := cdb.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []coord.ChannelMessage
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			mine = append(mine, m)
+		}
+	}
+	if len(mine) != 1 {
+		t.Fatalf("expected one message from the agent, got %d — progress was left behind", len(mine))
+	}
+	if mine[0].Body != "xong rồi, đây là kết quả" {
+		t.Fatalf("the answer did not replace the progress: %q", mine[0].Body)
+	}
+	if strings.Contains(mine[0].Body, "đang làm") {
+		t.Error("the finished reply still carries progress text")
+	}
+}
+
+// A turn that produces nothing must not leave an agent permanently about to
+// speak.
+func TestAnEmptyTurnLeavesNoProgressBehind(t *testing.T) {
+	turn := &recordingTurn{reply: "   "}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "hỏi gì đó", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	thread, err := cdb.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			t.Fatalf("a turn with nothing to say left %q in the thread", m.Body)
+		}
+	}
+}
+
+// TestThePromptNamesThePeers: the roster used to be a paragraph in each config,
+// hand-copied — and it drifted exactly as that shape guarantees. Agent 1 said
+// so out loud in a thread: "bomclaw3 là agent nào thì em vẫn chưa biết".
+// Generated from the table that every gateway writes at startup, it cannot.
+func TestThePromptNamesThePeers(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	// A third agent appears, and nobody edits a config file.
+	if err := cdb.RegisterAgent(coord.Agent{
+		ID: "bomclaw3", DisplayName: "Agent 3", Provider: "opencode",
+		Model: "opencode/muse-spark-1.3-contributor-free", WSAddr: "ws://127.0.0.1:0/ws",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "ai giúp mình việc này", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.count() != 1 {
+		t.Fatalf("expected one turn, got %d", turn.count())
+	}
+	p := turn.prompts[0]
+	for _, want := range []string{"bomclaw", "bomclaw3", "opencode", "muse-spark"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the roster does not mention %q:\n%s", want, p)
+		}
+	}
+	// And it does not introduce the agent to itself.
+	if strings.Contains(p, "**bomclaw2** —") {
+		t.Error("the agent was listed among its own peers")
 	}
 }
