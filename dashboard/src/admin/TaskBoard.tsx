@@ -91,8 +91,9 @@ function TaskCard({ task, kids, onOpen }: { task: Task; kids: { total: number; d
   )
 }
 
-function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask }: {
-  call: Call; id: string; agents: string[]; onClose: () => void; onChanged: () => void; onOpenTask: (id: string) => void
+function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenThread }: {
+  call: Call; id: string; agents: string[]; onClose: () => void; onChanged: () => void
+  onOpenTask: (id: string) => void; onOpenThread?: (rootID: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
@@ -262,6 +263,15 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask }: {
                   </dd>
                 </div>
               </dl>
+
+              {detail.thread_root && onOpenThread && (
+                <button
+                  onClick={() => onOpenThread(detail.thread_root!)}
+                  className="text-xs text-sky-300 hover:underline text-left"
+                >
+                  ← từ cuộc nói chuyện đã mở việc này
+                </button>
+              )}
 
               {t.parent_id && (
                 <div className="text-xs text-gray-500">
@@ -433,13 +443,22 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask }: {
   )
 }
 
-export default function TaskBoard({ call, agents }: { call: Call; agents: string[] }) {
+export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOpenThread }: {
+  call: Call; agents: string[]
+  openTaskID?: string; onOpenedTask?: () => void; onOpenThread?: (rootID: string) => void
+}) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [openID, setOpenID] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [to, setTo] = useState('')
   const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!openTaskID) return
+    setOpenID(openTaskID)
+    onOpenedTask?.()
+  }, [openTaskID, onOpenedTask])
 
   const load = useCallback(async () => {
     try {
@@ -534,7 +553,7 @@ export default function TaskBoard({ call, agents }: { call: Call; agents: string
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} />
+        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} onOpenThread={onOpenThread} />
       )}
     </div>
   )

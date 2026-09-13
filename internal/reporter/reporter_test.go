@@ -241,3 +241,73 @@ func TestFormatTrimsALongResult(t *testing.T) {
 		t.Error("a trimmed result should say so")
 	}
 }
+
+// TestResultGoesBackToTheThread: someone asked in a room and is waiting in that
+// room. Making them watch a board for the answer is how a team stops using the
+// room.
+func TestResultGoesBackToTheThread(t *testing.T) {
+	db := openDB(t)
+	for _, id := range []string{"a1", "a2"} {
+		if err := db.RegisterAgent(coord.Agent{ID: id, DisplayName: id, WSAddr: "ws://127.0.0.1:0/ws"}); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+	root, _, err := db.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@a1 crawl hộ cái listings",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := delegate(t, db, "crawl listings", coord.TaskCompleted, "62 jobs found")
+	if err := db.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var got collector
+	r := New(db, Config{AgentID: "a2"})
+	r.SetNotify(got.add)
+	r.Tick()
+
+	thread, err := db.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(thread) != 2 {
+		t.Fatalf("want the question and one report in the thread, got %d", len(thread))
+	}
+	report := thread[1]
+	if report.AuthorID != "a1" {
+		t.Errorf("the report should come from the agent that ran it, got %q", report.AuthorID)
+	}
+	for _, want := range []string{"crawl listings", "62 jobs found"} {
+		if !strings.Contains(report.Body, want) {
+			t.Errorf("thread report missing %q:\n%s", want, report.Body)
+		}
+	}
+	// The owner still gets it on Telegram: the thread is an addition, not a
+	// redirection.
+	if len(got.all()) != 1 {
+		t.Errorf("want one Telegram delivery too, got %v", got.all())
+	}
+}
+
+// TestNoThreadNoPost: work queued from the CLI or a schedule has no
+// conversation, and must not invent one.
+func TestNoThreadNoPost(t *testing.T) {
+	db := openDB(t)
+	delegate(t, db, "nightly sweep", coord.TaskCompleted, "ok")
+
+	var got collector
+	r := New(db, Config{AgentID: "a2"})
+	r.SetNotify(got.add)
+	r.Tick()
+
+	line, err := db.ChannelMessages(coord.GeneralChannelID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) != 0 {
+		t.Fatalf("a task with no conversation posted into one: %+v", line)
+	}
+}

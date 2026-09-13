@@ -187,7 +187,7 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	sink := &replySink{}
 	sess.MarkRunning("channel: " + truncateLine(m.Body, 40))
 	w.live.Store(m.ID, sess)
-	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), w.prompt(m, mem), sink)
+	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), w.prompt(m, mem, key), sink)
 	sess.MarkIdle()
 	w.live.Delete(m.ID)
 	if err != nil {
@@ -236,7 +236,7 @@ func (w *MentionWatcher) model() string {
 // prompt carries the three things the agent cannot look up: what was said and
 // by whom, that its reply is posted into this thread rather than spoken to a
 // user, and what to do when the ask turns out to be bigger than a reply.
-func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession) string {
+func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession, key string) string {
 	var b strings.Builder
 	channel := m.ChannelID
 	if c, err := w.deps.Coord.GetChannel(m.ChannelID); err == nil {
@@ -273,9 +273,12 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		"about what you are about to do.\n")
 	b.WriteString("Name an agent with @ only when you actually need it to act: @ is a doorbell " +
 		"and wakes that agent.\n")
-	b.WriteString("If this asks for real work — something with steps, or longer than a few " +
-		"minutes — say so briefly and open a task for it with `bomclaw task new`. The board is " +
-		"for work; this room is for talking about it.\n")
+	fmt.Fprintf(&b, "If this asks for real work — something with steps, or longer than a few "+
+		"minutes — say so briefly and open a task for it with `bomclaw task new --thread %s`. "+
+		"The --thread is what keeps the work attached to this conversation: the thread shows "+
+		"the task it produced, and the result is posted back here when it finishes, so nobody "+
+		"has to watch the board for an answer they asked for in a room. The board is for work; "+
+		"this room is for talking about it.\n", key)
 	return b.String()
 }
 

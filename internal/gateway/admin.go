@@ -139,6 +139,10 @@ type TaskDetail struct {
 	// its limit, so counting there would be quietly wrong on a large tree.
 	ContextCount int `json:"context_count"`
 	ContextCap   int `json:"context_cap"`
+
+	// The conversation this work came out of, when it came out of one, so the
+	// board has a way back to the room instead of being a dead end.
+	ThreadRoot string `json:"thread_root,omitempty"`
 }
 
 func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -169,9 +173,14 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	threadRoot, _, err := deps.Coord.TaskThread(p.ID)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(TaskDetail{
 		Task: task, Events: events, Runs: runs, Children: children,
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
+		ThreadRoot: threadRoot,
 	})
 }
 

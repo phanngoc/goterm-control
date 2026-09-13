@@ -93,18 +93,36 @@ func runTask(args []string) {
 		priority := fs.Int("priority", 0, "Higher is claimed first")
 		depth := fs.Int("depth", 0, "Chain depth when an agent spawns follow-up work")
 		context := fs.String("context", "", "Existing context id to attach this task to")
+		thread := fs.String("thread", "", "Root message id of the conversation this work came out of")
 		fs.Parse(rest)
 
 		db := openCoord(*dbPath)
 		defer db.Close()
 
+		me := requireAgent(*agent)
 		task, err := db.CreateTask(coord.NewTask{
-			CreatedBy: requireAgent(*agent), AssignedTo: *to, Title: *title, Body: *body,
+			CreatedBy: me, AssignedTo: *to, Title: *title, Body: *body,
 			Priority: *priority, Depth: *depth, ContextID: *context,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "task new: %v\n", err)
 			os.Exit(1)
+		}
+		// Work that came out of a conversation stays attached to it, in both
+		// directions: the thread knows which task it produced, and the task
+		// knows where to report back. Without this the agent does as it is
+		// told — open a task for the big thing — and the context stays behind.
+		if *thread != "" {
+			if err := db.BindThreadToTask(*thread, task.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "task new: created %s but could not bind it to the thread: %v\n", task.ID, err)
+				os.Exit(1)
+			}
+			if _, _, err := db.PostMessage(coord.NewChannelMessage{
+				ChannelID: threadChannel(db, *thread), ThreadRoot: *thread, AuthorID: me,
+				Body: fmt.Sprintf("Đã mở task %s cho việc này: %s", task.ID, *title),
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "task new: bound, but could not say so in the thread: %v\n", err)
+			}
 		}
 		// Ring the agent that can take it. Failure is fine — its poll finds
 		// the task anyway; this only removes the wait.
@@ -767,4 +785,15 @@ func orAny(primary, fallback string) string {
 		return fallback
 	}
 	return "any"
+}
+
+// threadChannel is the room a thread lives in. The caller already named the
+// thread, and making it also name the channel would be asking for a fact the
+// database holds.
+func threadChannel(db *coord.DB, rootID string) string {
+	channelID, err := db.MessageChannel(rootID)
+	if err != nil || channelID == "" {
+		return coord.GeneralChannelID
+	}
+	return channelID
 }
