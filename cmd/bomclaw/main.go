@@ -31,6 +31,7 @@ import (
 	agentctx "github.com/ngocp/goterm-control/internal/context"
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/daemon"
+	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/reporter"
@@ -625,12 +626,18 @@ func runGateway(args []string) {
 	// which is the failure this repo's CLAUDE.md documents. A secondary agent
 	// sets telegram.poll=false — it keeps the bot object, and with it the
 	// shared turn engine, but never touches the long poll.
+	if tgBot != nil {
+		// Shutdown regardless of polling. Agents 2 and 3 set telegram.poll=false
+		// and still run turns through this object, so they still have CLI
+		// children to kill — and they were the ones leaving orphans, because
+		// this defer used to sit inside the polling branch.
+		defer tgBot.Shutdown()
+	}
 	if tgBot != nil && cfg.Telegram.Polling() {
 		go func() {
 			log.Println("gateway: starting Telegram bot")
 			tgBot.Run()
 		}()
-		defer tgBot.Shutdown()
 	} else if tgBot != nil {
 		log.Println("gateway: telegram polling off (telegram.poll=false) — turn engine still shared")
 	}
@@ -641,11 +648,19 @@ func runGateway(args []string) {
 		log.Printf("warning: stale PID cleanup: %v", err)
 	}
 
+	// Not Fatalf: os.Exit skips every defer above, including the one that kills
+	// the CLI children — and a gateway that failed to start is exactly when an
+	// orphan is most likely to be left behind.
 	log.Printf("bomclaw gateway starting on %s", addr)
 	if err := srv.Start(ctx); err != nil {
-		log.Fatalf("gateway: %v", err)
+		log.Printf("gateway: %v", err)
 	}
 
+	// A gateway with no Telegram bot at all has no Shutdown to run, and it
+	// spawns the same CLI children as any other.
+	if n := execution.KillSpawned(); n > 0 {
+		log.Printf("bomclaw: killed %d CLI process group(s) still running", n)
+	}
 	sessions.SaveNow()
 	log.Println("bomclaw: shutdown complete")
 }
