@@ -392,10 +392,16 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	var reply strings.Builder
 	todoPending := false
 	call := span.Child(r.llm.Name(), coord.RunTypeLLM)
+	// Say what is happening in the room that asked for it. Nil when this task
+	// did not come from a conversation, and every call below tolerates that.
+	progress := openProgress(r.db, task)
+	defer progress.Close()
+
 	sendErr := r.llm.SendMessage(runCtx, sess, r.cfg.Model, prompt, "", chat.StreamCallbacks{
 		OnText: func(chunk string) { reply.WriteString(chunk) },
 		OnToolCall: func(name, input string) {
 			sess.NoteTool(name)
+			progress.Tool(name)
 			if name == "TodoWrite" && hasPendingTodos(input) {
 				todoPending = true
 			}

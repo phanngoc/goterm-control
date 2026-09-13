@@ -134,7 +134,16 @@ export interface TaskDetail {
   children: Task[]
   context_count?: number
   context_cap?: number
-  thread_root?: string // the tasks it split off (`bomclaw task sub`); empty for a leaf
+  thread_root?: string // the conversation this work came out of, when it came from one
+
+  // What the run is doing right now, when one is running on this gateway. A
+  // board that says "running" for four minutes tells you less than the log.
+  live?: {
+    agent: string
+    last_tool?: string
+    tool_count: number
+    started_at?: string
+  }
 }
 
 export interface Message {

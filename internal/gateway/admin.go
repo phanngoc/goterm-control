@@ -143,6 +143,23 @@ type TaskDetail struct {
 	// The conversation this work came out of, when it came out of one, so the
 	// board has a way back to the room instead of being a dead end.
 	ThreadRoot string `json:"thread_root,omitempty"`
+
+	// Live is what the run is doing right now, when one is running HERE. The
+	// task_runs row only says a run is open; a board that shows "running 0s"
+	// for four minutes is telling you less than the log would.
+	//
+	// Empty when the run belongs to another gateway: this one can read the
+	// shared row but not the other's session, and inventing an answer is worse
+	// than admitting the board only sees its own work in this much detail.
+	Live *LiveRun `json:"live,omitempty"`
+}
+
+// LiveRun is the part of a running turn a person wants while they wait.
+type LiveRun struct {
+	Agent     string `json:"agent"`
+	LastTool  string `json:"last_tool,omitempty"`
+	ToolCount int    `json:"tool_count"`
+	StartedAt string `json:"started_at,omitempty"`
 }
 
 func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -177,10 +194,22 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	var live *LiveRun
+	if deps.Runs != nil {
+		for _, r := range deps.Runs() {
+			if r.TaskID == p.ID {
+				live = &LiveRun{
+					Agent: deps.AgentID, LastTool: r.LastTool,
+					ToolCount: r.ToolCount, StartedAt: r.StartedAt,
+				}
+				break
+			}
+		}
+	}
 	return json.Marshal(TaskDetail{
 		Task: task, Events: events, Runs: runs, Children: children,
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
-		ThreadRoot: threadRoot,
+		ThreadRoot: threadRoot, Live: live,
 	})
 }
 
