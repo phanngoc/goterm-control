@@ -24,9 +24,11 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // The thread keeps its own draft. One shared box meant typing a reply in the
   // panel on the right while the words appeared in the box on the left.
   const [threadBody, setThreadBody] = useState('')
-  // Who the message is addressed to. From a browser the author is always the
-  // person at it; the only choice to make is which agent you are talking to.
+  // Which agent you are talking to. Always exactly one: a message to the room
+  // in general is a message nobody answers, and a thread with three agents in
+  // it answering at once is the same question asked three times.
   const [to, setTo] = useState<string>('')
+  useEffect(() => { setTo(t => t || agents[0] || '') }, [agents])
   const [err, setErr] = useState<string | null>(null)
   const sending = useRef(false)
   const bottom = useRef<HTMLDivElement>(null)
@@ -112,13 +114,12 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // is decided by the caller, not by a mode the composer is left sitting in.
   const post = async (inThread: boolean) => {
     const text = (inThread ? threadBody : body).trim()
-    if (!text || !active || sending.current) return
+    if (!text || !active || !to || sending.current) return
     if (inThread && !threadRoot) return
     sending.current = true
     try {
       const posted: ChannelMessage = await call('channels.post', {
-        channel_id: active, body: text,
-        ...(to ? { notify: [to] } : {}),
+        channel_id: active, body: text, notify: [to],
         ...(inThread ? { thread_root: threadRoot } : {}),
       })
       if (inThread) setThreadBody(''); else setBody('')
@@ -317,11 +318,8 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
           value={to}
           onChange={e => setTo(e.target.value)}
           title="Which agent this is for"
-          className={`px-2 py-2 text-sm bg-gray-950 rounded ring-1 outline-none ${
-            to ? 'ring-sky-500/50 text-sky-300' : 'ring-gray-800 text-gray-400'
-          }`}
+          className="px-2 py-2 text-sm bg-gray-950 rounded ring-1 ring-sky-500/50 text-sky-300 outline-none"
         >
-          <option value="">to: everyone</option>
           {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
         </select>
         <input
@@ -334,12 +332,12 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
           }}
-          placeholder={to ? `${placeholder} — ${to} will answer` : `${placeholder} — nobody is interrupted`}
+          placeholder={`${placeholder} — ${to || 'no agent'} will answer`}
           className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
         />
         <button
           onClick={onSend}
-          disabled={!value.trim()}
+          disabled={!value.trim() || !to}
           className="px-4 py-2 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Send
