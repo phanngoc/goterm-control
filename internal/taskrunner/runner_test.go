@@ -464,7 +464,10 @@ func TestLiveRunsAreVisibleWhileRunning(t *testing.T) {
 	if !info.Running || info.CurrentTask != "visible work" || live[0].ID != "task_"+created.ID {
 		t.Errorf("live run info = %+v id=%s", info, live[0].ID)
 	}
-	if info.LastTool != "Bash" || info.ToolCount != 1 {
+	// The label, not the bare name. "Bash" tells a watcher which tool; the
+	// command tells them what the agent is doing, which is the question the
+	// board is there to answer.
+	if info.LastTool != "Bash(ls)" || info.ToolCount != 1 {
 		t.Errorf("tool activity not reflected: %+v", info)
 	}
 

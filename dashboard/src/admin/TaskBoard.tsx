@@ -290,24 +290,6 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
                 </div>
               )}
 
-              {/* A row saying "running" for four minutes tells you less than
-                  the log would. This is what it is actually doing. */}
-              {detail.live && (
-                <div className="rounded-md ring-1 ring-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-                  <span className="text-amber-300">⏳ đang chạy</span>
-                  <span className="text-gray-500"> · {detail.live.agent}</span>
-                  {detail.live.last_tool && (
-                    <span className="text-gray-300 font-mono"> · {detail.live.last_tool}</span>
-                  )}
-                  {detail.live.tool_count > 0 && (
-                    <span className="text-gray-500"> · {detail.live.tool_count} tool calls</span>
-                  )}
-                  {detail.live.started_at && (
-                    <span className="text-gray-500"> · {ago(detail.live.started_at)}</span>
-                  )}
-                </div>
-              )}
-
               {detail.thread_root && onOpenThread && (
                 <button
                   onClick={() => onOpenThread(detail.thread_root!)}
