@@ -353,3 +353,108 @@ func TestAddressingNobodyWakesNobody(t *testing.T) {
 		t.Fatal("a line addressed to nobody woke an agent")
 	}
 }
+
+// TestAnAgentBroughtIntoAThreadGetsAllOfIt is the case that matters when you
+// switch who you are talking to mid-conversation: the second agent has no
+// session for this thread, so the prompt is the only thing it will ever know
+// about it.
+func TestAnAgentBroughtIntoAThreadGetsAllOfIt(t *testing.T) {
+	turn := &recordingTurn{reply: "đã đọc", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw tổng hợp kinh tế VN 3 tháng qua",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first agent works in the thread. Its analysis is long — the thing
+	// the old 400-rune cut used to destroy.
+	longAnswer := "GDP quý gần nhất tăng 6.9%. " + strings.Repeat("Chi tiết từng ngành và nguồn số liệu. ", 30)
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw", Body: longAnswer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now the owner switches to the other agent, in the same thread.
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body:   "bạn thấy sao?",
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.count() != 1 {
+		t.Fatalf("the newly named agent did not answer (%d turns)", turn.count())
+	}
+	p := turn.prompts[0]
+	// It must see the question that started the thread...
+	if !strings.Contains(p, "tổng hợp kinh tế VN 3 tháng qua") {
+		t.Error("the thread's opening question is missing from the prompt")
+	}
+	// ...and its colleague's answer, not a truncated stub of it.
+	if !strings.Contains(p, "GDP quý gần nhất tăng 6.9%") {
+		t.Error("the other agent's answer is missing")
+	}
+	if !strings.Contains(p, longAnswer[len(longAnswer)-40:]) {
+		t.Error("the other agent's answer was cut off — a premise the question depends on")
+	}
+	// And it is told plainly that it is new here.
+	if !strings.Contains(p, "not spoken here before") {
+		t.Errorf("the prompt does not say it is new to the thread:\n%s", p)
+	}
+}
+
+// An agent that has spoken here resumes its own session, so it needs what
+// happened while it was away — not the whole thread pasted at it again.
+func TestAReturningAgentGetsOnlyWhatItMissed(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	w := NewMentionWatcher(deps)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 câu hỏi mở đầu", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background()) // bomclaw2 answers once, into the thread
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw",
+		Body: "một đồng nghiệp bổ sung dữ kiện mới",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "còn giờ thì sao?",
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background())
+
+	if turn.count() != 2 {
+		t.Fatalf("expected two turns, got %d", turn.count())
+	}
+	p := turn.prompts[1]
+	if !strings.Contains(p, "while you were away") {
+		t.Errorf("a returning agent was treated as new:\n%s", p)
+	}
+	if !strings.Contains(p, "một đồng nghiệp bổ sung dữ kiện mới") {
+		t.Error("what happened while it was away is missing")
+	}
+	// Its own earlier line is not pasted back at it: it resumes and remembers.
+	if strings.Count(p, "câu hỏi mở đầu") > 0 {
+		t.Error("the thread was replayed to an agent that already remembers it")
+	}
+}

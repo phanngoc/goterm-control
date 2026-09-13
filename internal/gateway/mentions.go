@@ -50,6 +50,15 @@ const (
 	// that was down, a poke that lost its race with this process starting.
 	mentionPoll = 30 * time.Second
 
+	// MaxThreadMessageRunes is how much of one message travels into the prompt.
+	// The old figure was 400, which cut a colleague's analysis off mid-sentence
+	// and handed the next agent a question whose premise was missing.
+	MaxThreadMessageRunes = 4000
+
+	// MaxThreadContextRunes bounds the whole quoted thread, because a room
+	// that has been busy all day must still fit in front of a model.
+	MaxThreadContextRunes = 24000
+
 	// mentionTurnTimeout bounds one reply. A channel turn is a conversation,
 	// not a task: if it needs longer than this it needs a task.
 	mentionTurnTimeout = 3 * time.Minute
@@ -256,20 +265,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		fmt.Fprintf(&b, "You were named in %s, a room you share with the other agents and the owner.\n\n", channel)
 	}
 
-	// A thread has a history the model may not have seen — it may have been
-	// answered by another agent, or by this one before a restart.
-	if m.ThreadRoot != "" {
-		if thread, err := w.deps.Coord.ThreadMessages(m.ThreadRoot); err == nil && len(thread) > 1 {
-			b.WriteString("## The thread so far\n\n")
-			for _, t := range thread {
-				if t.ID == m.ID {
-					continue
-				}
-				fmt.Fprintf(&b, "- %s: %s\n", t.AuthorID, truncateLine(t.Body, 400))
-			}
-			b.WriteString("\n")
-		}
-	}
+	b.WriteString(w.threadContext(m, mem))
 
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
 
@@ -286,6 +282,97 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		"has to watch the board for an answer they asked for in a room. The board is for work; "+
 		"this room is for talking about it.\n", key)
 	return b.String()
+}
+
+// threadContext is what the agent needs to read before answering, and it is a
+// different thing depending on whether it has been here before.
+//
+// An agent named into a thread for the first time has no CLI session for it, so
+// this prompt is the ONLY thing it will ever know about the conversation. It
+// gets the whole thread, generously: being handed "@you what do you think" with
+// four hundred characters of somebody else's analysis is how you get an agent
+// confidently answering a question nobody asked.
+//
+// An agent that has spoken here resumes its own session and remembers its own
+// turns. Re-pasting the whole thread at it every time is not free and not
+// clarifying — it needs what happened WHILE IT WAS AWAY, which is everything
+// after its own last message.
+func (w *MentionWatcher) threadContext(m coord.ChannelMessage, mem *coord.ThreadSession) string {
+	if m.ThreadRoot == "" {
+		return "" // a line that starts a thread has nothing behind it
+	}
+	thread, err := w.deps.Coord.ThreadMessages(m.ThreadRoot)
+	if err != nil || len(thread) <= 1 {
+		return ""
+	}
+
+	newHere := mem.Turns == 0
+	from := 0
+	if !newHere {
+		for i := len(thread) - 1; i >= 0; i-- {
+			if thread[i].AuthorKind == coord.MemberAgent && thread[i].AuthorID == w.deps.AgentID {
+				from = i + 1
+				break
+			}
+		}
+	}
+
+	var lines []string
+	for _, t := range thread[from:] {
+		if t.ID == m.ID {
+			continue // it is quoted on its own below
+		}
+		who := t.AuthorID
+		if t.AuthorKind == coord.MemberUser {
+			who = "the owner"
+		}
+		lines = append(lines, fmt.Sprintf("**%s:** %s", who, truncateRunes(strings.TrimSpace(t.Body), MaxThreadMessageRunes)))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+
+	// A long thread is trimmed from the FRONT: the oldest messages are the
+	// ones a reader can most afford to lose, and dropping the newest would
+	// hide the turn this one is answering.
+	dropped := 0
+	for total(lines) > MaxThreadContextRunes && len(lines) > 1 {
+		lines = lines[1:]
+		dropped++
+	}
+
+	var b strings.Builder
+	if newHere {
+		b.WriteString("## The conversation you have just been brought into\n\n" +
+			"You have not spoken here before, so this is all of it. Read it before answering: " +
+			"the question below assumes it.\n\n")
+	} else {
+		b.WriteString("## What was said while you were away\n\n" +
+			"You remember your own side of this thread. These are the messages since your last one.\n\n")
+	}
+	if dropped > 0 {
+		fmt.Fprintf(&b, "_(%d earlier message(s) omitted for length)_\n\n", dropped)
+	}
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func total(lines []string) int {
+	n := 0
+	for _, l := range lines {
+		n += len([]rune(l))
+	}
+	return n
+}
+
+func truncateRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // replySink collects a turn's text. A channel has no stream to write to: the
