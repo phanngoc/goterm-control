@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Artifact, Channel, ChannelMessage } from './types'
 import MessageMarkdown from '../components/MessageMarkdown'
+import { ArtifactModal, isPage } from './ArtifactView'
 import { ago, clock } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -526,51 +527,6 @@ function FileRow({ a, call, onReview, reviewer }: {
       >
         review
       </button>
-    </div>
-  )
-}
-
-function isPage(a: Artifact): boolean {
-  return a.content_type?.includes('html') === true || a.title.toLowerCase().endsWith('.html')
-}
-
-// ArtifactModal is where a report is actually read: wide, scrollable, and
-// rendered rather than shown as source. Escape and the backdrop both close it,
-// because a modal you can only leave through one small button is a modal that
-// feels like a trap.
-function ArtifactModal({ a, content, truncated, onClose }: {
-  a: Artifact; content: string; truncated: boolean; onClose: () => void
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
-      >
-        <header className="flex items-baseline gap-3 px-5 py-3 border-b border-gray-800">
-          <span className="text-sm text-gray-200 font-medium truncate">{a.title}</span>
-          <span className="text-[11px] text-gray-600 font-mono">{a.kind} · {a.bytes} bytes</span>
-          <span className="ml-auto text-[11px] text-gray-600 font-mono">{a.id}</span>
-          <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">close</button>
-        </header>
-        <div className="flex-1 overflow-y-auto px-6 py-4">
-          <MessageMarkdown wide>{content}</MessageMarkdown>
-          {truncated && (
-            <p className="mt-4 text-xs text-amber-300">
-              Bản xem trước bị cắt — đọc trọn vẹn bằng <code className="font-mono">bomclaw artifact get {a.id}</code>
-            </p>
-          )}
-        </div>
-      </div>
     </div>
   )
 }

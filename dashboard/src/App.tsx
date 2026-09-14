@@ -26,6 +26,10 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // Which admin pane is on screen. Lifted out of AdminView so that one place
   // owns the address bar; AdminView is now told which pane to show.
   const [adminPane, setAdminPane] = useState<AdminPane>('overview')
+  // Which task's detail is open, mirrored in the address bar. A drawer that
+  // lives only in component state cannot be sent to anybody — "look at this
+  // task" meant "open the board and find it".
+  const [adminTask, setAdminTask] = useState<string>('')
 
   // Another channel wrote to a session — Telegram, or an agent that claimed a
   // task. Refresh the list (labels, counts), and if that session is the one on
@@ -57,6 +61,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       setTab(r.tab)
       if (r.sessionId) setActiveSessionId(r.sessionId)
       if (r.adminPane) setAdminPane(r.adminPane)
+      setAdminTask(r.taskId ?? '')
     }
     apply()
     window.addEventListener('popstate', apply)
@@ -73,12 +78,18 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // same navigation, not a second one: pushing it would leave a /chat entry
   // that Back returns to and the auto-select immediately leaves again.
   useEffect(() => {
-    const path = pathFor({ tab, sessionId: activeSessionId ?? undefined, adminPane })
+    const path = pathFor({
+      tab, sessionId: activeSessionId ?? undefined, adminPane,
+      taskId: adminTask || undefined,
+    })
     const here = location.pathname
     if (path === here) return
-    const refines = here !== '/' && path.startsWith(here + '/')
+    // Opening a task is a deliberate act, not an auto-selection, so it gets a
+    // history entry of its own — Back closes the drawer instead of leaving the
+    // admin tab. The refinement rule stays for /chat, which it was written for.
+    const refines = here !== '/' && path.startsWith(here + '/') && !here.startsWith('/admin')
     history[refines ? 'replaceState' : 'pushState'](null, '', path)
-  }, [tab, activeSessionId, adminPane])
+  }, [tab, activeSessionId, adminPane, adminTask])
 
   // Load sessions + status on connect
   useEffect(() => {
@@ -171,7 +182,12 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         {tab === 'sessions' && <SessionList call={call} />}
         {tab === 'chat' && <ChatView call={call} />}
         {tab === 'status' && <StatusBar />}
-        {tab === 'admin' && <AdminView call={call} pane={adminPane} onPane={setAdminPane} />}
+        {tab === 'admin' && (
+          <AdminView
+            call={call} pane={adminPane} onPane={setAdminPane}
+            taskId={adminTask} onTaskId={setAdminTask}
+          />
+        )}
       </main>
     </div>
   )

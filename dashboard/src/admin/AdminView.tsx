@@ -25,14 +25,17 @@ const LABELS: Record<Pane, string> = {
 
 const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
 
-export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pane; onPane: (p: Pane) => void }) {
+export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
+  call: Call; pane: Pane; onPane: (p: Pane) => void
+  /** taskId is the task whose detail is open, owned by the address bar. */
+  taskId: string; onTaskId: (id: string) => void
+}) {
   const [data, setData] = useState<OverviewData | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  // Work and the conversation it came out of live in two panes. These carry a
-  // click from one to the other: a task id the board should open, a thread the
-  // room should open. Cleared once handed over, so returning to a pane later
-  // does not reopen what you already closed.
-  const [openTask, setOpenTask] = useState<string>('')
+  // Work and the conversation it came out of live in two panes. A thread the
+  // room should open is carried here and cleared once handed over, so returning
+  // to a pane later does not reopen what you already closed. The task the board
+  // should open is not: that one is the address bar's, so it can be linked.
   const [openThread, setOpenThread] = useState<string>('')
 
   // The overview drives the agent list every other pane filters by, so it is
@@ -103,7 +106,7 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
         {pane === 'tasks' && (
           <TaskBoard
             call={call} agents={agentIDs}
-            openTaskID={openTask} onOpenedTask={() => setOpenTask('')}
+            openTaskID={taskId} onOpenTask={onTaskId}
             onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
           />
         )}
@@ -114,7 +117,7 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
           <ChannelView
             call={call} agents={agentIDs} selfID={selfID}
             openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
-            onOpenTask={taskID => { setOpenTask(taskID); onPane('tasks') }}
+            onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
           />
         )}
       </div>

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -148,6 +149,27 @@ type TaskDetail struct {
 	// board has a way back to the room instead of being a dead end.
 	ThreadRoot string `json:"thread_root,omitempty"`
 
+	// Artifacts is what this piece of work produced — this task's outputs and
+	// its children's. Tree-wide rather than task-only because a parent that
+	// split the job into three has produced nothing itself, and a pane that
+	// says so is a pane nobody opens twice.
+	Artifacts []coord.Artifact `json:"artifacts"`
+
+	// Mail is what the agents deliberately filed against this task with
+	// `bomclaw msg --task`. The exact link, and worth keeping separate from
+	// what follows: a line an agent chose to file here means more than one that
+	// merely happened at the same time.
+	Mail []coord.Message `json:"mail"`
+
+	// SideTalk is the conversation between this task's agents while it was
+	// running, in their own DM rooms, that nobody filed against it. Inferred
+	// from who is on the task and when it ran — which is why it is a separate
+	// field and labelled as such on screen, not quietly mixed into Mail.
+	//
+	// It exists because that is where the real coordination has been happening:
+	// agreeing a schema, naming a blocker, saying where the file landed.
+	SideTalk []coord.Message `json:"side_talk"`
+
 	// Live is what the run is doing right now, when one is running HERE. The
 	// task_runs row only says a run is open; a board that shows "running 0s"
 	// for four minutes is telling you less than the log would.
@@ -210,11 +232,57 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 			}
 		}
 	}
+	// The whole tree's output, so a parent that only delegated still shows what
+	// came back.
+	artifacts, err := deps.Coord.ContextArtifacts(task.ContextID)
+	if err != nil {
+		return nil, err
+	}
+	mail, err := deps.Coord.TaskMail(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	sideTalk, err := taskSideTalk(deps, task, children)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(TaskDetail{
 		Task: task, Events: events, Runs: runs, Children: children,
+		Artifacts: artifacts, Mail: mail, SideTalk: sideTalk,
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
 		ThreadRoot: threadRoot, Live: live,
 	})
+}
+
+// SideTalkGrace is how far past a task's last movement its agents' conversation
+// is still counted as being about it. A hand-off lands minutes after the run
+// that produced it — cutting exactly at the task's clock would hide the reply
+// that mattered.
+const SideTalkGrace = 30 * time.Minute
+
+// taskSideTalk finds what this task's agents said to each other while it ran.
+//
+// Participants come from the task and its children: the agent that asked, the
+// ones that took it, and the ones a piece was handed to. Two agents
+// coordinating have exactly one room, so the rooms are derivable — there is
+// nothing to look up and nothing to keep in step.
+func taskSideTalk(deps Deps, task *coord.Task, children []coord.Task) ([]coord.Message, error) {
+	who := []string{task.CreatedBy, task.ClaimedBy, task.AssignedTo}
+	for _, c := range children {
+		who = append(who, c.CreatedBy, c.ClaimedBy, c.AssignedTo)
+	}
+	rooms := coord.DMRoomsAmong(who)
+	if len(rooms) == 0 {
+		return []coord.Message{}, nil
+	}
+	// Open work runs to now; finished work stops moving, and its window closes
+	// with it plus the grace above.
+	until := time.Time{}
+	if task.State == coord.TaskCompleted || task.State == coord.TaskFailed ||
+		task.State == coord.TaskCanceled || task.State == coord.TaskRejected {
+		until = task.UpdatedAt.Add(SideTalkGrace)
+	}
+	return deps.Coord.MessagesIn(rooms, task.CreatedAt, until, 60)
 }
 
 type taskResumeParams struct {

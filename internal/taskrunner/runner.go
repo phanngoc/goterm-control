@@ -685,8 +685,12 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 			}
 			fmt.Fprintf(&b, "- **%s** — %s (%s)\n", p.ID, backend, state)
 		}
-		b.WriteString("\nDifferent backends, so different strengths and different costs. " +
-			"`bomclaw task new --to <agent>` hands a piece over; omit --to and any of them may take it.\n")
+		fmt.Fprintf(&b, "\nDifferent backends, so different strengths and different costs. "+
+			"`bomclaw task new --to <agent>` hands a piece over; omit --to and any of them may take it.\n"+
+			"When you write to one of them about THIS work, add `--task %s`:\n\n"+
+			"    bomclaw msg --to <agent> --task %s \"<what you need or what you are handing over>\"\n\n"+
+			"Without it the message still arrives, but it is filed nowhere — and the person "+
+			"reading this task later sees the work and not the conversation that shaped it.\n", t.ID, t.ID)
 	}
 
 	if len(inbox) > 0 {
