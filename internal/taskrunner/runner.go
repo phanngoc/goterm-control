@@ -338,7 +338,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// One session per task, kept across runs: the CLI stores the conversation
 	// under this id, so resuming it is what makes run 2 remember run 1.
 	sess := session.New(taskChatID)
-	sess.ID = "task_" + task.ID
+	sess.ID = coord.TaskSessionID(task.ID)
 	// Work filed under a project runs in that project's folder, the same as a
 	// turn in its room. A task with no project runs where the agent lives.
 	if task.ChannelID != "" {

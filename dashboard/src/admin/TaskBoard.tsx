@@ -192,8 +192,67 @@ function Output({ call, artifacts, taskID }: { call: Call; artifacts: NonNullabl
   )
 }
 
-function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenThread }: {
-  call: Call; id: string; agents: string[]; onClose: () => void; onChanged: () => void
+// Project is where this task's next run happens: the runner opens the
+// project's folder as its working directory. A task filed under none runs in
+// the agent's own directory, which is why that case says so out loud rather
+// than showing an empty field — it is the reason the output is not where
+// someone went looking for it.
+function Project({ call, detail, projects, onChanged }: {
+  call: Call; detail: TaskDetail; projects: Channel[]; onChanged: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const t = detail.task
+  const finished = ['completed', 'failed', 'canceled', 'rejected'].includes(t.state)
+
+  const file = async (channelID: string) => {
+    setBusy(true)
+    try {
+      await call('tasks.project', { id: t.id, channel_id: channelID })
+      setErr(null)
+      onChanged()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded ring-1 ring-gray-800 bg-gray-900/40 p-2 space-y-1.5">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-gray-600 shrink-0">dự án</span>
+        {finished ? (
+          <span className="text-gray-300">{detail.project?.name ?? 'không thuộc dự án nào'}</span>
+        ) : (
+          <select
+            value={t.channel_id ?? ''}
+            disabled={busy}
+            onChange={e => void file(e.target.value)}
+            className="px-2 py-1 bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+          >
+            <option value="">— không thuộc dự án nào —</option>
+            {projects.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
+      </div>
+      {detail.project?.workspace ? (
+        <div className="font-mono text-[11px] text-gray-500 break-all" title="thư mục các run chạy trong đó">
+          {detail.project.workspace}
+        </div>
+      ) : (
+        <div className="text-[11px] text-amber-400/80">
+          Chưa thuộc dự án nào — run chạy trong thư mục riêng của agent, không phải folder dự án.
+        </div>
+      )}
+      {err && <div className="text-[11px] text-red-300">{err}</div>}
+    </div>
+  )
+}
+
+function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask, onOpenThread }: {
+  call: Call; id: string; agents: string[]; projects: Channel[]
+  onClose: () => void; onChanged: () => void
   onOpenTask: (id: string) => void; onOpenThread?: (rootID: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
@@ -382,6 +441,19 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
                   </dd>
                 </div>
               </dl>
+
+              <Project call={call} detail={detail} projects={projects} onChanged={() => { load(); onChanged() }} />
+
+              {/* The conversation the task has been running in, across every
+                  run. The board could see it existed and gave no way in. */}
+              {detail.session_id && (
+                <a
+                  href={`/chat/${encodeURIComponent(detail.session_id)}`}
+                  className="block text-xs text-sky-300 hover:underline"
+                >
+                  → mở cuộc hội thoại của task này (đọc tiếp, hỏi thêm, chạy tay)
+                </a>
+              )}
 
               {/* A row saying "running" for four minutes tells you less than
                   the log would. This is what it is actually doing. */}
@@ -726,7 +798,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpen
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => onOpenTask('')} onChanged={load} onOpenTask={onOpenTask} onOpenThread={onOpenThread} />
+        <TaskDrawer call={call} id={openID} agents={agents} projects={projects} onClose={() => onOpenTask('')} onChanged={load} onOpenTask={onOpenTask} onOpenThread={onOpenThread} />
       )}
     </div>
   )

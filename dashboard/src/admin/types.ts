@@ -137,6 +137,13 @@ export interface TaskDetail {
   context_cap?: number
   thread_root?: string // the conversation this work came out of, when it came from one
 
+  // The project this work belongs to, and so the folder its next run happens
+  // in. Absent when it was filed under none.
+  project?: Channel
+
+  // The CLI conversation the task has been running in, across all its runs.
+  session_id?: string
+
   // What this piece of work produced — this task's outputs and its children's.
   artifacts?: Artifact[]
 

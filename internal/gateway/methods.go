@@ -193,6 +193,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleTaskCreate(deps, params)
 		case "tasks.cancel":
 			return handleTaskCancel(deps, params)
+		case "tasks.project":
+			return handleTaskSetProject(deps, params)
 		case "tasks.resume":
 			return handleTaskResume(deps, params)
 		case "tasks.unblock":

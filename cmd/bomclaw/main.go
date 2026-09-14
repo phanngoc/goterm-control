@@ -327,6 +327,17 @@ func runGateway(args []string) {
 			} else if n > 0 {
 				log.Printf("coord: cleared %d progress line(s) left by a previous run", n)
 			}
+			// Same moment, same reasoning, for the work itself: a task this
+			// agent was running when it stopped is held by a ten-minute lease
+			// that nothing will touch until it lapses — and the reclaim then
+			// charges it an attempt it never got to use. Put it straight back
+			// in the queue with the attempt returned.
+			if freed, err := coordDB.ReleaseInterruptedRuns(cfg.Agent.ID); err != nil {
+				log.Printf("coord: release interrupted runs: %v", err)
+			} else if len(freed) > 0 {
+				log.Printf("coord: requeued %d task(s) interrupted by the last restart: %s",
+					len(freed), strings.Join(freed, ", "))
+			}
 			startCoordUpkeep(ctx, coordDB, cfg, *bind, *port, resolver.Default())
 			gwTrace = trace.New(coordDB, cfg.Agent.ID)
 			defer gwTrace.Close()

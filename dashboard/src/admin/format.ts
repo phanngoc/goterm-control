@@ -72,6 +72,10 @@ export const RUN_LIVENESS_STYLE: Record<string, string> = {
   failed:    'bg-red-500/15 text-red-300 ring-red-500/30',
   timed_out: 'bg-red-500/15 text-red-300 ring-red-500/30',
   canceled:  'bg-gray-500/15 text-gray-400 ring-gray-500/30',
+  lost:      'bg-gray-500/15 text-gray-400 ring-gray-500/30',
+  // Not a failure of the work: the gateway restarted under it. Its own colour
+  // so it does not read as either success or breakage.
+  interrupted: 'bg-slate-500/20 text-slate-300 ring-slate-500/40',
 }
 
 export function runLivenessStyle(l: string): string {
