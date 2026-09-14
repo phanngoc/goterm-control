@@ -56,6 +56,14 @@ const maxEmptyRuns = 2
 // it. An agent that dies mid-task simply stops renewing and the work returns.
 const DefaultLease = 10 * time.Minute
 
+// TaskSessionID is the CLI conversation a task runs in, the same across every
+// run — which is what lets run 2 remember run 1.
+//
+// Here rather than in the runner because two packages need it now: the runner
+// to open it, and the gateway to offer a link to it. A shape spelled out in
+// two places drifts the first time one of them changes.
+func TaskSessionID(taskID string) string { return "task_" + taskID }
+
 // MaxDepth caps how deep a chain of agent-created tasks may go. Two agents
 // that can hand each other work will ping-pong forever without this.
 const MaxDepth = 5
@@ -596,6 +604,40 @@ func (db *DB) answeredCheckpoint(taskID, byAgent, note string) (string, error) {
 		merged += "\n\n"
 	}
 	return merged + "Answer from " + byAgent + ": " + note, nil
+}
+
+// SetTaskChannel files a task under a project, or clears it with "".
+//
+// It exists because a task's project decides WHERE its next run happens: the
+// runner opens the project's folder as the working directory. A task created
+// from a DM has no project, so its work lands in the agent's own directory —
+// and the person who then goes looking for the output in the project folder
+// finds nothing. Filing it is the fix, and it has to be possible after the
+// fact, because that is when anyone notices.
+//
+// Only an unfinished task. Moving a completed one changes where its history
+// says the work happened, which was true somewhere else.
+func (db *DB) SetTaskChannel(taskID, channelID string) error {
+	if channelID != "" {
+		if _, err := db.GetChannel(channelID); err != nil {
+			return err
+		}
+	}
+	res, err := db.conn.Exec(`UPDATE tasks SET channel_id = ?, updated_at = ?
+		WHERE id = ? AND state NOT IN (?, ?, ?, ?)`,
+		channelID, ts(time.Now()), taskID,
+		TaskCompleted, TaskFailed, TaskCanceled, TaskRejected)
+	if err != nil {
+		return fmt.Errorf("file %s under %s: %w", taskID, channelID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		t, err := db.GetTask(taskID)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("coord: task %s is %s — a finished task keeps the project it ran under", taskID, t.State)
+	}
+	return nil
 }
 
 // ReapExhausted moves tasks that have used every attempt into failed. Until

@@ -170,6 +170,18 @@ type TaskDetail struct {
 	// agreeing a schema, naming a blocker, saying where the file landed.
 	SideTalk []coord.Message `json:"side_talk"`
 
+	// Project is the room this work belongs to, resolved so the screen can name
+	// it and link to its folder. Empty when the task was filed under no project
+	// — which is worth showing rather than hiding: it is why the run happened
+	// in the agent's own directory instead of the project's.
+	Project *coord.Channel `json:"project,omitempty"`
+
+	// SessionID is the CLI conversation this task has been running in, across
+	// all its runs. The board could see that a task had a session and offered
+	// no way to open it — so "read what it actually did" meant finding the
+	// session by name in another tab.
+	SessionID string `json:"session_id,omitempty"`
+
 	// Live is what the run is doing right now, when one is running HERE. The
 	// task_runs row only says a run is open; a board that shows "running 0s"
 	// for four minutes is telling you less than the log would.
@@ -246,9 +258,16 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	var project *coord.Channel
+	if task.ChannelID != "" {
+		if c, err := deps.Coord.GetChannel(task.ChannelID); err == nil {
+			project = c
+		}
+	}
 	return json.Marshal(TaskDetail{
 		Task: task, Events: events, Runs: runs, Children: children,
 		Artifacts: artifacts, Mail: mail, SideTalk: sideTalk,
+		Project: project, SessionID: coord.TaskSessionID(task.ID),
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
 		ThreadRoot: threadRoot, Live: live,
 	})
@@ -283,6 +302,32 @@ func taskSideTalk(deps Deps, task *coord.Task, children []coord.Task) ([]coord.M
 		until = task.UpdatedAt.Add(SideTalkGrace)
 	}
 	return deps.Coord.MessagesIn(rooms, task.CreatedAt, until, 60)
+}
+
+type taskProjectParams struct {
+	ID        string `json:"id"`
+	ChannelID string `json:"channel_id"` // "" files it under no project
+}
+
+// handleTaskSetProject files a task under a project after the fact.
+//
+// The project is not a label. It is where the next run's working directory
+// comes from, so a task in the wrong one produces its work in the wrong folder.
+func handleTaskSetProject(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p taskProjectParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	if err := deps.Coord.SetTaskChannel(p.ID, p.ChannelID); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"ok": true})
 }
 
 type taskResumeParams struct {
