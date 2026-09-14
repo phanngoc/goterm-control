@@ -137,6 +137,17 @@ export interface TaskDetail {
   context_cap?: number
   thread_root?: string // the conversation this work came out of, when it came from one
 
+  // What this piece of work produced — this task's outputs and its children's.
+  artifacts?: Artifact[]
+
+  // What the agents filed against this task with `bomclaw msg --task`.
+  mail?: AgentMessage[]
+
+  // What they said to each other while it ran, without filing it here. Kept
+  // apart from mail because it is inferred from who is on the task and when it
+  // ran, not recorded — and the screen says so.
+  side_talk?: AgentMessage[]
+
   // What the run is doing right now, when one is running on this gateway. A
   // board that says "running" for four minutes tells you less than the log.
   live?: {
@@ -270,6 +281,16 @@ export interface ChannelMessage {
 // --- artifacts --------------------------------------------------------------
 
 export type ArtifactKind = 'document' | 'patch' | 'file' | 'link' | 'result'
+
+export interface AgentMessage {
+  id: string
+  from_agent: string
+  to_agent?: string
+  task_id?: string
+  body: string
+  channel_id?: string
+  created_at: string
+}
 
 export interface Artifact {
   id: string

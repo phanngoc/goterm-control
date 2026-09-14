@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Channel, Task, TaskDetail } from './types'
+import type { AgentMessage, Channel, Task, TaskDetail } from './types'
 import { ago, runLivenessStyle, taskStateStyle, truncate } from './format'
+import { useArtifactOpener } from './ArtifactView'
+import MessageMarkdown from '../components/MessageMarkdown'
 import { useStore } from '../stores/store'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -88,6 +90,105 @@ function TaskCard({ task, kids, onOpen }: { task: Task; kids: { total: number; d
         </div>
       )}
     </button>
+  )
+}
+
+// Exchange is what the agents said to each other about this work.
+//
+// Two lists, not one. `mail` is what an agent deliberately filed against this
+// task; `side_talk` is what they said in their own rooms while it ran, which
+// the server infers from who is on the task and when. Mixing them would let a
+// coincidence read as a record, so the screen keeps the difference visible.
+function Exchange({ mail, sideTalk, self }: { mail: AgentMessage[]; sideTalk: AgentMessage[]; self?: string }) {
+  const [open, setOpen] = useState<string | null>(null)
+  if (mail.length === 0 && sideTalk.length === 0) return null
+
+  const line = (m: AgentMessage, loose: boolean) => {
+    const expanded = open === m.id
+    const oneLine = m.body.replace(/\s+/g, ' ').trim()
+    return (
+      <li key={m.id} className="text-xs">
+        <button
+          onClick={() => setOpen(expanded ? null : m.id)}
+          className="w-full text-left flex items-baseline gap-2 hover:bg-gray-900/60 rounded px-1 -mx-1 py-0.5"
+        >
+          <span className={`font-mono shrink-0 ${m.from_agent === self ? 'text-sky-300' : 'text-gray-300'}`}>
+            {m.from_agent}
+          </span>
+          {m.to_agent && <span className="text-gray-600 shrink-0">→ {m.to_agent}</span>}
+          <span className="text-gray-500 truncate">{expanded ? '' : truncate(oneLine, 80)}</span>
+          <span className="ml-auto text-gray-600 shrink-0">{ago(m.created_at)}</span>
+        </button>
+        {expanded && (
+          <div className={`mt-1 ml-1 pl-2 border-l ${loose ? 'border-gray-800' : 'border-sky-500/30'}`}>
+            <MessageMarkdown>{m.body}</MessageMarkdown>
+          </div>
+        )}
+      </li>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {mail.length > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">
+            Trao đổi về task này · {mail.length}
+          </div>
+          <ol className="space-y-0.5">{mail.map(m => line(m, false))}</ol>
+        </div>
+      )}
+      {sideTalk.length > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-1">
+            Cùng lúc, giữa các agent này · {sideTalk.length}
+          </div>
+          <p className="text-[11px] text-gray-600 mb-2">
+            Suy ra từ ai đang làm task và khoảng thời gian nó chạy — không phải agent chủ động gắn vào task.
+            Gắn đúng bằng <code className="font-mono">bomclaw msg --task</code>.
+          </p>
+          <ol className="space-y-0.5">{sideTalk.map(m => line(m, true))}</ol>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Output is what the work produced. A parent that only delegated has none of
+// its own, so this is the whole tree's — otherwise the task that organised
+// three agents shows an empty panel and the outputs hide under children
+// nobody thought to open.
+function Output({ call, artifacts, taskID }: { call: Call; artifacts: NonNullable<TaskDetail['artifacts']>; taskID: string }) {
+  const { open, modal, busy } = useArtifactOpener(call)
+  if (artifacts.length === 0) return null
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">
+        Output · {artifacts.length}
+      </div>
+      {modal}
+      <ol className="space-y-1">
+        {artifacts.map(a => (
+          <li key={a.id + a.role} className="flex items-center gap-2 text-xs">
+            <button
+              onClick={() => open(a)}
+              disabled={busy}
+              className="min-w-0 flex-1 text-left truncate text-sky-300 hover:underline"
+            >
+              {a.title}
+            </button>
+            <span className="text-gray-600 shrink-0">{a.kind}</span>
+            {/* Whose output it is, when it is not this task's own. On a parent
+                that split the work, that is the useful half of the row. */}
+            {a.task_id !== taskID && (
+              <span className="font-mono text-gray-600 shrink-0" title={a.task_id}>
+                {a.created_by}
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
   )
 }
 
@@ -203,6 +304,16 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
         <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-2">
           <span className="text-sm font-medium text-gray-100">Task</span>
           <span className="font-mono text-xs text-gray-500 truncate">{id}</span>
+          {/* The address bar already holds this task, so the link is just the
+              current one — the button exists because nobody thinks to look up
+              there, and "send me that task" should cost one click. */}
+          <button
+            onClick={() => { void navigator.clipboard?.writeText(location.href) }}
+            title="Chép link tới task này"
+            className="shrink-0 px-1.5 py-0.5 rounded ring-1 ring-gray-800 text-[11px] text-gray-500 hover:text-sky-300 hover:ring-sky-500/40"
+          >
+            link
+          </button>
           <button onClick={onClose} className="ml-auto text-gray-500 hover:text-gray-300 text-sm">✕</button>
         </div>
 
@@ -357,6 +468,14 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
                 </div>
               )}
 
+              <Output call={call} artifacts={detail.artifacts ?? []} taskID={id} />
+
+              <Exchange
+                mail={detail.mail ?? []}
+                sideTalk={detail.side_talk ?? []}
+                self={t.claimed_by || t.assigned_to}
+              />
+
               {detail!.runs?.length > 0 && (
                 <div>
                   <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">Runs</div>
@@ -469,22 +588,19 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
   )
 }
 
-export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOpenThread }: {
+export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpenThread }: {
   call: Call; agents: string[]
-  openTaskID?: string; onOpenedTask?: () => void; onOpenThread?: (rootID: string) => void
+  /** openTaskID is which task's detail is showing; it lives in the URL, so a
+   *  task can be linked to instead of described. */
+  openTaskID?: string; onOpenTask: (id: string) => void
+  onOpenThread?: (rootID: string) => void
 }) {
   const [tasks, setTasks] = useState<Task[]>([])
-  const [openID, setOpenID] = useState<string | null>(null)
+  const openID = openTaskID || null
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [to, setTo] = useState('')
   const [err, setErr] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!openTaskID) return
-    setOpenID(openTaskID)
-    onOpenedTask?.()
-  }, [openTaskID, onOpenedTask])
 
   // Which project's board this is. "" is every project, which is what the
   // board was before projects existed; "-" is the work that belongs to none,
@@ -601,7 +717,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
                   {rows.length === 0 && (
                     <div className="rounded-lg ring-1 ring-dashed ring-gray-800 p-4 text-xs text-gray-600">empty</div>
                   )}
-                  {rows.map(t => <TaskCard key={t.id} task={t} kids={childCounts(tasks, t.id)} onOpen={() => setOpenID(t.id)} />)}
+                  {rows.map(t => <TaskCard key={t.id} task={t} kids={childCounts(tasks, t.id)} onOpen={() => onOpenTask(t.id)} />)}
                 </div>
               </div>
             )
@@ -610,7 +726,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} onOpenThread={onOpenThread} />
+        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => onOpenTask('')} onChanged={load} onOpenTask={onOpenTask} onOpenThread={onOpenThread} />
       )}
     </div>
   )

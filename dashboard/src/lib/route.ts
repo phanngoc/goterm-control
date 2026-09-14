@@ -18,6 +18,10 @@ export interface Route {
   tab: Tab
   sessionId?: string
   adminPane?: AdminPane
+  /** taskId opens that task's detail on the Tasks pane: /admin/tasks/<id>.
+   *  A drawer that lives only in component state cannot be sent to anybody —
+   *  "look at this task" meant "open the board and find it". */
+  taskId?: string
 }
 
 /** parseRoute reads a pathname into the view it names. */
@@ -36,6 +40,9 @@ export function parseRoute(pathname: string): Route {
       // An unknown or missing pane lands on Overview rather than a blank panel,
       // which is what a stale or hand-typed link deserves.
       const pane = ADMIN_PANES.find(p => p === parts[1])
+      if (pane === 'tasks' && parts[2]) {
+        return { tab: 'admin', adminPane: 'tasks', taskId: decodeURIComponent(parts[2]) }
+      }
       return { tab: 'admin', adminPane: pane ?? 'overview' }
     }
 
@@ -53,6 +60,7 @@ export function pathFor(r: Route): string {
     case 'status':
       return '/status'
     case 'admin':
+      if (r.adminPane === 'tasks' && r.taskId) return `/admin/tasks/${encodeURIComponent(r.taskId)}`
       return `/admin/${r.adminPane ?? 'overview'}`
     case 'sessions':
       return '/'
