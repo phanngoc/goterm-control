@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -200,6 +201,67 @@ func runChannel(args []string) {
 		}
 		fmt.Printf("%s joined %s\n", member, channelID)
 
+	case "bind":
+		fs := flag.NewFlagSet("ch bind", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		// A private chat's id is the user's id, and the gateway exports the
+		// first trusted user as exactly that. Typing it by hand is a chance to
+		// get it wrong for no benefit — there is only one owner.
+		chat := fs.Int64("chat", ownerChatID(), "Telegram chat id (default $BOMCLAW_OWNER_CHAT_ID)")
+		mode := fs.String("mode", coord.ForwardMentions, "all | mentions | off")
+		off := fs.Bool("off", false, "Remove the binding entirely")
+		channelID, _ := parseLeading(fs, rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+
+		if channelID == "" {
+			bindings, err := db.ChannelBindings()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ch bind: %v\n", err)
+				os.Exit(1)
+			}
+			if len(bindings) == 0 {
+				fmt.Println("no channel is bound to Telegram")
+				return
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "CHANNEL\tCHAT\tMODE\tSINCE")
+			for _, b := range bindings {
+				fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", b.ChannelID, b.ChatID, b.Mode, age(b.CreatedAt))
+			}
+			w.Flush()
+			return
+		}
+		if *off {
+			if err := db.UnbindChannelTelegram(channelID); err != nil {
+				fmt.Fprintf(os.Stderr, "ch bind: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("%s no longer goes to Telegram\n", channelID)
+			return
+		}
+		if *chat == 0 {
+			fmt.Fprintln(os.Stderr,
+				"error: no Telegram chat id.\n"+
+					"Pass --chat <id>, or run this from a shell the gateway spawned "+
+					"(it exports BOMCLAW_OWNER_CHAT_ID).")
+			os.Exit(1)
+		}
+		if err := db.BindChannelTelegram(channelID, *chat, *mode); err != nil {
+			fmt.Fprintf(os.Stderr, "ch bind: %v\n", err)
+			os.Exit(1)
+		}
+		switch *mode {
+		case coord.ForwardAll:
+			fmt.Printf("%s → chat %d: every line\n", channelID, *chat)
+		case coord.ForwardOff:
+			fmt.Printf("%s → chat %d: paused (binding kept)\n", channelID, *chat)
+		default:
+			fmt.Printf("%s → chat %d: lines that name the owner, and replies in threads they are in\n", channelID, *chat)
+		}
+		fmt.Println("Only what is said from now on travels — the room's history stays here.")
+
 	case "mentions":
 		fs := flag.NewFlagSet("ch mentions", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
@@ -242,6 +304,17 @@ func runChannel(args []string) {
 		channelUsage()
 		os.Exit(1)
 	}
+}
+
+// ownerChatID is the Telegram conversation the gateway said belongs to the
+// owner. Zero when this shell was not spawned by a gateway, which the command
+// reports rather than guessing a number.
+func ownerChatID() int64 {
+	id, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("BOMCLAW_OWNER_CHAT_ID")), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 // threadOf is where a reply to this message belongs: its thread if it is in
@@ -308,6 +381,7 @@ Usage: bomclaw ch <command>
   post     <channel> [--thread <id>] [--task <id>] <message>
   new      <name> [--purpose ...] [--members a,b]
   join     <channel> [--who <agent>]
+  bind     [<channel>] [--mode all|mentions|off] [--off]   carry it to Telegram
   mentions [--mark-read]                 lines that named me
 
 A channel is a place: everyone in it reads everything, so another agent can

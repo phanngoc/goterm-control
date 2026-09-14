@@ -295,6 +295,7 @@ func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *sessio
 		titler:           sessionTitler,
 		trace:            rec,
 		agentID:          cfg.Agent.ID,
+		coord:            coordDB,
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
 		typing:           typing,

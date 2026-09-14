@@ -254,6 +254,16 @@ func runGateway(args []string) {
 		}
 	}
 
+	// And the same for the owner's Telegram chat, so `bomclaw ch bind` needs no
+	// chat id typed by hand. A private chat's id equals the user's id, so the
+	// first trusted user is the owner's conversation — the same assumption
+	// Bot.Notify already makes when it sends a schedule's result.
+	if len(cfg.Security.AllowedUserIDs) > 0 {
+		if err := os.Setenv("BOMCLAW_OWNER_CHAT_ID", fmt.Sprint(cfg.Security.AllowedUserIDs[0])); err != nil {
+			log.Printf("gateway: could not export BOMCLAW_OWNER_CHAT_ID: %v", err)
+		}
+	}
+
 	// One-shot text backend (session titles, `bomclaw send` fallback). Which
 	// one is bot.TitleBackend's decision, so this cannot drift from the bot.
 	provider := buildProvider(cfg, models.NewResolver(cfg.Models.Default, cfg.Models.Custom))
@@ -524,6 +534,20 @@ func runGateway(args []string) {
 	} else {
 		log.Printf("mentions: answering off (coord.reply_to_mentions=false)")
 	}
+
+	// Carrying bound channels out to Telegram. Only the gateway that polls
+	// gets one: all three share the token and could all send, which would put
+	// three copies of every line on the owner's phone.
+	var forwards *gateway.ForwardWatcher
+	if tgBot != nil && cfg.Telegram.Polling() {
+		forwards = gateway.NewForwardWatcher(deps, tgBot.Handler())
+		tgBot.Handler().SetChannelReplyListener(func(channelID string, wake []string) {
+			for _, who := range wake {
+				gateway.NotifyAgents(coordDB, who, "", "about a mention in "+channelID)
+			}
+			mentions.Poke()
+		})
+	}
 	// Everything running right now, from both sources: chat turns and claimed
 	// tasks. The tray's awake-while-running mode, `bomclaw status` and the
 	// dashboard all read this list — a task run missing from it meant the Mac
@@ -576,6 +600,7 @@ func runGateway(args []string) {
 		return out
 	}
 	mentions.Start(ctx)
+	forwards.Start(ctx)
 	if sched != nil {
 		sched.SetBusy(func() bool { return len(deps.Runs()) > 0 })
 		sched.Start(ctx)
@@ -634,6 +659,7 @@ func runGateway(args []string) {
 		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(func() {
 			runner.Poke()
 			mentions.Poke()
+			forwards.Poke()
 		})))
 	}
 

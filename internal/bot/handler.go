@@ -49,6 +49,17 @@ type Handler struct {
 	trace      *trace.Recorder // run/trace recorder (nil-safe)
 	agentID    string          // identity in the shared coordination database
 
+	// coord is the shared coordination database, for the one thing this
+	// handler does that is not a turn: a reply to a line forwarded out of a
+	// channel goes back into that channel. Nil when coordination is off, and
+	// the reply is then an ordinary message like any other.
+	coord *coord.DB
+
+	// onChannelReply, when set, is told which agents a routed reply named, so
+	// the gateway can ring them. Declared as a callback for the same reason
+	// onTurn is: bot must not import gateway.
+	onChannelReply func(channelID string, wake []string)
+
 	// onTurn, when set, is told when any turn on any channel starts and ends.
 	// The gateway uses it to push a refresh to open dashboards; without it a
 	// browser showing the shared session never learns Telegram moved it.
@@ -124,6 +135,14 @@ func (h *Handler) Handle(update tgbotapi.Update) {
 		sess := h.sessions.Get(msg.Chat.ID)
 		sess.Cancel()
 		h.sendText(msg.Chat.ID, "🛑 Request cancelled.")
+		return
+	}
+
+	// A reply to a line this bot carried out of a channel belongs back in that
+	// channel, not to the model. It sits here — after the commands, before
+	// everything that runs a turn — because a reply that quotes nothing of
+	// ours must still mean what it has always meant: talk to the agent.
+	if h.channelReply(msg) {
 		return
 	}
 
@@ -1113,6 +1132,93 @@ func truncateLabel(text string, maxRunes int) string {
 		return string(r[:maxRunes]) + "..."
 	}
 	return text
+}
+
+// SetChannelReplyListener registers who to tell when a Telegram reply was
+// routed into a channel.
+func (h *Handler) SetChannelReplyListener(fn func(channelID string, wake []string)) {
+	h.onChannelReply = fn
+}
+
+// SendChannelLine delivers one line out of a channel and returns the Telegram
+// message id it became. The gateway's forward watcher holds onto that id: a
+// reply quoting it is how an answer typed on a phone finds its thread.
+//
+// Unlike sendText this returns the error. A line that failed to send must stay
+// unsent in the database — swallowing the failure would mark it delivered and
+// the owner would never see it.
+func (h *Handler) SendChannelLine(chatID int64, text string) (int64, error) {
+	html := markdownToTelegramHTML(text)
+	msg := tgbotapi.NewMessage(chatID, html)
+	msg.ParseMode = "HTML"
+	sent, err := h.bot.Send(msg)
+	if err != nil {
+		plain := tgbotapi.NewMessage(chatID, stripHTML(html))
+		sent, err = h.bot.Send(plain)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return int64(sent.MessageID), nil
+}
+
+// channelReply routes a reply to a forwarded line back into its channel, and
+// reports whether it did.
+//
+// False is the ordinary answer and must stay cheap: every message the owner
+// sends passes through here, and all but a handful are conversations with the
+// agent that this must not disturb.
+//
+// The reply is written as the owner, in the thread the quoted line belongs to.
+// That authorship is also the echo stop: the forward watcher only ever carries
+// an agent's lines outward, so a message written as a person can never be sent
+// back to that person — the loop is closed by who wrote it, not by a flag
+// somebody has to remember to set.
+func (h *Handler) channelReply(msg *tgbotapi.Message) bool {
+	if h.coord == nil || msg.ReplyToMessage == nil || strings.TrimSpace(msg.Text) == "" {
+		return false
+	}
+	src, err := h.coord.ForwardedMessage(int64(msg.ReplyToMessage.MessageID))
+	if err != nil {
+		log.Printf("channel reply: look up %d: %v", msg.ReplyToMessage.MessageID, err)
+		return false
+	}
+	if src == nil {
+		return false // not one of ours; an ordinary message
+	}
+
+	// A reply to a reply belongs to the same thread, and a reply to a
+	// top-level line starts that line's thread.
+	root := src.ThreadRoot
+	if root == "" {
+		root = src.ID
+	}
+	posted, wake, err := h.coord.PostMessage(coord.NewChannelMessage{
+		ChannelID:  src.ChannelID,
+		ThreadRoot: root,
+		AuthorKind: coord.MemberUser,
+		AuthorID:   coord.OwnerUserID,
+		Body:       msg.Text,
+	})
+	if err != nil {
+		log.Printf("channel reply: post to %s: %v", src.ChannelID, err)
+		h.sendText(msg.Chat.ID, "⚠️ Không gửi được vào "+src.ChannelID+": "+err.Error())
+		return true // handled: reporting the failure beats running it as a prompt
+	}
+	// Nobody was named, so nothing has been woken: PostMessage's own rule
+	// gives an unaddressed reply to the agents already in the thread, and the
+	// line was forwarded from one of them, so there is always someone.
+	if h.onChannelReply != nil {
+		h.onChannelReply(src.ChannelID, wake)
+	}
+	if len(wake) == 0 {
+		// Said out loud rather than logged: silence here is indistinguishable
+		// from a bot that lost the message.
+		h.sendText(msg.Chat.ID, "📝 Đã ghi vào "+src.ChannelID+", nhưng không có agent nào trong thread để trả lời.")
+	}
+	log.Printf("channel reply: %s → %s thread %s (woke %s)",
+		posted.ID, src.ChannelID, root, strings.Join(wake, ", "))
+	return true
 }
 
 func (h *Handler) sendText(chatID int64, text string) int {

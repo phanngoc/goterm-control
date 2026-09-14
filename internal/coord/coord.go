@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -395,6 +395,23 @@ var ddl = []string{
 	// Keyed by thread rather than by channel: two threads in one room are two
 	// conversations, and Slack's own model says so. turns is the loop stop —
 	// nothing inside a conversation ever says "enough".
+	// --- v9: a channel that also speaks to Telegram -------------------------
+	// One row per bound room. chat_id is the Telegram conversation it speaks
+	// into; mode is how much of the room goes there; created_at is the cut-off,
+	// so binding a room that has been busy all week does not empty that week
+	// onto a phone.
+	//
+	// A table rather than a column on channels: most rooms are not bound, the
+	// binding is an integration rather than a property of the place, and
+	// dropping it should leave no trace on the channel itself.
+	`CREATE TABLE IF NOT EXISTS channel_telegram (
+		channel_id TEXT PRIMARY KEY,
+		chat_id    INTEGER NOT NULL,
+		mode       TEXT NOT NULL DEFAULT 'mentions',  -- all | mentions | off
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	) STRICT`,
+
 	`CREATE TABLE IF NOT EXISTS channel_sessions (
 		thread_key TEXT NOT NULL,             -- thread_root, or channel_id for the main line
 		agent_id   TEXT NOT NULL,
@@ -474,12 +491,28 @@ var v6Columns = []struct{ name, decl string }{
 	{"acceptance", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v9MessageColumns: what has left the room, and what it became out there.
+//
+// forwarded_at is "this line has been decided about", not "this line was sent"
+// — a message the mode filtered out is stamped too, because the answer would
+// never change and reconsidering it on every sweep is work that repeats
+// forever. tg_message_id is 0 for those, and for everything that was sent it is
+// the hook the return path hangs on: a reply on Telegram quotes a message id,
+// and that is how the reply finds its thread.
+var v9MessageColumns = []struct{ name, decl string }{
+	{"forwarded_at", "TEXT NOT NULL DEFAULT ''"},
+	{"tg_message_id", "INTEGER NOT NULL DEFAULT 0"},
+}
+
 var v3Indexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id, state)`,
 	// Same rule, v8: this indexes a column the ALTERs above add, so it cannot
 	// sit in ddl — a fresh database would build it before the column exists.
 	// The test suite said so within a minute of it being put there.
 	`CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id, state)`,
+	// v9, same rule again: both of these index columns the ALTERs add.
+	`CREATE INDEX IF NOT EXISTS idx_channel_messages_forward ON channel_messages(forwarded_at, created_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_messages_tg      ON channel_messages(tg_message_id)`,
 }
 
 func (db *DB) migrate() error {
@@ -520,6 +553,11 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v8ScheduleColumns {
 		if err := db.ensureColumn("schedules", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v9MessageColumns {
+		if err := db.ensureColumn("channel_messages", c.name, c.decl); err != nil {
 			return err
 		}
 	}
