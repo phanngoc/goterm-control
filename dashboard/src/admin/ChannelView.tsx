@@ -15,9 +15,12 @@ type Call = (method: string, params?: any) => Promise<any>
 
 const PAGE = 30
 
-export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask }: {
+export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
   call: Call; agents: string[]; selfID: string
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
+  /** openFilesFor is a project whose folder should open on arrival — the board
+   *  sends a task here when someone asks where its work landed. */
+  openFilesFor?: string; onOpenedFiles?: () => void
 }) {
   const [channels, setChannels] = useState<Channel[]>([])
   const [active, setActive] = useState<string>('')
@@ -150,6 +153,16 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
       .catch((e: any) => setErr(String(e?.message ?? e)))
       .finally(() => onOpenedThread?.())
   }, [openThreadID, call, onOpenedThread])
+
+  // Arriving from the board: open the project's folder, which is where a
+  // task's work actually lands. Selecting the room too, so closing the browser
+  // leaves you somewhere that makes sense rather than on whatever was open.
+  useEffect(() => {
+    if (!openFilesFor) return
+    setActive(openFilesFor)
+    setFilesFor(openFilesFor)
+    onOpenedFiles?.()
+  }, [openFilesFor, onOpenedFiles])
 
   // Poll: an agent posting from its own shell has no way to push to this page.
   //
@@ -301,7 +314,15 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
       </div>
 
       {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
-      {filesFor && <FileBrowser call={call} channelID={filesFor} root={current?.workspace ?? ''} onClose={() => setFilesFor('')} />}
+      {filesFor && (
+        <FileBrowser
+          call={call} channelID={filesFor}
+          // By id rather than from `current`: arriving from the board sets both
+          // at once, and `current` is whatever the list has resolved so far.
+          root={channels.find(c => c.id === filesFor)?.workspace ?? ''}
+          onClose={() => setFilesFor('')}
+        />
+      )}
 
       {/* Thread */}
       {thread && (
