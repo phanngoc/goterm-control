@@ -197,11 +197,18 @@ function Output({ call, artifacts, taskID }: { call: Call; artifacts: NonNullabl
 // the agent's own directory, which is why that case says so out loud rather
 // than showing an empty field — it is the reason the output is not where
 // someone went looking for it.
-function Project({ call, detail, projects, onChanged }: {
+function Project({ call, detail, projects, onChanged, onOpenFiles }: {
   call: Call; detail: TaskDetail; projects: Channel[]; onChanged: () => void
+  onOpenFiles?: (channelID: string) => void
 }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Naming a project that does not exist yet. The dropdown is where someone
+  // discovers the task is filed nowhere, so it is also where the right project
+  // turns out not to have been made — sending them to another tab to make it
+  // and back again to pick it is two navigations for one thought.
+  const [naming, setNaming] = useState(false)
+  const [name, setName] = useState('')
   const t = detail.task
   const finished = ['completed', 'failed', 'canceled', 'rejected'].includes(t.state)
 
@@ -210,6 +217,24 @@ function Project({ call, detail, projects, onChanged }: {
     try {
       await call('tasks.project', { id: t.id, channel_id: channelID })
       setErr(null)
+      onChanged()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // A new project is a room with a folder behind it, made the same way the
+  // rooms pane makes one — then this task is filed under it straight away,
+  // which is the only reason anyone is making it from here.
+  const createAndFile = async () => {
+    if (!name.trim() || busy) return
+    setBusy(true)
+    try {
+      const c: Channel = await call('channels.create', { name: name.trim() })
+      await call('tasks.project', { id: t.id, channel_id: c.id })
+      setName(''); setNaming(false); setErr(null)
       onChanged()
     } catch (e: any) {
       setErr(String(e?.message ?? e))
@@ -228,17 +253,61 @@ function Project({ call, detail, projects, onChanged }: {
           <select
             value={t.channel_id ?? ''}
             disabled={busy}
-            onChange={e => void file(e.target.value)}
+            onChange={e => {
+              if (e.target.value === '+') { setNaming(true); return }
+              void file(e.target.value)
+            }}
             className="px-2 py-1 bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
           >
             <option value="">— không thuộc dự án nào —</option>
             {projects.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="+">+ dự án mới…</option>
           </select>
         )}
       </div>
+
+      {naming && (
+        <div className="flex gap-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') void createAndFile()
+              if (e.key === 'Escape') { setNaming(false); setName('') }
+            }}
+            placeholder="tên dự án — một thư mục và một AGENTS.md sẽ được tạo"
+            className="flex-1 px-2 py-1 text-xs bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
+          />
+          <button
+            onClick={createAndFile}
+            disabled={busy || !name.trim()}
+            className="px-2.5 py-1 text-xs rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
+          >
+            Tạo &amp; xếp vào
+          </button>
+          <button
+            onClick={() => { setNaming(false); setName('') }}
+            className="px-2 py-1 text-xs text-gray-500 hover:text-gray-300"
+          >
+            huỷ
+          </button>
+        </div>
+      )}
+
       {detail.project?.workspace ? (
-        <div className="font-mono text-[11px] text-gray-500 break-all" title="thư mục các run chạy trong đó">
-          {detail.project.workspace}
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-[11px] text-gray-500 break-all min-w-0" title="thư mục các run chạy trong đó">
+            {detail.project.workspace}
+          </span>
+          {onOpenFiles && (
+            <button
+              onClick={() => onOpenFiles(detail.project!.id)}
+              className="shrink-0 text-[11px] text-sky-300 hover:underline"
+            >
+              mở folder
+            </button>
+          )}
         </div>
       ) : (
         <div className="text-[11px] text-amber-400/80">
@@ -250,10 +319,11 @@ function Project({ call, detail, projects, onChanged }: {
   )
 }
 
-function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask, onOpenThread }: {
+function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask, onOpenThread, onOpenFiles }: {
   call: Call; id: string; agents: string[]; projects: Channel[]
   onClose: () => void; onChanged: () => void
   onOpenTask: (id: string) => void; onOpenThread?: (rootID: string) => void
+  onOpenFiles?: (channelID: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
@@ -442,7 +512,10 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                 </div>
               </dl>
 
-              <Project call={call} detail={detail} projects={projects} onChanged={() => { load(); onChanged() }} />
+              <Project
+                call={call} detail={detail} projects={projects}
+                onChanged={() => { load(); onChanged() }} onOpenFiles={onOpenFiles}
+              />
 
               {/* The conversation the task has been running in, across every
                   run. The board could see it existed and gave no way in. */}
@@ -660,12 +733,14 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
   )
 }
 
-export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpenThread }: {
+export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpenThread, onOpenFiles }: {
   call: Call; agents: string[]
   /** openTaskID is which task's detail is showing; it lives in the URL, so a
    *  task can be linked to instead of described. */
   openTaskID?: string; onOpenTask: (id: string) => void
   onOpenThread?: (rootID: string) => void
+  /** onOpenFiles takes you to a project's folder — where a task's work lands. */
+  onOpenFiles?: (channelID: string) => void
 }) {
   const [tasks, setTasks] = useState<Task[]>([])
   const openID = openTaskID || null
@@ -680,11 +755,12 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpen
   const [project, setProject] = useState('')
   const [projects, setProjects] = useState<Channel[]>([])
 
-  useEffect(() => {
+  const loadProjects = useCallback(() => {
     call('channels.list')
       .then((cs: Channel[]) => setProjects((cs || []).filter(c => c.workspace)))
       .catch(() => {})
   }, [call])
+  useEffect(() => { loadProjects() }, [loadProjects])
 
   const load = useCallback(async () => {
     try {
@@ -798,7 +874,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpen
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} agents={agents} projects={projects} onClose={() => onOpenTask('')} onChanged={load} onOpenTask={onOpenTask} onOpenThread={onOpenThread} />
+        <TaskDrawer call={call} id={openID} agents={agents} projects={projects} onClose={() => onOpenTask('')} onChanged={() => { load(); loadProjects() }} onOpenTask={onOpenTask} onOpenThread={onOpenThread} onOpenFiles={onOpenFiles} />
       )}
     </div>
   )

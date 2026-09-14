@@ -37,6 +37,9 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
   // to a pane later does not reopen what you already closed. The task the board
   // should open is not: that one is the address bar's, so it can be linked.
   const [openThread, setOpenThread] = useState<string>('')
+  // And a project whose folder the board wants opened: "where did this task's
+  // work land" is one click from the task, not a hunt through the rooms.
+  const [openFiles, setOpenFiles] = useState<string>('')
 
   // The overview drives the agent list every other pane filters by, so it is
   // refreshed regardless of which pane is showing.
@@ -108,6 +111,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
             call={call} agents={agentIDs}
             openTaskID={taskId} onOpenTask={onTaskId}
             onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
+            onOpenFiles={channelID => { setOpenFiles(channelID); onPane('messages') }}
           />
         )}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
@@ -117,6 +121,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
           <ChannelView
             call={call} agents={agentIDs} selfID={selfID}
             openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
+            openFilesFor={openFiles} onOpenedFiles={() => setOpenFiles('')}
             onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
           />
         )}
