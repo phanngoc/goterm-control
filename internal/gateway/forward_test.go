@@ -43,7 +43,7 @@ func forwardFixture(t *testing.T, mode string) (*coord.DB, *ForwardWatcher, *fak
 	if err := db.RegisterAgent(coord.Agent{ID: "bomclaw2", DisplayName: "bomclaw2"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.BindChannelTelegram(coord.GeneralChannelID, 4242, mode); err != nil {
+	if err := db.BindChannelTelegram(coord.GeneralChannelID, "bomclaw2", 4242, mode); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Conn().Exec(
@@ -51,7 +51,7 @@ func forwardFixture(t *testing.T, mode string) (*coord.DB, *ForwardWatcher, *fak
 		t.Fatal(err)
 	}
 	send := &fakeSender{}
-	w := NewForwardWatcher(Deps{Coord: db}, send)
+	w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw2"}, send)
 	if w == nil {
 		t.Fatal("no watcher was built although coord and a sender were both there")
 	}
@@ -83,7 +83,7 @@ func TestSweepSendsAndSettles(t *testing.T) {
 	}
 
 	// And the Telegram id is recorded, or a reply has nothing to find.
-	back, err := db.ForwardedMessage(8801)
+	back, err := db.ForwardedMessage("bomclaw2", 8801)
 	if err != nil || back == nil || back.ID != m.ID {
 		t.Fatalf("the sent message id was not written back: %+v %v", back, err)
 	}
@@ -100,7 +100,7 @@ func TestASendThatFailedIsNotMarkedDelivered(t *testing.T) {
 	}
 	w.sweep()
 
-	pending, err := db.PendingForwards(coord.ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw2", coord.ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestMentionsModeSettlesWhatItDeclinesToSend(t *testing.T) {
 	if len(send.sent) != 0 {
 		t.Fatalf("mode=mentions sent the room's own chatter: %q", send.sent)
 	}
-	pending, err := db.PendingForwards(coord.ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw2", coord.ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,10 +159,10 @@ func TestForwardLineNamesTheRoom(t *testing.T) {
 
 func TestNoSenderMeansNoWatcher(t *testing.T) {
 	db := testCoordDB(t)
-	if w := NewForwardWatcher(Deps{Coord: db}, nil); w != nil {
+	if w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw"}, nil); w != nil {
 		t.Fatal("a gateway that cannot send built a watcher anyway")
 	}
-	if w := NewForwardWatcher(Deps{}, &fakeSender{}); w != nil {
+	if w := NewForwardWatcher(Deps{AgentID: "bomclaw"}, &fakeSender{}); w != nil {
 		t.Fatal("a gateway with no shared database built a watcher anyway")
 	}
 }

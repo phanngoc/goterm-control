@@ -42,13 +42,13 @@ func TestAReplyLandsInTheThreadAndWakesTheAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded(line.ID, 8821); err != nil {
+	if err := db.MarkForwarded("bomclaw", line.ID, 8821); err != nil {
 		t.Fatal(err)
 	}
 
 	var woke []string
 	var room string
-	h := &Handler{coord: db, onChannelReply: func(channelID string, wake []string) {
+	h := &Handler{coord: db, agentID: "bomclaw", onChannelReply: func(channelID string, wake []string) {
 		room, woke = channelID, wake
 	}}
 
@@ -86,7 +86,7 @@ func TestAReplyLandsInTheThreadAndWakesTheAgent(t *testing.T) {
 // is a conversation with the agent, replies included.
 func TestAReplyToAnythingElseIsStillAnOrdinaryMessage(t *testing.T) {
 	db := replyTestDB(t)
-	h := &Handler{coord: db}
+	h := &Handler{coord: db, agentID: "bomclaw"}
 
 	if h.channelReply(reply(9999, "chạy lại build giúp")) {
 		t.Fatal("a reply quoting a message that was never ours was swallowed into a channel")
@@ -122,11 +122,11 @@ func TestAReplyToAThreadedLineStaysInThatThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded(inThread.ID, 8822); err != nil {
+	if err := db.MarkForwarded("bomclaw", inThread.ID, 8822); err != nil {
 		t.Fatal(err)
 	}
 
-	h := &Handler{coord: db, onChannelReply: func(string, []string) {}}
+	h := &Handler{coord: db, agentID: "bomclaw", onChannelReply: func(string, []string) {}}
 	if !h.channelReply(reply(8822, "còn ETH?")) {
 		t.Fatal("not routed")
 	}

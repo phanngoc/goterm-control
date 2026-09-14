@@ -535,9 +535,13 @@ func runGateway(args []string) {
 		log.Printf("mentions: answering off (coord.reply_to_mentions=false)")
 	}
 
-	// Carrying bound channels out to Telegram. Only the gateway that polls
-	// gets one: all three share the token and could all send, which would put
-	// three copies of every line on the owner's phone.
+	// Carrying bound channels out to Telegram.
+	//
+	// Only a gateway that polls gets one. Each agent here has its own bot, so
+	// several could carry rooms at once — but a room whose bot nobody listens
+	// to is a one-way street: the owner would read the answers and have nowhere
+	// to reply. The binding names the agent, so which rooms this one carries is
+	// a decision made at bind time, not a race between gateways.
 	var forwards *gateway.ForwardWatcher
 	if tgBot != nil && cfg.Telegram.Polling() {
 		forwards = gateway.NewForwardWatcher(deps, tgBot.Handler())

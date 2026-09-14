@@ -406,6 +406,7 @@ var ddl = []string{
 	// dropping it should leave no trace on the channel itself.
 	`CREATE TABLE IF NOT EXISTS channel_telegram (
 		channel_id TEXT PRIMARY KEY,
+		agent_id   TEXT NOT NULL DEFAULT '',       -- whose bot carries this room
 		chat_id    INTEGER NOT NULL,
 		mode       TEXT NOT NULL DEFAULT 'mentions',  -- all | mentions | off
 		created_at TEXT NOT NULL,
@@ -502,6 +503,18 @@ var v6Columns = []struct{ name, decl string }{
 var v9MessageColumns = []struct{ name, decl string }{
 	{"forwarded_at", "TEXT NOT NULL DEFAULT ''"},
 	{"tg_message_id", "INTEGER NOT NULL DEFAULT 0"},
+	// Which agent's bot sent it. Every agent on this machine now runs its own
+	// Telegram bot, and a message id is per-bot: @Goterm_bot's message 8821 and
+	// @Goterm3_bot's message 8821 are different messages. Without this column a
+	// reply to one would be matched against the other's line and answered into
+	// the wrong thread.
+	{"forwarded_by", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v9BindingColumns: which agent a binding belongs to. A chat id alone does not
+// say who speaks into it, and three bots can all reach the same person.
+var v9BindingColumns = []struct{ name, decl string }{
+	{"agent_id", "TEXT NOT NULL DEFAULT ''"},
 }
 
 var v3Indexes = []string{
@@ -512,7 +525,11 @@ var v3Indexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id, state)`,
 	// v9, same rule again: both of these index columns the ALTERs add.
 	`CREATE INDEX IF NOT EXISTS idx_channel_messages_forward ON channel_messages(forwarded_at, created_at)`,
-	`CREATE INDEX IF NOT EXISTS idx_channel_messages_tg      ON channel_messages(tg_message_id)`,
+	// Dropped and rebuilt under a new name: the first shape indexed
+	// tg_message_id alone, and CREATE INDEX IF NOT EXISTS would have left that
+	// one in place forever while looking like it had been changed.
+	`DROP INDEX IF EXISTS idx_channel_messages_tg`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_messages_tgmsg ON channel_messages(forwarded_by, tg_message_id)`,
 }
 
 func (db *DB) migrate() error {
@@ -558,6 +575,11 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v9MessageColumns {
 		if err := db.ensureColumn("channel_messages", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v9BindingColumns {
+		if err := db.ensureColumn("channel_telegram", c.name, c.decl); err != nil {
 			return err
 		}
 	}

@@ -203,7 +203,7 @@ func runChannel(args []string) {
 
 	case "bind":
 		fs := flag.NewFlagSet("ch bind", flag.ExitOnError)
-		dbPath := dbFlag(fs)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		// A private chat's id is the user's id, and the gateway exports the
 		// first trusted user as exactly that. Typing it by hand is a chance to
 		// get it wrong for no benefit — there is only one owner.
@@ -226,9 +226,9 @@ func runChannel(args []string) {
 				return
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "CHANNEL\tCHAT\tMODE\tSINCE")
+			fmt.Fprintln(w, "CHANNEL\tVIA\tCHAT\tMODE\tSINCE")
 			for _, b := range bindings {
-				fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", b.ChannelID, b.ChatID, b.Mode, age(b.CreatedAt))
+				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", b.ChannelID, b.AgentID, b.ChatID, b.Mode, age(b.CreatedAt))
 			}
 			w.Flush()
 			return
@@ -248,17 +248,20 @@ func runChannel(args []string) {
 					"(it exports BOMCLAW_OWNER_CHAT_ID).")
 			os.Exit(1)
 		}
-		if err := db.BindChannelTelegram(channelID, *chat, *mode); err != nil {
+		// The binding names a bot, not just a chat: each agent here has its
+		// own, and a chat id alone does not say which one speaks into it.
+		if err := db.BindChannelTelegram(channelID, requireAgent(*agent), *chat, *mode); err != nil {
 			fmt.Fprintf(os.Stderr, "ch bind: %v\n", err)
 			os.Exit(1)
 		}
 		switch *mode {
 		case coord.ForwardAll:
-			fmt.Printf("%s → chat %d: every line\n", channelID, *chat)
+			fmt.Printf("%s → chat %d via %s: every line\n", channelID, *chat, *agent)
 		case coord.ForwardOff:
-			fmt.Printf("%s → chat %d: paused (binding kept)\n", channelID, *chat)
+			fmt.Printf("%s → chat %d via %s: paused (binding kept)\n", channelID, *chat, *agent)
 		default:
-			fmt.Printf("%s → chat %d: lines that name the owner, and replies in threads they are in\n", channelID, *chat)
+			fmt.Printf("%s → chat %d via %s: lines that name the owner, and replies in threads they are in\n",
+				channelID, *chat, *agent)
 		}
 		fmt.Println("Only what is said from now on travels — the room's history stays here.")
 

@@ -58,11 +58,11 @@ type ForwardWatcher struct {
 
 // NewForwardWatcher returns nil unless this gateway can actually deliver.
 //
-// Only the gateway that polls Telegram builds a sender, which is what keeps
-// the owner from getting one copy per agent: three gateways share the token,
-// and all three could send.
+// Every gateway builds one, and that is fine: a binding names the agent whose
+// bot carries it, so each watcher only ever sees its own rooms. There is no
+// race to lose and no line that two bots could both send.
 func NewForwardWatcher(deps Deps, send TelegramSender) *ForwardWatcher {
-	if deps.Coord == nil || send == nil {
+	if deps.Coord == nil || send == nil || deps.AgentID == "" {
 		return nil
 	}
 	return &ForwardWatcher{deps: deps, send: send, poke: make(chan struct{}, 1)}
@@ -105,7 +105,7 @@ func (w *ForwardWatcher) sweep() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	pending, err := w.deps.Coord.PendingForwards(coord.ProgressPrefix, ForwardsPerSweep)
+	pending, err := w.deps.Coord.PendingForwards(w.deps.AgentID, coord.ProgressPrefix, ForwardsPerSweep)
 	if err != nil {
 		log.Printf("forward: read pending: %v", err)
 		return
@@ -129,7 +129,7 @@ func (w *ForwardWatcher) deliver(f coord.Forward) {
 			return // a read that failed is not a decision; try again next sweep
 		}
 		if !follows {
-			if err := w.deps.Coord.MarkForwarded(f.MessageID, 0); err != nil {
+			if err := w.deps.Coord.MarkForwarded(w.deps.AgentID, f.MessageID, 0); err != nil {
 				log.Printf("forward: settle %s: %v", f.MessageID, err)
 			}
 			return
@@ -143,7 +143,7 @@ func (w *ForwardWatcher) deliver(f coord.Forward) {
 		log.Printf("forward: send %s to chat %d: %v", f.MessageID, f.ChatID, err)
 		return
 	}
-	if err := w.deps.Coord.MarkForwarded(f.MessageID, tgID); err != nil {
+	if err := w.deps.Coord.MarkForwarded(w.deps.AgentID, f.MessageID, tgID); err != nil {
 		log.Printf("forward: settle %s: %v", f.MessageID, err)
 	}
 }
