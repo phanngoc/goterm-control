@@ -9,7 +9,7 @@ import (
 // during the test are after the cut-off.
 func bind(t *testing.T, db *DB, channelID string, mode string) {
 	t.Helper()
-	if err := db.BindChannelTelegram(channelID, 4242, mode); err != nil {
+	if err := db.BindChannelTelegram(channelID, "bomclaw", 4242, mode); err != nil {
 		t.Fatalf("bind %s: %v", channelID, err)
 	}
 	// The cut-off is created_at, and a test posts within the same millisecond.
@@ -33,7 +33,7 @@ func TestProgressLineTravelsOnlyOnceItIsAnAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pending, err := db.PendingForwards(ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestProgressLineTravelsOnlyOnceItIsAnAnswer(t *testing.T) {
 	if err := db.UpdateMessageBody(m.ID, "BTC 64k, ETH 3.1k"); err != nil {
 		t.Fatal(err)
 	}
-	pending, err = db.PendingForwards(ProgressPrefix, 10)
+	pending, err = db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestAPersonsOwnWordsAreNeverSentBackToThem(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := db.PendingForwards(ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +142,10 @@ func TestNothingOlderThanTheBindingTravels(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Bound now, with its real created_at: everything above predates it.
-	if err := db.BindChannelTelegram(GeneralChannelID, 4242, ForwardAll); err != nil {
+	if err := db.BindChannelTelegram(GeneralChannelID, "bomclaw", 4242, ForwardAll); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := db.PendingForwards(ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,10 +165,10 @@ func TestASettledLineIsNotReconsidered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded(m.ID, 8821); err != nil {
+	if err := db.MarkForwarded("bomclaw", m.ID, 8821); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := db.PendingForwards(ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,10 +184,10 @@ func TestASettledLineIsNotReconsidered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded(other.ID, 0); err != nil {
+	if err := db.MarkForwarded("bomclaw", other.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	pending, err = db.PendingForwards(ProgressPrefix, 10)
+	pending, err = db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,11 +207,11 @@ func TestATelegramMessageFindsItsLineBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded(m.ID, 8821); err != nil {
+	if err := db.MarkForwarded("bomclaw", m.ID, 8821); err != nil {
 		t.Fatal(err)
 	}
 
-	found, err := db.ForwardedMessage(8821)
+	found, err := db.ForwardedMessage("bomclaw", 8821)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestATelegramMessageFindsItsLineBack(t *testing.T) {
 	}
 
 	// Anything else the owner types must keep meaning "talk to the agent".
-	found, err = db.ForwardedMessage(9999)
+	found, err = db.ForwardedMessage("bomclaw", 9999)
 	if err != nil {
 		t.Fatalf("an unknown Telegram id must be an ordinary answer, not an error: %v", err)
 	}
@@ -231,10 +231,10 @@ func TestATelegramMessageFindsItsLineBack(t *testing.T) {
 
 func TestBindRejectsAModeNobodyImplements(t *testing.T) {
 	db := testDB(t)
-	if err := db.BindChannelTelegram(GeneralChannelID, 4242, "sometimes"); err == nil {
+	if err := db.BindChannelTelegram(GeneralChannelID, "bomclaw", 4242, "sometimes"); err == nil {
 		t.Fatal("accepted an unknown mode; it would silently forward nothing")
 	}
-	if err := db.BindChannelTelegram(GeneralChannelID, 0, ForwardAll); err == nil {
+	if err := db.BindChannelTelegram(GeneralChannelID, "bomclaw", 0, ForwardAll); err == nil {
 		t.Fatal("accepted chat id 0, which sends every line nowhere")
 	}
 }
@@ -248,7 +248,7 @@ func TestRebindingKeepsTheCutOff(t *testing.T) {
 	if err != nil || before == nil {
 		t.Fatalf("binding: %+v %v", before, err)
 	}
-	if err := db.BindChannelTelegram(GeneralChannelID, 4242, ForwardAll); err != nil {
+	if err := db.BindChannelTelegram(GeneralChannelID, "bomclaw", 4242, ForwardAll); err != nil {
 		t.Fatal(err)
 	}
 	after, err := db.ChannelBinding(GeneralChannelID)
@@ -275,7 +275,7 @@ func TestUnbindingStopsEverything(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := db.PendingForwards(ProgressPrefix, 10)
+	pending, err := db.PendingForwards("bomclaw", ProgressPrefix, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,5 +288,77 @@ func TestUnbindingStopsEverything(t *testing.T) {
 	}
 	if b != nil {
 		t.Errorf("binding survived the unbind: %+v", b)
+	}
+}
+
+// Three agents on this machine, three Telegram bots, and message ids that
+// collide across them: @Goterm_bot's message 8821 and @Goterm3_bot's 8821 are
+// different messages. Both halves of the round trip have to know whose bot
+// they are talking about.
+func TestTwoBotsDoNotReadEachOthersMessageIds(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw3")
+	bind(t, db, GeneralChannelID, ForwardAll)
+
+	mine, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: "của agent 1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw3", Body: "của agent 3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same Telegram id from two different bots.
+	if err := db.MarkForwarded("bomclaw", mine.ID, 8821); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkForwarded("bomclaw3", theirs.ID, 8821); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.ForwardedMessage("bomclaw", 8821)
+	if err != nil || got == nil {
+		t.Fatalf("lookup: %+v %v", got, err)
+	}
+	if got.ID != mine.ID {
+		t.Fatalf("a reply to agent 1's bot was matched against another bot's line —\n" +
+			"it would be answered into a thread the person was not even looking at")
+	}
+	got, err = db.ForwardedMessage("bomclaw3", 8821)
+	if err != nil || got == nil || got.ID != theirs.ID {
+		t.Fatalf("agent 3's own line was not found by its own id: %+v %v", got, err)
+	}
+}
+
+// A room is carried by exactly one bot. Every gateway runs the same sweep, and
+// if they all saw every pending line they would race for it — the loser's send
+// having already gone out, which is two notifications for one line.
+func TestOnlyTheBoundAgentSeesTheRoom(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw3")
+	bind(t, db, GeneralChannelID, ForwardAll)
+
+	if _, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw3", Body: "một dòng",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := db.PendingForwards("bomclaw", ProgressPrefix, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine) != 1 {
+		t.Fatalf("the bound agent cannot see its own room: %+v", mine)
+	}
+	theirs, err := db.PendingForwards("bomclaw3", ProgressPrefix, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(theirs) != 0 {
+		t.Fatalf("a second gateway would race to send the same line: %+v", theirs)
 	}
 }

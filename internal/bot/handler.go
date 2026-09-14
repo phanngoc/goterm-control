@@ -1175,10 +1175,10 @@ func (h *Handler) SendChannelLine(chatID int64, text string) (int64, error) {
 // back to that person — the loop is closed by who wrote it, not by a flag
 // somebody has to remember to set.
 func (h *Handler) channelReply(msg *tgbotapi.Message) bool {
-	if h.coord == nil || msg.ReplyToMessage == nil || strings.TrimSpace(msg.Text) == "" {
+	if h.coord == nil || h.agentID == "" || msg.ReplyToMessage == nil || strings.TrimSpace(msg.Text) == "" {
 		return false
 	}
-	src, err := h.coord.ForwardedMessage(int64(msg.ReplyToMessage.MessageID))
+	src, err := h.coord.ForwardedMessage(h.agentID, int64(msg.ReplyToMessage.MessageID))
 	if err != nil {
 		log.Printf("channel reply: look up %d: %v", msg.ReplyToMessage.MessageID, err)
 		return false

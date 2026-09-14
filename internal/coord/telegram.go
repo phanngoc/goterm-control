@@ -35,9 +35,16 @@ const (
 // ForwardModes is every accepted mode, for error messages and the CLI.
 var ForwardModes = []string{ForwardAll, ForwardMentions, ForwardOff}
 
-// TelegramBinding ties one channel to one Telegram chat.
+// TelegramBinding ties one channel to one Telegram chat, through one agent's
+// bot.
+//
+// AgentID is not bookkeeping. Every agent on this machine runs its own bot, so
+// "which chat" does not identify a conversation on its own — three bots can all
+// reach the same person, and a message id only means something to the bot that
+// sent it. The binding names the bot, and everything downstream is scoped by it.
 type TelegramBinding struct {
 	ChannelID string    `json:"channel_id"`
+	AgentID   string    `json:"agent_id"`
 	ChatID    int64     `json:"chat_id"`
 	Mode      string    `json:"mode"`
 	CreatedAt time.Time `json:"created_at"`
@@ -69,9 +76,12 @@ func BindModeValid(mode string) bool {
 // the mode and the chat but keeps created_at, which is the cut-off for what
 // gets forwarded: resetting it on a mode change would replay the room's
 // backlog onto somebody's phone.
-func (db *DB) BindChannelTelegram(channelID string, chatID int64, mode string) error {
+func (db *DB) BindChannelTelegram(channelID, agentID string, chatID int64, mode string) error {
 	if mode == "" {
 		mode = ForwardMentions
+	}
+	if agentID == "" {
+		return fmt.Errorf("coord: a binding must name the agent whose bot carries it")
 	}
 	if !BindModeValid(mode) {
 		return fmt.Errorf("coord: forward mode must be all, mentions or off (got %q)", mode)
@@ -83,10 +93,11 @@ func (db *DB) BindChannelTelegram(channelID string, chatID int64, mode string) e
 		return err
 	}
 	now := ts(time.Now())
-	_, err := db.conn.Exec(`INSERT INTO channel_telegram (channel_id, chat_id, mode, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(channel_id) DO UPDATE SET chat_id = excluded.chat_id, mode = excluded.mode, updated_at = excluded.updated_at`,
-		channelID, chatID, mode, now, now)
+	_, err := db.conn.Exec(`INSERT INTO channel_telegram (channel_id, agent_id, chat_id, mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(channel_id) DO UPDATE SET agent_id = excluded.agent_id, chat_id = excluded.chat_id,
+			mode = excluded.mode, updated_at = excluded.updated_at`,
+		channelID, agentID, chatID, mode, now, now)
 	if err != nil {
 		return fmt.Errorf("bind %s to telegram: %w", channelID, err)
 	}
@@ -104,11 +115,11 @@ func (db *DB) UnbindChannelTelegram(channelID string) error {
 
 // ChannelBinding is one channel's binding, or nil when it has none.
 func (db *DB) ChannelBinding(channelID string) (*TelegramBinding, error) {
-	row := db.conn.QueryRow(`SELECT channel_id, chat_id, mode, created_at
+	row := db.conn.QueryRow(`SELECT channel_id, agent_id, chat_id, mode, created_at
 		FROM channel_telegram WHERE channel_id = ?`, channelID)
 	var b TelegramBinding
 	var created string
-	switch err := row.Scan(&b.ChannelID, &b.ChatID, &b.Mode, &created); {
+	switch err := row.Scan(&b.ChannelID, &b.AgentID, &b.ChatID, &b.Mode, &created); {
 	case err == sql.ErrNoRows:
 		return nil, nil
 	case err != nil:
@@ -120,7 +131,7 @@ func (db *DB) ChannelBinding(channelID string) (*TelegramBinding, error) {
 
 // ChannelBindings lists every binding, for `bomclaw ch bind` with no arguments.
 func (db *DB) ChannelBindings() ([]TelegramBinding, error) {
-	rows, err := db.conn.Query(`SELECT channel_id, chat_id, mode, created_at
+	rows, err := db.conn.Query(`SELECT channel_id, agent_id, chat_id, mode, created_at
 		FROM channel_telegram ORDER BY channel_id`)
 	if err != nil {
 		return nil, fmt.Errorf("bindings: %w", err)
@@ -130,7 +141,7 @@ func (db *DB) ChannelBindings() ([]TelegramBinding, error) {
 	for rows.Next() {
 		var b TelegramBinding
 		var created string
-		if err := rows.Scan(&b.ChannelID, &b.ChatID, &b.Mode, &created); err != nil {
+		if err := rows.Scan(&b.ChannelID, &b.AgentID, &b.ChatID, &b.Mode, &created); err != nil {
 			return nil, err
 		}
 		b.CreatedAt = parseTS(created)
@@ -157,7 +168,12 @@ func (db *DB) ChannelBindings() ([]TelegramBinding, error) {
 //
 // Nothing older than the binding. Binding a room that has been busy all week
 // should not empty that week onto a phone.
-func (db *DB) PendingForwards(progressPrefix string, limit int) ([]Forward, error) {
+//
+// And only this agent's bindings. Three gateways run this loop; if they all saw
+// every pending line they would race for it, and the loser's send would already
+// have gone out — two notifications for one line, from two different bots.
+// Scoping by agent removes the race instead of guarding it.
+func (db *DB) PendingForwards(agentID, progressPrefix string, limit int) ([]Forward, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
@@ -167,12 +183,13 @@ func (db *DB) PendingForwards(progressPrefix string, limit int) ([]Forward, erro
 		JOIN channel_telegram b ON b.channel_id = m.channel_id
 		JOIN channels c         ON c.id = m.channel_id
 		WHERE m.forwarded_at = ''
+		  AND b.agent_id = ?
 		  AND b.mode <> ?
 		  AND m.author_kind = ?
 		  AND m.body NOT LIKE ? || '%'
 		  AND m.created_at > b.created_at
 		ORDER BY m.created_at
-		LIMIT ?`, ForwardOff, MemberAgent, progressPrefix, limit)
+		LIMIT ?`, agentID, ForwardOff, MemberAgent, progressPrefix, limit)
 	if err != nil {
 		return nil, fmt.Errorf("pending forwards: %w", err)
 	}
@@ -225,9 +242,10 @@ func (db *DB) OwnerFollows(messageID, threadRoot string) (bool, error) {
 // not to send it. Both are recorded the same way on purpose: a line that mode
 // filtered out must not be reconsidered on every later sweep, because the
 // answer would never change and the work would repeat forever.
-func (db *DB) MarkForwarded(messageID string, tgMessageID int64) error {
-	res, err := db.conn.Exec(`UPDATE channel_messages SET forwarded_at = ?, tg_message_id = ?
-		WHERE id = ? AND forwarded_at = ''`, ts(time.Now()), tgMessageID, messageID)
+func (db *DB) MarkForwarded(agentID, messageID string, tgMessageID int64) error {
+	res, err := db.conn.Exec(`UPDATE channel_messages
+		SET forwarded_at = ?, tg_message_id = ?, forwarded_by = ?
+		WHERE id = ? AND forwarded_at = ''`, ts(time.Now()), tgMessageID, agentID, messageID)
 	if err != nil {
 		return fmt.Errorf("mark %s forwarded: %w", messageID, err)
 	}
@@ -243,12 +261,18 @@ func (db *DB) MarkForwarded(messageID string, tgMessageID int64) error {
 // nil when that Telegram message was not one of ours. Nil is the ordinary
 // answer, not an error: most of what the owner types is not a reply to a
 // forwarded line, and that has to keep meaning "talk to the model".
-func (db *DB) ForwardedMessage(tgMessageID int64) (*ChannelMessage, error) {
-	if tgMessageID == 0 {
+//
+// Scoped to one agent because a Telegram message id belongs to the bot that
+// sent it. Three bots serve this machine, and their ids collide freely — an
+// unscoped lookup would match another bot's line and answer into a thread the
+// person was not even looking at.
+func (db *DB) ForwardedMessage(agentID string, tgMessageID int64) (*ChannelMessage, error) {
+	if tgMessageID == 0 || agentID == "" {
 		return nil, nil
 	}
 	var id string
-	row := db.conn.QueryRow(`SELECT id FROM channel_messages WHERE tg_message_id = ?`, tgMessageID)
+	row := db.conn.QueryRow(`SELECT id FROM channel_messages
+		WHERE forwarded_by = ? AND tg_message_id = ?`, agentID, tgMessageID)
 	switch err := row.Scan(&id); {
 	case err == sql.ErrNoRows:
 		return nil, nil
