@@ -714,12 +714,21 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"[--body ...] [--to <agent>]` (at most %d unfinished at once, depth %d of %d here), then "+
 		"`bomclaw task block --id %s --on children` and stop. You are called back with every child's result "+
 		"once they have all finished. Sub-tasks are for parallel work only, never for continuing your own.\n\n"+
+		"Anything the work PRODUCED — a report, a patch, a page, a file somebody will open — is filed "+
+		"with the task, not described in prose:\n\n"+
+		"    bomclaw artifact put --task %s --title \"<what it is>\" --file <path>\n"+
+		"    bomclaw artifact put --task %s --title \"<what it is>\" --kind link --url <url>\n\n"+
+		"A path written into a sentence is findable for about a day: the next run has a different working "+
+		"directory, the person reading this is looking at a board and not a terminal, and nothing survives "+
+		"the file being moved. An artifact is found by id, shows up beside the task, and can be handed to a "+
+		"child task as an input.\n\n"+
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+
 		"the requesting agent reads, so state what you did and what you found. If you cannot proceed without "+
 		"a person: `bomclaw task block --id %s --on human --note \"<exactly what you need>\"` and stop.\n\n"+
 		"The final reply is the deliverable, not a plan — do not ask follow-up questions, there is nobody "+
 		"waiting to answer them; use `task block` instead.",
-		minutes, t.ID, t.ID, coord.MaxOpenChildren, t.Depth, coord.MaxDepth, t.ID, t.ID, t.ID)
+		minutes, t.ID, t.ID, coord.MaxOpenChildren, t.Depth, coord.MaxDepth, t.ID,
+		t.ID, t.ID, t.ID, t.ID)
 	return b.String()
 }
 
