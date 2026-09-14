@@ -175,3 +175,64 @@ func TestAFinishedTaskKeepsTheProjectItRanUnder(t *testing.T) {
 		t.Error("moved a finished task, so its history now names a project the work never ran in")
 	}
 }
+
+// A task can carry several open run rows: one from a restart two deploys ago
+// that the orphan reaper has not swept yet, and the live one. Refunding once
+// per row would hand back attempts nobody lost — and this is not theoretical,
+// the task that prompted this fix had exactly two.
+func TestOnlyTheLiveClaimGetsItsAttemptBack(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+	task, err := db.CreateTask(NewTask{CreatedBy: "bomclaw", Title: "việc dài, hai lần deploy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim 1 is killed by a restart, and its run row is left open.
+	first, err := db.ClaimTask("bomclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.StartRun(first.ID, "bomclaw", first.Attempts, ""); err != nil {
+		t.Fatal(err)
+	}
+	// The lease lapses and the reaper reclaims it, charging attempt 2, without
+	// anything having closed run 1.
+	if _, err := db.conn.Exec(`UPDATE tasks SET state = ?, lease_until = ? WHERE id = ?`,
+		TaskSubmitted, ts(time.Now().Add(-time.Minute)), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.ClaimTask("bomclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.StartRun(second.ID, "bomclaw", second.Attempts, ""); err != nil {
+		t.Fatal(err)
+	}
+	if second.Attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", second.Attempts)
+	}
+
+	if _, err := db.ReleaseInterruptedRuns("bomclaw"); err != nil {
+		t.Fatal(err)
+	}
+	back, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1: one open run is the live claim and the other is\n"+
+			"a leftover — refunding for both hands back an attempt nobody lost", back.Attempts)
+	}
+	// Both rows are still closed out: a run that says "running" forever is its
+	// own lie, whichever claim it belonged to.
+	runs, err := db.TaskRuns(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.Liveness == RunRunning {
+			t.Errorf("run %s (attempt %d) still claims to be running", r.ID, r.Attempt)
+		}
+	}
+}

@@ -37,12 +37,14 @@ func (db *DB) ReleaseInterruptedRuns(agentID string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("interrupted runs of %s: %w", agentID, err)
 	}
-	type open struct{ taskID, runID string }
+	type open struct {
+		taskID, runID string
+		attempt       int
+	}
 	var found []open
 	for rows.Next() {
 		var o open
-		var attempt int
-		if err := rows.Scan(&o.taskID, &o.runID, &attempt); err != nil {
+		if err := rows.Scan(&o.taskID, &o.runID, &o.attempt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -61,16 +63,23 @@ func (db *DB) ReleaseInterruptedRuns(agentID string) ([]string, error) {
 			WHERE id = ? AND liveness = ?`, RunInterrupted, ts(now), o.runID, RunRunning); err != nil {
 			return freed, fmt.Errorf("close interrupted run %s: %w", o.runID, err)
 		}
-		// Only the task this agent is still holding. One that has already moved
-		// on — canceled by a person, reclaimed elsewhere — is not ours to touch,
-		// and the run row above is the whole correction it needed.
+		// Only the task this agent is still holding, and only for the claim
+		// this run IS. attempts is the fencing token: a task can carry several
+		// open run rows — one from a restart two deploys ago that the reaper
+		// has not swept yet — and refunding once per row would hand back
+		// attempts nobody lost. The stale rows are closed above and leave the
+		// counters alone, which is exactly what ReapOrphanRuns does with them.
+		//
+		// A task that has already moved on — canceled by a person, reclaimed
+		// elsewhere — is not ours to touch either, and the run row above is the
+		// whole correction it needed.
 		res, err := db.conn.Exec(`UPDATE tasks SET
 				state       = ?,
 				lease_until = ?,
 				attempts    = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
 				updated_at  = ?
-			WHERE id = ? AND state = ? AND claimed_by = ?`,
-			TaskSubmitted, ts(now.Add(-time.Second)), ts(now), o.taskID, TaskWorking, agentID)
+			WHERE id = ? AND state = ? AND claimed_by = ? AND attempts = ?`,
+			TaskSubmitted, ts(now.Add(-time.Second)), ts(now), o.taskID, TaskWorking, agentID, o.attempt)
 		if err != nil {
 			return freed, fmt.Errorf("requeue %s: %w", o.taskID, err)
 		}
