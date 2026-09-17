@@ -34,6 +34,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/reporter"
 	"github.com/ngocp/goterm-control/internal/scheduler"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/skills"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/taskrunner"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -265,6 +266,16 @@ func runGateway(args []string) {
 		if err := os.Setenv("BOMCLAW_OWNER_CHAT_ID", fmt.Sprint(cfg.Security.AllowedUserIDs[0])); err != nil {
 			log.Printf("gateway: could not export BOMCLAW_OWNER_CHAT_ID: %v", err)
 		}
+	}
+
+	// The toolkit this agent starts with. Seeded once into its workspace and
+	// never overwritten: an agent revises its own copies, and re-seeding on
+	// every start would undo that silently, on a schedule nobody chose.
+	if n, err := skills.EnsureDefaults(cfg.Claude.Workspace); err != nil {
+		log.Printf("skills: %v", err)
+	} else if len(n) > 0 {
+		log.Printf("skills: seeded %s into %s", strings.Join(n, ", "),
+			filepath.Join(cfg.Claude.Workspace, skills.Dir))
 	}
 
 	// One-shot text backend (session titles, `bomclaw send` fallback). Which

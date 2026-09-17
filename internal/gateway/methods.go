@@ -217,6 +217,16 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelCreate(deps, params)
 		case "channels.read":
 			return handleChannelRead(deps, params)
+		case "skills.list":
+			return handleSkillsList(deps, params)
+		case "skills.get":
+			return handleSkillGet(deps, params)
+		case "skills.install":
+			return handleSkillInstall(deps, params)
+		case "skills.remove":
+			return handleSkillRemove(deps, params)
+		case "skills.copy":
+			return handleSkillCopy(deps, params)
 		case "artifacts.list":
 			return handleArtifactsList(deps, params)
 		case "artifacts.get":

@@ -7,6 +7,7 @@ import ChannelView from './ChannelView'
 import NotesPane from './NotesPane'
 import SettingsPane from './SettingsPane'
 import SchedulesPane from './SchedulesPane'
+import SkillsPane from './SkillsPane'
 import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -20,6 +21,7 @@ const LABELS: Record<Pane, string> = {
   schedules: 'Schedules',
   notes: 'Notes',
   messages: 'Messages',
+  skills: 'Skills',
   settings: 'Settings',
 }
 
@@ -116,6 +118,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
         )}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
+        {pane === 'skills' && <SkillsPane call={call} />}
         {pane === 'settings' && <SettingsPane call={call} />}
         {pane === 'messages' && (
           <ChannelView
