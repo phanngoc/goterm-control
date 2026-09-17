@@ -72,6 +72,12 @@ type Skill struct {
 	Path string `json:"path"`
 	// Dir is the skill's folder, for anything it ships alongside SKILL.md.
 	Dir string `json:"dir"`
+	// Category is the folder a nested skill sits under, or "" for one at the
+	// top. hermes-agent groups its skills that way (skills/<cat>/<name>/), and
+	// an agent running on that backend writes into this same folder — so the
+	// shape has to be read here or its work would be invisible to the hub, the
+	// roster and its own index.
+	Category string `json:"category,omitempty"`
 }
 
 // frontmatter is the header of a SKILL.md. Only two fields are read: a skill
@@ -107,20 +113,53 @@ func Load(workspace string) ([]Skill, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		path := filepath.Join(dir, File)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue // a folder with no SKILL.md is just a folder
+		if s, ok := read(dir, e.Name(), ""); ok {
+			out = append(out, s)
+			continue
 		}
-		s := parse(string(data))
-		if s.Name == "" {
-			s.Name = e.Name()
+		// No SKILL.md here: this may be a category holding skills, the layout
+		// hermes-agent writes. One level only, and only when the level above
+		// held no skill of its own — deeper than that is somebody's notes
+		// folder, and walking it would turn every stray SKILL.md on disk into
+		// something the agent believes it can do.
+		for _, sub := range subdirs(dir) {
+			if s, ok := read(filepath.Join(dir, sub), sub, e.Name()); ok {
+				out = append(out, s)
+			}
 		}
-		s.Path, s.Dir = path, dir
-		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// read loads one skill folder, reporting whether it held a skill at all.
+func read(dir, fallbackName, category string) (Skill, bool) {
+	path := filepath.Join(dir, File)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Skill{}, false // a folder with no SKILL.md is just a folder
+	}
+	s := parse(string(data))
+	if s.Name == "" {
+		s.Name = fallbackName
+	}
+	s.Path, s.Dir, s.Category = path, dir, category
+	return s, true
+}
+
+// subdirs lists a directory's child directories, dotfiles excluded.
+func subdirs(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
 }
 
 // parse pulls the frontmatter out of a SKILL.md.

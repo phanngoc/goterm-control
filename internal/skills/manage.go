@@ -42,6 +42,11 @@ func ValidateName(name string) error {
 
 // dirFor is the one place a skill name becomes a path, and the only thing
 // standing between a name and the rest of the disk.
+//
+// It answers where a skill of this name WOULD go. Where an existing one
+// actually IS may be one level deeper — a backend with its own self-improvement
+// loop writes skills/<category>/<name>/ — so anything touching a skill that is
+// already there goes through locate instead.
 func dirFor(workspace, name string) (string, error) {
 	if err := ValidateName(name); err != nil {
 		return "", err
@@ -50,6 +55,30 @@ func dirFor(workspace, name string) (string, error) {
 		return "", fmt.Errorf("skills: this agent has no workspace")
 	}
 	return filepath.Join(workspace, Dir, name), nil
+}
+
+// locate finds an existing skill by name, whichever layout it is in, and
+// reports whether it exists at all.
+//
+// By name rather than by path because a name is what everything else in the
+// system uses — the index, the roster, the hub, the agent itself. A skill the
+// backend filed under a category of its own choosing is the same skill, and
+// having to know its category to remove it would make the hub useless for
+// exactly the skills the loop produced.
+func locate(workspace, name string) (dir string, found bool, err error) {
+	if err := ValidateName(name); err != nil {
+		return "", false, err
+	}
+	list, err := Load(workspace)
+	if err != nil {
+		return "", false, err
+	}
+	for _, s := range list {
+		if s.Name == name {
+			return s.Dir, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // Install writes a skill into an agent's workspace, replacing what is there.
@@ -67,9 +96,17 @@ func Install(workspace, name string, body []byte) error {
 		return fmt.Errorf("skills: %q is %d bytes (max %d) — instructions this long "+
 			"want to be a file the skill points at", name, len(body), MaxSkillBytes)
 	}
-	dir, err := dirFor(workspace, name)
+	// An existing skill is replaced where it already lives, category and all.
+	// Writing a second copy at the top level would leave the agent holding two
+	// skills of one name, and the index would show both.
+	dir, found, err := locate(workspace, name)
 	if err != nil {
 		return err
+	}
+	if !found {
+		if dir, err = dirFor(workspace, name); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("skills: mkdir %s: %w", dir, err)
@@ -105,11 +142,11 @@ func Install(workspace, name string, body []byte) error {
 // restored. An agent's OWN revisions to it are lost, which is why the hub
 // should say so before doing it.
 func Remove(workspace, name string) error {
-	dir, err := dirFor(workspace, name)
+	dir, found, err := locate(workspace, name)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(dir, File)); os.IsNotExist(err) {
+	if !found {
 		return fmt.Errorf("skills: this agent does not have %q", name)
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -121,9 +158,12 @@ func Remove(workspace, name string) error {
 // Read returns one agent's copy of a skill, for showing it and for copying it
 // somewhere else.
 func Read(workspace, name string) ([]byte, error) {
-	dir, err := dirFor(workspace, name)
+	dir, found, err := locate(workspace, name)
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("skills: this agent does not have %q", name)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, File))
 	if err != nil {

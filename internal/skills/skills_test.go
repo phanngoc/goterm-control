@@ -150,3 +150,83 @@ func TestSkillsComeBackInAStableOrder(t *testing.T) {
 			"which costs a prompt-cache hit every time", got)
 	}
 }
+
+// hermes-agent groups its skills as skills/<category>/<name>/SKILL.md, and an
+// agent running on that backend writes into this same folder. Without reading
+// that shape, everything the backend's own self-improvement loop produced would
+// be invisible to the hub, to the roster, and to the agent's own index.
+func TestASkillNestedUnderACategoryIsFound(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, Dir, "devops", "deploy")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, File),
+		[]byte("---\nname: deploy\ndescription: 'khi cần đẩy bản mới'\n---\nchi tiết\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ws, "browser", "---\nname: browser\ndescription: 'trình duyệt'\n---\n")
+
+	got, err := Load(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d skills, want the flat one and the nested one: %+v", len(got), got)
+	}
+	var nested *Skill
+	for i := range got {
+		if got[i].Name == "deploy" {
+			nested = &got[i]
+		}
+	}
+	if nested == nil {
+		t.Fatal("the nested skill was not found")
+	}
+	if nested.Category != "devops" {
+		t.Errorf("category = %q, want devops", nested.Category)
+	}
+	if !strings.Contains(Index(got), "deploy") {
+		t.Error("a nested skill never reaches the agent's own prompt")
+	}
+}
+
+// One level, and only where the level above held no skill of its own. Deeper
+// than that is somebody's notes folder, and walking it would turn every stray
+// SKILL.md on disk into something the agent believes it can do.
+func TestNestingStopsAtOneLevel(t *testing.T) {
+	ws := t.TempDir()
+	deep := filepath.Join(ws, Dir, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, File),
+		[]byte("---\nname: buried\ndescription: d\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := Load(ws)
+	for _, s := range got {
+		if s.Name == "buried" {
+			t.Fatal("walked deeper than one level")
+		}
+	}
+}
+
+// A skill that has its own SKILL.md is a skill, not a category — even when it
+// also ships folders of its own (references/, scripts/, which hermes skills do).
+func TestAFolderWithBothIsASkillNotACategory(t *testing.T) {
+	ws := t.TempDir()
+	write(t, ws, "research", "---\nname: research\ndescription: 'tra cứu'\n---\n")
+	inner := filepath.Join(ws, Dir, "research", "references", "notes")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, File),
+		[]byte("---\nname: stray\ndescription: d\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := Load(ws)
+	if len(got) != 1 || got[0].Name != "research" {
+		t.Fatalf("a skill's own support folder was read as a category: %+v", got)
+	}
+}

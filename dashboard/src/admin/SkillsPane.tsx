@@ -115,6 +115,14 @@ function SkillRow({ skill, agent, peers, onEdit, onRemove, onCopy }: {
             đã sửa
           </span>
         )}
+        {skill.category && (
+          <span
+            title="Backend của agent tự xếp skill này vào nhóm đó"
+            className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-500 font-mono"
+          >
+            {skill.category}
+          </span>
+        )}
         {!skill.bundled && (
           <span className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-500">riêng</span>
         )}

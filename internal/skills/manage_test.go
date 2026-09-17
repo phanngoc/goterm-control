@@ -165,3 +165,60 @@ func TestABundledDefaultCanBeRestored(t *testing.T) {
 		t.Error("returned a bundled skill that does not exist")
 	}
 }
+
+// A skill the backend's own loop filed under a category is the same skill. The
+// hub has to reach it by name — having to know its category to remove it would
+// make the hub useless for exactly the skills the loop produced.
+func TestTheHubReachesASkillTheBackendNested(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, Dir, "devops", "deploy")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "---\nname: deploy\ndescription: 'bản hermes tự viết'\n---\nthân\n"
+	if err := os.WriteFile(filepath.Join(dir, File), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(ws, "deploy")
+	if err != nil {
+		t.Fatalf("cannot read a nested skill by name: %v", err)
+	}
+	if string(got) != original {
+		t.Fatalf("read back %q", got)
+	}
+
+	// Replacing it keeps it where it lives. A second copy at the top level
+	// would leave the agent holding two skills of one name.
+	improved := "---\nname: deploy\ndescription: 'đã sửa'\n---\nbản mới\n"
+	if err := Install(ws, "deploy", []byte(improved)); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := Load(ws)
+	if len(list) != 1 {
+		t.Fatalf("installing over a nested skill made %d of them: %+v", len(list), list)
+	}
+	if list[0].Category != "devops" {
+		t.Errorf("the skill moved out of its category: %+v", list[0])
+	}
+	back, _ := Read(ws, "deploy")
+	if string(back) != improved {
+		t.Errorf("the replacement did not land: %q", back)
+	}
+
+	// And it can be copied to a peer, which is the whole point of the hub.
+	other := t.TempDir()
+	if err := Copy(ws, other, "deploy"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := Read(other, "deploy"); err != nil || string(b) != improved {
+		t.Fatalf("the copy did not arrive: %q %v", b, err)
+	}
+
+	if err := Remove(ws, "deploy"); err != nil {
+		t.Fatalf("cannot remove a nested skill by name: %v", err)
+	}
+	if list, _ := Load(ws); len(list) != 0 {
+		t.Fatalf("still there: %+v", list)
+	}
+}
