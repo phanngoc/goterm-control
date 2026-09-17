@@ -182,6 +182,24 @@ func (db *DB) EnsureDM(a, b string) (*Channel, error) {
 	return db.CreateChannel(DMChannelID(a, b), name, ChannelDM, "", a, members)
 }
 
+// EnsureOwnerDM is the private room between the owner and one agent.
+//
+// Every DM until now was agent↔agent, so the dashboard's Direct list was empty:
+// the owner was not a member of anything. "Message this one privately" had no
+// room to happen in — the only way to reach one agent alone was its Telegram
+// bot, and the dashboard could not even name which bot that was.
+func (db *DB) EnsureOwnerDM(agentID string) (*Channel, error) {
+	if agentID == "" {
+		return nil, fmt.Errorf("coord: a DM needs an agent")
+	}
+	return db.CreateChannel(
+		DMChannelID(OwnerUserID, agentID),
+		agentID,
+		ChannelDM, "", OwnerUserID,
+		[]Member{{Kind: MemberUser, ID: OwnerUserID}, {Kind: MemberAgent, ID: agentID}},
+	)
+}
+
 // JoinChannel adds a member. Idempotent: re-joining does not reset the read
 // cursor, which would resurrect every message the member had caught up on.
 func (db *DB) JoinChannel(channelID, kind, id string) error {

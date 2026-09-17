@@ -15,8 +15,11 @@ type Call = (method: string, params?: any) => Promise<any>
 
 const PAGE = 30
 
-export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
+export default function ChannelView({ call, agents, selfID, bots, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
   call: Call; agents: string[]; selfID: string
+  /** bots maps an agent id to its own Telegram bot name, so a direct room can
+   *  offer the private chat that agent actually answers on. */
+  bots?: Record<string, string>
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
   /** openFilesFor is a project whose folder should open on arrival — the board
    *  sends a task here when someone asks where its work landed. */
@@ -242,7 +245,10 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         ))}
         <div className="px-3 py-2 mt-2 text-[11px] uppercase tracking-wide text-gray-500">Direct</div>
         {channels.filter(c => c.kind === 'dm').map(c => (
-          <ChannelRow key={c.id} c={c} active={c.id === active} onPick={() => { setActive(c.id); setThread(null); setThreadRoot('') }} />
+          <ChannelRow
+            key={c.id} c={c} active={c.id === active} bot={bots?.[c.name]}
+            onPick={() => { setActive(c.id); setThread(null); setThreadRoot('') }}
+          />
         ))}
         {channels.length === 0 && (
           <div className="px-3 py-2 text-xs text-gray-600">No channels yet.</div>
@@ -365,12 +371,21 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   )
 }
 
-function ChannelRow({ c, active, onPick }: { c: Channel; active: boolean; onPick: () => void }) {
+function ChannelRow({ c, active, onPick, bot }: {
+  c: Channel; active: boolean; onPick: () => void
+  /** bot is the @name of this agent's own Telegram bot, for a direct room. Each
+   *  agent here answers on a different one, so "message this one on my phone"
+   *  is a different chat per agent and the row has to say which. */
+  bot?: string
+}) {
   return (
+    <div className={`group relative flex items-center ${
+      active ? 'bg-gray-800' : 'hover:bg-gray-800/50'
+    }`}>
     <button
       onClick={onPick}
-      className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 ${
-        active ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'
+      className={`min-w-0 flex-1 text-left px-3 py-1.5 text-sm flex items-center gap-2 ${
+        active ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'
       }`}
     >
       <span className="truncate">{c.kind === 'dm' ? c.name : `# ${c.name}`}</span>
@@ -382,6 +397,19 @@ function ChannelRow({ c, active, onPick }: { c: Channel; active: boolean; onPick
         <span className="ml-auto text-[10px] px-1.5 rounded-full bg-gray-700 text-gray-300">{c.unread}</span>
       )}
     </button>
+    {bot && (
+      <a
+        href={`https://t.me/${bot}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()}
+        title={`Nhắn riêng agent này trên Telegram — @${bot}`}
+        className="shrink-0 px-2 py-1.5 text-[11px] text-gray-600 hover:text-sky-300"
+      >
+        ↗
+      </a>
+    )}
+    </div>
   )
 }
 

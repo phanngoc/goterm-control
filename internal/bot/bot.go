@@ -43,6 +43,18 @@ type Bot struct {
 // through the same path as Telegram messages (see Handler.RunTurn).
 func (b *Bot) Handler() *Handler { return b.handler }
 
+// Username is the @name of the bot this agent answers on, without the @.
+//
+// Each agent here has its own bot, so "message this one privately" is a
+// different chat per agent. The dashboard needs the name to link to it, and the
+// only place it is reliably known is here — config holds a token.
+func (b *Bot) Username() string {
+	if b == nil || b.api == nil {
+		return ""
+	}
+	return b.api.Self.UserName
+}
+
 // Memory is this agent's own MEMORY.md and daily notes.
 //
 // Exposed because the task runner needs the same one. A second Manager built

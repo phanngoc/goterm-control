@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -492,6 +492,16 @@ var v6Columns = []struct{ name, decl string }{
 	{"acceptance", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v10AgentColumns: which Telegram bot this agent answers on.
+//
+// Every agent here runs its own bot now, so "message this agent privately" is a
+// different chat per agent — and the dashboard had no way to name which. Read
+// from the bot itself once it logs in rather than from config: config holds a
+// token, and the username is what a person clicks.
+var v10AgentColumns = []struct{ name, decl string }{
+	{"telegram_bot", "TEXT NOT NULL DEFAULT ''"},
+}
+
 // v9MessageColumns: what has left the room, and what it became out there.
 //
 // forwarded_at is "this line has been decided about", not "this line was sent"
@@ -580,6 +590,11 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v9BindingColumns {
 		if err := db.ensureColumn("channel_telegram", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v10AgentColumns {
+		if err := db.ensureColumn("agents", c.name, c.decl); err != nil {
 			return err
 		}
 	}
