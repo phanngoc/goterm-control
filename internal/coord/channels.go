@@ -182,6 +182,39 @@ func (db *DB) EnsureDM(a, b string) (*Channel, error) {
 	return db.CreateChannel(DMChannelID(a, b), name, ChannelDM, "", a, members)
 }
 
+// ArchiveChannel hides a room without destroying what was said in it.
+//
+// Deliberately not a delete. The rooms this exists to clean up were created by
+// a bug — a message id passed where an agent id belonged — and the lines inside
+// them are real things an agent said. Hiding the room costs nothing and keeps
+// them; deleting it would throw away the only record of work that was actually
+// done, to tidy a sidebar.
+func (db *DB) ArchiveChannel(channelID string) error {
+	res, err := db.conn.Exec(`UPDATE channels SET archived_at = ? WHERE id = ? AND archived_at = ''`,
+		ts(time.Now()), channelID)
+	if err != nil {
+		return fmt.Errorf("archive %s: %w", channelID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("coord: %s is not an open channel", channelID)
+	}
+	return nil
+}
+
+// IsAgent reports whether this id belongs to a registered agent.
+//
+// SendMessage needs it because `bomclaw msg --to <anything>` took any string at
+// all and EnsureDM would happily build a room for it. An agent once passed a
+// message id, and the result was a permanent room named after that id holding
+// a report nobody was ever going to read.
+func (db *DB) IsAgent(id string) (bool, error) {
+	var n int
+	if err := db.conn.QueryRow(`SELECT count(*) FROM agents WHERE id = ?`, id).Scan(&n); err != nil {
+		return false, fmt.Errorf("look up agent %s: %w", id, err)
+	}
+	return n > 0, nil
+}
+
 // EnsureOwnerDM is the private room between the owner and one agent.
 //
 // Every DM until now was agent↔agent, so the dashboard's Direct list was empty:
