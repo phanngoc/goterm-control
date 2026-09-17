@@ -23,13 +23,21 @@ type Session struct {
 	// Not persisted: it is derived from the room the turn is answering, and a
 	// stale value would silently run a project's work somewhere else.
 	Workspace string `json:"-"`
-	MessageCount    int       `json:"message_count"`
-	InputTokens     int       `json:"input_tokens"`
-	OutputTokens    int       `json:"output_tokens"`
-	CompactSummary  string    `json:"compact_summary,omitempty"`
-	Label           string    `json:"label,omitempty"`
-	Seq             int       `json:"seq"`
-	MemoryFlushed   bool      `json:"memory_flushed,omitempty"` // threshold flush already ran this session
+	// TraceTags is what this conversation IS, for the trace of every turn it
+	// runs. A channel turn carries its room and the line that summoned it, so a
+	// message in the room can be opened as the trace it produced; a chat turn
+	// carries nothing and the field stays empty.
+	//
+	// Not persisted: it describes where the session came from this run, and a
+	// session adopted by another lane would otherwise wear the old lane's tags.
+	TraceTags      []string `json:"-"`
+	MessageCount   int      `json:"message_count"`
+	InputTokens    int      `json:"input_tokens"`
+	OutputTokens   int      `json:"output_tokens"`
+	CompactSummary string   `json:"compact_summary,omitempty"`
+	Label          string   `json:"label,omitempty"`
+	Seq            int      `json:"seq"`
+	MemoryFlushed  bool     `json:"memory_flushed,omitempty"` // threshold flush already ran this session
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
@@ -50,12 +58,12 @@ type Session struct {
 
 // RunInfo is a snapshot of the live execution state for status reporting.
 type RunInfo struct {
-	Running      bool
-	StartedAt    time.Time
-	CurrentTask  string
-	LastTool     string
-	LastToolAt   time.Time
-	ToolCount    int
+	Running     bool
+	StartedAt   time.Time
+	CurrentTask string
+	LastTool    string
+	LastToolAt  time.Time
+	ToolCount   int
 }
 
 // SessionSnapshot is a mutex-free copy of session fields for persistence.
@@ -141,6 +149,20 @@ func (s *Session) SetWorkspace(dir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Workspace = dir
+}
+
+// SetTraceTags records what this conversation is, for its turns' traces.
+func (s *Session) SetTraceTags(tags ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TraceTags = tags
+}
+
+// GetTraceTags returns the tags every turn on this session is recorded with.
+func (s *Session) GetTraceTags() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.TraceTags...)
 }
 
 // GetWorkspace returns the directory this conversation runs in, or "" for the

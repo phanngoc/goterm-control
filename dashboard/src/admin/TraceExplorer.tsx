@@ -190,8 +190,38 @@ function summarise(run: Run): string | null {
   return flat || null
 }
 
-function WaterfallRow({ run, t0, span, expanded, onToggle }: {
+// Tags renders a run's tags as things you can click. They are written as
+// `kind:id` — `channel:ch_trading`, `schedule:sch_…` — so one click is a
+// filter, not a string to copy by hand.
+function Tags({ tags, onPick }: { tags?: string; onPick?: (t: string) => void }) {
+  let list: string[] = []
+  try {
+    const parsed = tags ? JSON.parse(tags) : []
+    if (Array.isArray(parsed)) list = parsed.filter(t => typeof t === 'string')
+  } catch {
+    // A tag string that is not JSON is the writer's bug, not the reader's:
+    // show nothing rather than break the row it belongs to.
+  }
+  if (list.length === 0) return null
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {list.map(t => (
+        <button
+          key={t}
+          onClick={e => { e.stopPropagation(); onPick?.(t.includes(':') ? t.slice(t.indexOf(':') + 1) : t) }}
+          title="Tìm mọi trace mang tag này"
+          className="px-1.5 py-0.5 text-[10px] font-mono rounded ring-1 ring-gray-800 text-gray-500 hover:text-sky-300 hover:ring-sky-500/40"
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function WaterfallRow({ run, t0, span, expanded, onToggle, onSearch }: {
   run: Run; t0: number; span: number; expanded: boolean; onToggle: () => void
+  onSearch?: (q: string) => void
 }) {
   const color = runColor(run.run_type)
   const summary = summarise(run)
@@ -254,6 +284,10 @@ function WaterfallRow({ run, t0, span, expanded, onToggle }: {
             {run.output_tokens > 0 && <span>out {run.output_tokens}</span>}
             <span className="font-mono">{run.id.slice(0, 8)}</span>
           </div>
+          {/* What this turn was, when it was not just a chat. Clicking one
+              searches for it — which is how a room's id gets you from a line
+              in that room to every trace it produced. */}
+          <Tags tags={run.tags} onPick={onSearch} />
           {run.error && (
             <div className="mt-2 text-xs text-red-300 bg-red-500/10 ring-1 ring-red-500/30 rounded p-2 whitespace-pre-wrap">
               {run.error}
@@ -269,7 +303,7 @@ function WaterfallRow({ run, t0, span, expanded, onToggle }: {
   )
 }
 
-function Waterfall({ runs }: { runs: Run[] }) {
+function Waterfall({ runs, onSearch }: { runs: Run[]; onSearch?: (q: string) => void }) {
   const [open, setOpen] = useState<Record<string, boolean>>({})
   if (runs.length === 0) return <div className="p-6 text-sm text-gray-500">No spans in this trace.</div>
 
@@ -311,6 +345,7 @@ function Waterfall({ runs }: { runs: Run[] }) {
             span={span}
             expanded={!!open[r.id]}
             onToggle={() => setOpen(o => ({ ...o, [r.id]: !o[r.id] }))}
+            onSearch={onSearch}
           />
         ))}
       </div>
@@ -425,7 +460,7 @@ export default function TraceExplorer({ call, agents }: { call: Call; agents: st
 
       <div className="flex-1 min-w-0">
         {selected ? (
-          <Waterfall runs={runs} />
+          <Waterfall runs={runs} onSearch={q => { setSearch(q); setSelected(null) }} />
         ) : (
           <div className="h-full flex items-center justify-center text-sm text-gray-600">
             Select a turn to see its waterfall

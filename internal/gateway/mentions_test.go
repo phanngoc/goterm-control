@@ -23,6 +23,7 @@ type recordingTurn struct {
 	prompts  []string
 	sessions []string
 	resumed  []string
+	tags     [][]string // the trace tags each turn's session carried
 	reply    string
 	newID    string
 	err      error
@@ -42,6 +43,7 @@ func (r *recordingTurn) RunTurn(ctx context.Context, sess *session.Session, chat
 	r.prompts = append(r.prompts, userText)
 	r.sessions = append(r.sessions, sess.ID)
 	r.resumed = append(r.resumed, sess.GetSessionID())
+	r.tags = append(r.tags, sess.GetTraceTags())
 	reply, newID := r.reply, r.newID
 	r.mu.Unlock()
 
@@ -943,5 +945,46 @@ func TestATurnInAPlainRoomKeepsTheAgentsWorkspace(t *testing.T) {
 	sess := deps.Sessions.GetByID(turn.sessions[0])
 	if sess != nil && sess.GetWorkspace() != "" {
 		t.Fatalf("#general redirected the agent to %q", sess.GetWorkspace())
+	}
+}
+
+// A channel reply's trace had a session id and nothing tying it to the room, so
+// from a line in a channel there was no way to open the trace it produced —
+// the first thing anyone wants when a reply comes out wrong.
+func TestAChannelTurnIsTaggedWithItsRoomAndLine(t *testing.T) {
+	turn := &recordingTurn{reply: "xong"}
+	deps, cdb := mentionTestDeps(t, turn)
+	w := NewMentionWatcher(deps)
+
+	m, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorID: "bomclaw",
+		Body: "@bomclaw2 xem giúp cái này",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background())
+
+	turn.mu.Lock()
+	if len(turn.tags) == 0 {
+		turn.mu.Unlock()
+		t.Fatal("no turn ran")
+	}
+	tags := turn.tags[0]
+	turn.mu.Unlock()
+	want := map[string]bool{
+		"channel:" + coord.GeneralChannelID: false,
+		"message:" + m.ID:                   false,
+	}
+	for _, tag := range tags {
+		if _, ok := want[tag]; ok {
+			want[tag] = true
+		}
+	}
+	for tag, found := range want {
+		if !found {
+			t.Errorf("the turn is not tagged %q — its trace cannot be found from the room\n"+
+				"or from the line that summoned it. got %v", tag, tags)
+		}
 	}
 }
