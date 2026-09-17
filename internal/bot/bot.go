@@ -42,6 +42,19 @@ type Bot struct {
 // through the same path as Telegram messages (see Handler.RunTurn).
 func (b *Bot) Handler() *Handler { return b.handler }
 
+// Memory is this agent's own MEMORY.md and daily notes.
+//
+// Exposed because the task runner needs the same one. A second Manager built
+// from the same config would read the same files, but Bootstrap would run
+// twice and a later change to how one is configured would silently apply to
+// only one lane.
+func (b *Bot) Memory() *memory.Manager {
+	if b == nil || b.handler == nil {
+		return nil
+	}
+	return b.handler.memory
+}
+
 // Notify sends a message the gateway composed on its own initiative — a
 // schedule's result, a failure alert — to the people the config trusts. There
 // is no conversation to answer into, so the recipients are

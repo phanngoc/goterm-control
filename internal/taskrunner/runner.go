@@ -25,6 +25,7 @@ import (
 
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/trace"
 )
@@ -46,6 +47,21 @@ type Config struct {
 	// keeps its own lane regardless; this only widens the task lane, so a long
 	// task no longer holds up a short one queued behind it (design P3).
 	Concurrency int
+
+	// Memory is the agent's own MEMORY.md and daily notes. Nil-safe.
+	//
+	// It was missing here, and only here. Chat and channel mentions both run
+	// through bot.Handler, which injects it; the task lane calls the CLI
+	// directly and passed "" for the memory argument that has always been in
+	// chat.Client.SendMessage. So the lane doing the heaviest work was the one
+	// lane that neither read what the agent knows nor added to it — agent 3,
+	// which works almost entirely through tasks, had written zero daily notes.
+	//
+	// The agent's own, not the project's, even when a task runs inside a
+	// project folder: MEMORY.md is what this agent knows, and a project has
+	// AGENTS.md for what the project is. Putting one agent's durable memory
+	// inside a folder its peers also work in confuses the two.
+	Memory *memory.Manager
 }
 
 // Event announces a task run starting or finishing, so the gateway can push
@@ -370,6 +386,13 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	children, _ := r.db.Children(task.ID)
 	inbox := r.taskMail(task.ID)
 	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers())
+
+	// Same rule as the chat lane: only a brand-new session. A resumed one
+	// already carries this, and injecting it again pollutes the context.
+	memoryContext := ""
+	if !resumed && r.cfg.Memory.Enabled() {
+		memoryContext = r.cfg.Memory.BuildContext(time.Now())
+	}
 	span.SetInputs(prompt)
 	if tid := span.TraceID(); tid != "" {
 		if err := r.db.AttachTrace(task.ID, tid); err != nil {
@@ -404,7 +427,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	progress := openProgress(r.db, task)
 	defer progress.Close()
 
-	sendErr := r.llm.SendMessage(runCtx, sess, r.cfg.Model, prompt, "", chat.StreamCallbacks{
+	sendErr := r.llm.SendMessage(runCtx, sess, r.cfg.Model, prompt, memoryContext, chat.StreamCallbacks{
 		OnText: func(chunk string) {
 			reply.WriteString(chunk)
 			progress.Text(chunk)

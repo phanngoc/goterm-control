@@ -18,6 +18,7 @@ import (
 type stubLLM struct {
 	mu       sync.Mutex
 	prompts  []string
+	memories []string // the memory block each call was given
 	sessions []string // sess.GetSessionID() at call time — "" means a fresh session
 	reply    string
 	err      error
@@ -33,6 +34,7 @@ func (s *stubLLM) SendMessage(ctx context.Context, sess *session.Session, model,
 	userText, memory string, cb chat.StreamCallbacks) error {
 	s.mu.Lock()
 	s.prompts = append(s.prompts, userText)
+	s.memories = append(s.memories, memory)
 	s.sessions = append(s.sessions, sess.GetSessionID())
 	reply, err, delay, hook := s.reply, s.err, s.delay, s.hook
 	s.mu.Unlock()
