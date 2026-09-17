@@ -27,6 +27,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/skills"
 	"github.com/ngocp/goterm-control/internal/trace"
 )
 
@@ -696,19 +697,17 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		}
 	}
 	if len(peers) > 0 {
-		b.WriteString("\n## The other agents you can hand work to\n\n")
+		list := make([]skills.Peer, 0, len(peers))
 		for _, p := range peers {
-			state := "online"
-			if !p.Online {
-				state = "offline right now"
-			}
-			backend := p.Provider
-			if p.Model != "" {
-				backend = fmt.Sprintf("%s · %s", p.Provider, p.Model)
-			}
-			fmt.Fprintf(&b, "- **%s** — %s (%s)\n", p.ID, backend, state)
+			list = append(list, skills.Peer{
+				ID: p.ID, Provider: p.Provider, Model: p.Model,
+				Workspace: p.Workspace, Online: p.Online,
+			})
 		}
-		fmt.Fprintf(&b, "\nDifferent backends, so different strengths and different costs. "+
+		b.WriteString("\n")
+		b.WriteString(skills.Roster(list))
+		fmt.Fprintf(&b, "\nThe lines under each name are its skills — what it is actually set up to do, "+
+			"read from its own toolkit rather than described here, so they cannot go stale. "+
 			"`bomclaw task new --to <agent>` hands a piece over; omit --to and any of them may take it.\n"+
 			"When you write to one of them about THIS work, add `--task %s`:\n\n"+
 			"    bomclaw msg --to <agent> --task %s \"<what you need or what you are handing over>\"\n\n"+

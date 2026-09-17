@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/skills"
 )
 
 // The prompt is one Sprintf with a dozen arguments, and every one of them is
@@ -61,5 +62,31 @@ func TestTaskPromptAsksForMessagesToBeFiledUnderTheTask(t *testing.T) {
 	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers)
 	if !strings.Contains(p, "bomclaw msg --to <agent> --task t_real") {
 		t.Fatalf("the agent is told who its peers are and not how to write to them about this task:\n%s", p)
+	}
+}
+
+// An agent choosing who to hand a piece of work to used to get three names,
+// three backend labels, and the sentence "different backends, so different
+// strengths" — which named no strength. It chose by guessing, and did: a 3D
+// task went to two peers on no basis beyond there being two peers.
+func TestTaskPromptSaysWhatEachPeerIsGoodAt(t *testing.T) {
+	ws := t.TempDir()
+	if err := skills.Install(ws, "geospatial",
+		[]byte("---\nname: geospatial\ndescription: 'Dữ liệu bản đồ và GeoJSON.'\n---\nthân\n")); err != nil {
+		t.Fatal(err)
+	}
+	peers := []coord.Agent{{
+		ID: "bomclaw3", Provider: "opencode", Model: "muse", Online: true, Workspace: ws,
+	}}
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers)
+
+	if !strings.Contains(p, "bomclaw3") {
+		t.Fatal("the peer is not named at all")
+	}
+	if !strings.Contains(p, "geospatial") || !strings.Contains(p, "Dữ liệu bản đồ") {
+		t.Fatalf("the peer is named with no idea what it is for:\n%s", p)
+	}
+	if strings.Contains(p, "different strengths and different costs") {
+		t.Error("still carries the sentence that promised strengths and named none")
 	}
 }
