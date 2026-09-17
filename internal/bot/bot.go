@@ -19,6 +19,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/skills"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -143,9 +144,14 @@ func modelAPI(cfg *config.Config) models.ModelAPI {
 // which is what every install without an `accounts:` section does.
 func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *credentials.Pool) chat.Client {
 	api := modelAPI(cfg)
+	// Skills are read on every turn rather than baked in here. Attaching one
+	// to an agent has to take effect on its next turn: a toolkit you can only
+	// change by restarting the gateway is not a toolkit anybody edits.
+	workspace := cfg.Claude.Workspace
 	c, err := chat.Resolve(api, chat.Deps{
 		SystemPrompt: cfg.Claude.SystemPrompt,
-		Workspace:    cfg.Claude.Workspace,
+		SystemExtra:  func() string { return SkillIndex(workspace) },
+		Workspace:    workspace,
 		Executor:     executor,
 		Pool:         pool,
 	})
@@ -368,4 +374,20 @@ func (b *Bot) Shutdown() {
 	b.engine.Close()
 	b.sessions.SaveNow()
 	log.Println("bot: shutdown complete")
+}
+
+// SkillIndex is this agent's toolkit as it stands right now: the name and the
+// when-to-use of each skill in its workspace, plus the file to open for the
+// rest.
+//
+// Errors are logged and swallowed. A broken skills folder must not take the
+// agent's turn down with it — it can still do everything it could before
+// skills existed.
+func SkillIndex(workspace string) string {
+	list, err := skills.Load(workspace)
+	if err != nil {
+		log.Printf("skills: %v", err)
+		return ""
+	}
+	return skills.Index(list)
 }

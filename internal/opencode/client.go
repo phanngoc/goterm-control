@@ -37,8 +37,10 @@ const ProviderName = "opencode"
 // Client wraps the opencode CLI subprocess.
 type Client struct {
 	systemPrompt string
-	pool         *credentials.Pool
-	workspace    string
+	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
+	systemExtra func() string
+	pool        *credentials.Pool
+	workspace   string
 }
 
 // New creates an opencode client. The CLI owns its own auth and its own tool
@@ -283,7 +285,7 @@ func buildArgs(modelID, sessionID string, isNew bool) []string {
 // a session that already holds them.
 func (c *Client) firstTurnPrompt(userText, memoryContext string) string {
 	var b strings.Builder
-	if p := strings.TrimSpace(c.systemPrompt); p != "" {
+	if p := strings.TrimSpace(c.prompt()); p != "" {
 		b.WriteString(p)
 		b.WriteString("\n\n")
 	}
@@ -344,6 +346,20 @@ func init() {
 		c := New(d.SystemPrompt)
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
+		c.SetSystemExtra(d.SystemExtra)
 		return c
 	})
+}
+
+// SetSystemExtra registers a function evaluated on every turn and appended to
+// the system prompt. See chat.Deps.SystemExtra.
+func (c *Client) SetSystemExtra(f func() string) { c.systemExtra = f }
+
+// prompt is the operating instructions for THIS turn: the fixed system prompt
+// plus whatever systemExtra says right now.
+func (c *Client) prompt() string {
+	if c.systemExtra == nil {
+		return c.systemPrompt
+	}
+	return c.systemPrompt + c.systemExtra()
 }

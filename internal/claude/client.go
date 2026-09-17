@@ -38,8 +38,10 @@ type StreamCallbacks = chat.StreamCallbacks
 // Client wraps the claude CLI subprocess.
 type Client struct {
 	systemPrompt string
-	workspace    string // working directory for the CLI subprocess
-	pool         *credentials.Pool
+	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
+	systemExtra func() string
+	workspace   string // working directory for the CLI subprocess
+	pool        *credentials.Pool
 }
 
 // New creates a Claude client backed by the claude CLI subprocess.
@@ -159,7 +161,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// Resumed sessions already carry full conversation history in the CLI,
 	// so injecting memory again causes context pollution (e.g. old topics
 	// overriding the user's current intent).
-	systemPrompt := c.systemPrompt + fsGuardPrompt
+	systemPrompt := c.prompt() + fsGuardPrompt
 	if memoryContext != "" && isNewSession {
 		systemPrompt += memoryContext
 	}
@@ -471,6 +473,20 @@ func init() {
 		c := New(d.SystemPrompt, d.Executor)
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
+		c.SetSystemExtra(d.SystemExtra)
 		return c
 	})
+}
+
+// SetSystemExtra registers a function evaluated on every turn and appended to
+// the system prompt. See chat.Deps.SystemExtra.
+func (c *Client) SetSystemExtra(f func() string) { c.systemExtra = f }
+
+// prompt is the operating instructions for THIS turn: the fixed system prompt
+// plus whatever systemExtra says right now.
+func (c *Client) prompt() string {
+	if c.systemExtra == nil {
+		return c.systemPrompt
+	}
+	return c.systemPrompt + c.systemExtra()
 }
