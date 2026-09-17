@@ -322,6 +322,9 @@ export interface HubSkill {
   description: string
   path: string
   dir: string
+  /** category: the folder a nested skill sits under, or absent for a top-level
+   *  one. A backend with its own self-improvement loop files skills this way. */
+  category?: string
   /** bundled: one of the defaults every agent is seeded with, so it can be
    *  offered back after a removal. */
   bundled: boolean
