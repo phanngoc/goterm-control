@@ -36,6 +36,9 @@ export interface TraceSummary extends Run {
 }
 
 export interface Agent {
+  /** telegram_bot: the @name of this agent's own bot, without the @. Absent
+   *  when the agent has no Telegram bot of its own. */
+  telegram_bot?: string
   id: string
   display_name: string
   provider: string

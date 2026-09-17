@@ -658,6 +658,13 @@ func runGateway(args []string) {
 		srv.Handle("/api/browser/token", authMgr.RequireAuthExceptLocal(browserAPI.HandleToken))
 	}
 
+	if tgBot != nil && coordDB != nil {
+		// Which bot this agent answers on, known only once it has logged in —
+		// config holds a token, and a person clicks a name.
+		if err := coordDB.SetAgentTelegramBot(cfg.Agent.ID, tgBot.Username()); err != nil {
+			log.Printf("coord: telegram bot name: %v", err)
+		}
+	}
 	if tgBot != nil {
 		// Push conversation changes to open dashboards. A Telegram turn (or a
 		// claimed task) writes the session both channels now share, and nothing
@@ -868,6 +875,12 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 		Workspace:   cfg.Claude.Workspace,
 	}); err != nil {
 		log.Printf("coord: register agent: %v", err)
+	}
+	// The private room between the owner and this agent. Every DM until now was
+	// agent↔agent, so the dashboard's Direct list was empty — there was nowhere
+	// for "message this one alone" to happen.
+	if _, err := cdb.EnsureOwnerDM(cfg.Agent.ID); err != nil {
+		log.Printf("coord: owner DM: %v", err)
 	}
 
 	go func() {

@@ -77,6 +77,12 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
   }
 
   const agentIDs = data?.agents.map(a => a.id) ?? []
+  // Each agent answers on its own Telegram bot, so a direct room links to a
+  // different chat per agent.
+  const bots: Record<string, string> = {}
+  for (const a of data?.agents ?? []) {
+    if (a.telegram_bot) bots[a.id] = a.telegram_bot
+  }
   const selfID = data?.agent_id ?? ''
 
   return (
@@ -122,7 +128,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
         {pane === 'settings' && <SettingsPane call={call} />}
         {pane === 'messages' && (
           <ChannelView
-            call={call} agents={agentIDs} selfID={selfID}
+            call={call} agents={agentIDs} selfID={selfID} bots={bots}
             openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
             openFilesFor={openFiles} onOpenedFiles={() => setOpenFiles('')}
             onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
