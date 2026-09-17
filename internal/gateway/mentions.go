@@ -214,6 +214,11 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	if c, err := w.deps.Coord.GetChannel(m.ChannelID); err == nil {
 		sess.SetWorkspace(c.Workspace)
 	}
+	// What this turn is, for its trace. Without these the trace of a channel
+	// reply had a session id and nothing tying it to the room — so from a line
+	// in a channel there was no way to open the trace it produced, which is the
+	// first thing anyone wants when a reply comes out wrong.
+	sess.SetTraceTags("channel:"+m.ChannelID, "message:"+m.ID, "thread:"+key)
 	// Resuming is what makes turn 2 remember turn 1. A ref from the other CLI
 	// — after a provider switch — is simply not used; only the CLI that owns
 	// a session can resume it.

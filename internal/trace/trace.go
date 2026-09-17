@@ -12,7 +12,9 @@
 package trace
 
 import (
+	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +105,30 @@ type Meta struct {
 	Model     string
 	Provider  string
 	Tags      string // JSON array
+}
+
+// Tags builds the JSON array runs.tags stores.
+//
+// A helper rather than each caller hand-writing JSON: the column is queried by
+// the dashboard's filters, so a single malformed value is not a cosmetic
+// problem — it is a run that cannot be found. Empty tags are dropped, and no
+// tags at all yields "" rather than "[]", which keeps a row that was never
+// tagged distinguishable from one tagged with nothing.
+func Tags(tags ...string) string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // Span is one open run. Every method tolerates a nil receiver.

@@ -1,6 +1,6 @@
 // Mirrors internal/coord — keep field names in sync with the Go json tags.
 
-export type RunType = 'chain' | 'llm' | 'tool' | 'memory' | 'task'
+export type RunType = 'chain' | 'llm' | 'tool' | 'memory' | 'task' | 'command'
 export type RunStatus = 'pending' | 'success' | 'error'
 
 export interface Run {

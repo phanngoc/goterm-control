@@ -674,6 +674,10 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		ChatID:    chatID,
 		Model:     modelID,
 		Provider:  h.llm.Name(),
+		// What this conversation is, when it is not just a chat: a channel turn
+		// carries its room and the line that summoned it, so a message in the
+		// room can be opened as the trace it produced.
+		Tags: trace.Tags(sess.GetTraceTags()...),
 	})
 	turnSpan.SetInputs(userText)
 

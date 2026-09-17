@@ -492,6 +492,11 @@ func runGateway(args []string) {
 		})
 		// Results and alerts go to the owner's Telegram; the local runner is
 		// rung directly and peers over HTTP, exactly as for a hand-queued task.
+		// A shell command fired at 03:00 that goes wrong left nothing but
+		// schedule_runs.output, cut at 8KB. Only the command path uses this;
+		// an `agent` schedule produces a task, and that task's run already
+		// opens a trace of its own.
+		sched.SetRecorder(gwTrace)
 		sched.SetNotify(func(text string) { tgBot.Notify(text) })
 		sched.SetWake(func(t *coord.Task) {
 			if runner != nil {
