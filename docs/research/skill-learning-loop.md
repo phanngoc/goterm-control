@@ -627,3 +627,169 @@ Ba điều bê được **ngay khi làm bước 4**, và một điều phải ng
 
    Nói cách khác: chiều dữ liệu ta có thêm mở ra một **hành động thứ ba** mà hermes không có — *sửa vì
    nó đang gây hại* — chứ không làm counter trở thành thước đo cho hai hành động kia.
+
+---
+
+## 10. Thiết kế vòng lặp cho hệ này
+
+Mục này là **thiết kế**, không phải khảo sát. Nó trả lời: mỗi agent tự học thế nào, và người nhìn
+thấy việc đó ở đâu.
+
+### 10.1 Ba ràng buộc quyết định mọi thứ còn lại
+
+**1. Ta không có fork, và không cần.** hermes phải dựng `build_cache_parity_fork()` để một lượt review
+đọc lại được hội thoại mà không trả tiền hai lần. Ở đây **CLI sở hữu session** — `--resume` là cơ chế
+gốc, không phải thứ phải mô phỏng.
+
+**2. Ta không cưỡng chế được read-before-write.** Guard của hermes sống trong tool layer *của họ*. Agent
+ở đây ghi file bằng tool `Write` **của CLI** — ta không đứng giữa. §4.1 **không bê được**.
+
+Nên đổi chiến lược: **không ngăn được một lượt ghi tồi thì làm cho mọi lượt ghi nhìn thấy được và hoàn
+tác được.** Đó cũng chính là đánh đổi hermes chọn ở tầng snapshot/rollback — ta chỉ bỏ tầng guard mà
+mình không có chỗ để đặt.
+
+**3. Ta đã có thứ hermes phải dựng lại: `checkpoint`.** Fork của họ phải nén hội thoại thành digest
+(`_digest_history`) vì replay cả transcript thì đắt. Ở đây mỗi task đã có `checkpoint` — **do chính
+agent viết, cho lượt sau đọc**. Đó là bản chưng cất sẵn có, miễn phí.
+
+### 10.2 Kích hoạt: sau một task **kết thúc**, không phải sau mỗi N lượt
+
+hermes đếm lượt user. Ở đây một "lượt" trải trên ba làn, và **task là nơi có bài học đáng học nhất** —
+nó có đề bài, có kết cục, có checkpoint.
+
+Chỉ chạy trên task **terminal** (`completed` / `failed`), **không bao giờ** trên task sẽ còn chạy tiếp.
+Điều này **không phải tối ưu hoá** — nó đóng bằng cấu trúc đúng con bug hermes phải ghi comment để
+tránh: lượt review bị ghi vào session thật, rồi **lượt live kế tiếp đọc lại nó như một chỉ thị đang
+đứng** (*"curator takeover"*). Task đã kết thúc thì không có lượt kế tiếp.
+
+### 10.3 Hai chế độ, và chọn cái rẻ
+
+| | **digest** *(khuyến nghị)* | **resume** |
+|---|---|---|
+| Đầu vào | title · body · checkpoint · result · skill đã đọc · tool đã dùng | `--resume` session của task |
+| Chi phí | một lượt ngắn, context nhỏ | một lượt trên context đã lớn sẵn |
+| Trung thực | bản agent tự chưng cất | nguyên văn |
+| Đụng vào session task | **không** | có |
+
+Chọn **digest**. Ngoài chuyện rẻ, nó **stateless**: không chạm session của task, nên lỗi ở §10.2 là
+**không thể xảy ra** chứ không chỉ là "đã tránh". Và `checkpoint` vốn đã là thứ agent viết ra để mô tả
+việc mình vừa làm — đúng đầu vào review cần.
+
+`resume` giữ lại như cờ cấu hình cho trường hợp digest tỏ ra quá mỏng.
+
+### 10.4 Vòng lặp một agent
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as taskrunner
+    participant T as Task (terminal)
+    participant C as Counters
+    participant V as Review turn
+    participant S as skills/
+    participant L as Ledger
+    participant X as Trace
+
+    R->>T: task kết thúc (completed / failed)
+    R->>X: quét tool span của trace task
+    X-->>R: đã đọc skills/deploy/SKILL.md, skills/browser/SKILL.md
+    R->>C: +1 view_ok (hoặc view_failed) cho từng skill
+    Note over C: đếm theo KẾT CỤC — §8.3
+
+    opt review bật cho agent này
+        R->>S: đọc index + thân các skill đã dùng
+        R->>V: digest(title, body, checkpoint, result, skills)<br/>+ LUẬT (§2.1–2.3)
+        Note over V: một lượt, model của chính agent đó
+        V-->>R: đề xuất: patch <skill> / create <skill> / "nothing to save"
+        alt có đề xuất
+            R->>S: chụp hash trước
+            R->>S: áp dụng
+            R->>L: ghi: agent, skill, before, after, task_id, trace_id
+            R->>X: span skill.review — outputs = đã sửa gì
+        else không có
+            R->>X: span skill.review — outputs = "nothing to save"
+        end
+    end
+```
+
+**Ba agent, ba vòng lặp, không chia sẻ gì.** Mỗi con chỉ đọc task của nó và chỉ ghi skill của nó. Đó là
+hệ quả trực tiếp của hướng A (#180) — và cái giá đã biết: **không tự cộng dồn giữa các agent** (§6).
+
+### 10.5 Ledger — thứ thay cho guard
+
+Một bảng, append-only. Mỗi lượt ghi vào `skills/` sinh một dòng:
+
+| cột | vì sao |
+|---|---|
+| `agent_id`, `skill`, `action` | ai, cái gì, làm gì (`create` / `patch` / `remove`) |
+| `actor` | `loop` · `human` (qua hub) · `seed` (bộ mặc định) |
+| `before`, `after` | **toàn văn hai bản** — đây là cái làm cho hoàn tác thành một thao tác, không phải một cuộc điều tra |
+| `task_id`, `trace_id` | **vì sao** nó đổi: mở thẳng ra công việc đã dạy nó điều đó |
+| `created_at` | |
+
+`actor` là trường quyết định ai được đụng vào gì — **không bao giờ suy từ vị trí file** (§4.2). Skill
+người viết thì curator không đụng; skill vòng lặp đẻ ra thì được.
+
+Lưu **toàn văn** chứ không lưu diff: một `SKILL.md` là vài KB, và lưu nguyên bản biến "hoàn tác" thành
+một lệnh ghi đè thay vì một phép áp patch có thể thất bại.
+
+### 10.6 Người nhìn thấy ở đâu
+
+**1. Skills pane → lịch sử mỗi skill.** Bấm vào một skill: dòng thời gian các lần đổi, mỗi dòng có
+`actor`, diff trước/sau, và **link tới task đã gây ra nó**. Kèm nút **hoàn tác về bản này**.
+
+Đây là thứ trả lời câu hỏi mà người ta sẽ hỏi đầu tiên: *"sao nó lại làm thế?"* — và câu trả lời là
+một cái link.
+
+**2. Skills pane → cột mới.** Bên cạnh `đã sửa` hiện có:
+
+| | ý nghĩa |
+|---|---|
+| `12 ✓ / 0 ✗` | đọc trong 12 task xong việc, 0 task hỏng — skill khoẻ |
+| `0 ✓ / 12 ✗` | **skill đang dẫn người ta đi sai** — đưa lên đầu, không đem archive (§9.8) |
+| `0 ✓ / 0 ✗` | chưa có bằng chứng gì cả — **không phải lý do để xoá** (§9.1) |
+
+**3. Traces.** `skill.review` là một run type riêng, tag `skill:<name>` và `agent:<id>`. Nên một lượt
+review hiện trong tab Traces như mọi thứ khác, lọc được, và bấm tag ra mọi lần một skill bị đụng tới.
+Hạ tầng này **đã có từ #126** — chỉ thêm một run type.
+
+**4. Một dòng trong phòng.** Khi vòng lặp sửa một skill, nó **nói ra trong kênh của dự án**: *"đã thêm
+một cạm bẫy vào `deploy` sau task t_xxx"*. Đây là chỗ hermes dùng `display.memory_notifications`, và lý
+lẽ giống nhau: **một thay đổi im lặng vào hướng dẫn của chính mình là thứ không ai phát hiện ra cho tới
+khi nó gây hại.**
+
+### 10.7 Curator — một schedule, không phải một daemon
+
+Ta **đã có** scheduler. Curator là một lịch `command` chạy `bomclaw skills curate`:
+
+- **Phase 1** — Go thuần, không LLM: đọc counter, áp máy trạng thái §8.3, ghi ledger. Rẻ tới mức chạy
+  hằng ngày cũng được.
+- **Phase 2** — opt-in, gọi model, chỉ được **gộp** và **bắt buộc** khai `absorbed_into` (§9).
+
+Và nó **có trace sẵn** nhờ #126 — một lịch `command` giờ mở được từ tab Traces kèm output và exit code.
+
+### 10.8 Thứ tự làm, và cái gì có ích ngay cả khi dừng giữa chừng
+
+| Bước | Có ích ngay cả khi dừng ở đây? |
+|---|---|
+| **1. Luật vào prompt** (#189) | **Có** — agent sửa tay được, đúng hình dạng, khi người bảo nó sửa |
+| **2. Counter từ trace + ledger** | **Có** — hub hiện `✓/✗` và lịch sử, dù chưa có vòng lặp nào |
+| **3. Review turn** | đây là lúc nó **tự** học |
+| **4. Curator** | chỉ có nghĩa khi thư viện đã lớn |
+
+Thiết kế cố ý để **mỗi bước tự đứng được**. Bước 2 đặc biệt: **ledger và counter có giá trị độc lập với
+vòng lặp** — chúng làm cho việc người sửa skill qua hub cũng theo dõi được, và chúng là thứ duy nhất
+biến bước 3 từ "đáng sợ" thành "hoàn tác được".
+
+### 10.9 Cái giá phải nói trước
+
+**Tiền.** Một lượt model cho mỗi task kết thúc, trên ba agent. Agent 1 chạy Opus. Nên: **bật/tắt theo
+từng agent trong config**, mặc định **tắt**, và bật cho agent rẻ trước để đo xem digest có đủ dày không.
+
+**Không cưỡng chế được read-before-write** (§10.1). Ledger làm cho mọi lượt ghi hoàn tác được, nhưng nó
+**không ngăn** một lượt ghi tồi — nó chỉ làm lượt đó **rẻ để sửa**. Khác biệt này phải nói rõ chứ không
+được che.
+
+**Và rủi ro lớn nhất vẫn không đổi**: một agent tự dạy mình rằng một công cụ hỏng. Bước 1 (§2.2) là
+phòng tuyến duy nhất cho chuyện đó, và nó là **chữ trong prompt** — nên nó phải đi trước bước 3, không
+phải song song.
