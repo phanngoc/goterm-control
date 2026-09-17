@@ -33,9 +33,14 @@ type Factory func(Deps) Client
 // the registry, and the reverse import would close the loop.
 type Deps struct {
 	SystemPrompt string
-	Workspace    string
-	Executor     *tools.Executor   // claude runs tools in-process; others may ignore it
-	Pool         *credentials.Pool // nil means the ambient credentials
+	// SystemExtra is appended to SystemPrompt and evaluated ON EVERY TURN, not
+	// once at construction. Skills are what needs this: attaching one to an
+	// agent has to take effect on its next turn, and a client built at startup
+	// holds a string that was true when the gateway booted. Nil is fine.
+	SystemExtra func() string
+	Workspace   string
+	Executor    *tools.Executor   // claude runs tools in-process; others may ignore it
+	Pool        *credentials.Pool // nil means the ambient credentials
 }
 
 var (
