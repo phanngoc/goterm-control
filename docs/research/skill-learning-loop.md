@@ -451,3 +451,179 @@ Ba con số dưới đây **không được bê nguyên** từ hermes, vì nhị
 Và một con số **phải đo ngay khi làm bước 1**: khối luật (§2) vào **mọi prompt**. `MaxIndexRunes` hiện
 là 4000 cho **cả** index. Luật là hằng số, index co giãn theo số skill — nếu để chung một ngân sách thì
 agent thứ mười lăm sẽ đẩy luật ra ngoài mà không ai thấy.
+
+---
+
+## 9. Phase 1 và Phase 2 — hai thước đo, không phase nào làm được việc của phase kia
+
+Đây là chỗ dễ hiểu nhầm nhất khi nhìn sequence: hai phase **không phải hai bước của một quy trình**.
+Chúng đo hai thứ khác nhau và có hai quyền khác nhau.
+
+| | **Phase 1 — staleness** | **Phase 2 — consolidation** |
+|---|---|---|
+| Chạy bằng | máy trạng thái, **không LLM** | một fork gọi model |
+| Thước đo | **thời gian**, và chỉ thời gian | **nội dung trùng lặp**, và chỉ nội dung |
+| Được làm | stale · archive · reactivate | gộp vào umbrella · demote xuống `references/` |
+| **Không** được làm | **không bao giờ phán skill hay hay dở** | **không bao giờ prune** |
+| Bật/tắt | luôn chạy khi curator bật | **opt-in** |
+
+Câu trong prompt của họ khoá chặt ranh giới này:
+
+> *"pruning with no absorption target is the **deterministic staleness pass's job, never this one's**."*
+
+`skill_manage action=delete` **bắt buộc** kèm `absorbed_into=<umbrella>`, và umbrella đó **phải tồn tại
+sẵn**. Delete không có đích chuyển tiếp đã xác minh thì **bị từ chối**. Nên Phase 2 về mặt cấu trúc
+**không thể** làm mất một skill — nó chỉ có thể **dời** nội dung.
+
+Và ngay cả Phase 1 cũng không xoá: *"Archiving is the maximum destructive action. Archives are
+recoverable; deletion is not."*
+
+### 9.1 Thước đo của Phase 2 **không phải** counter
+
+Đây là điều bất ngờ nhất khi đọc source, và nó ngược với trực giác. Nguyên văn quy tắc 4:
+
+> *"**DO NOT use usage counters as a reason to skip consolidation.** The counters are new and often
+> mostly zero. Judge overlap on **CONTENT**, not on use_count. `use=0` is not evidence a skill is
+> valuable; it's **absence of evidence either way**. Corollary: `use=0` is ALSO **not a reason to
+> PRUNE**."*
+
+Counter vẫn **được in ra** trong danh sách ứng viên — `activity=… use=… view=… patches=…` — nhưng như
+**bối cảnh**, không phải như tiêu chí. Một skill `use=0` chỉ được đụng tới khi **đủ cả hai**: ≥ 30 ngày
+tuổi **và** nội dung thật sự lỗi thời hoặc đã được hấp thụ nơi khác. Lý do ghi thẳng: *"a
+recently-created skill simply may not have had its trigger come up yet."*
+
+### 9.2 Vậy thước đo là gì: **bài kiểm tra người bảo trì**
+
+Quy tắc 5 nêu ra cái bar, và nó bác bỏ cái bar mà hầu hết người ta sẽ chọn:
+
+> *"DO NOT reject consolidation on the grounds that 'each skill has a distinct trigger'. **Pairwise
+> distinctness is the wrong bar.** The right bar is: **'would a human maintainer write this as N
+> separate skills, or as one skill with N labeled subsections?'** When the answer is the latter, merge."*
+
+Tức là: hỏi *"hai cái này có khác nhau không"* thì **luôn** ra câu trả lời "có" — mọi skill đều khác
+nhau ở điểm nào đó, nên cái bar đó **không bao giờ gộp được gì**. Câu hỏi đúng là về **hình dạng thư
+viện mà một người sẽ viết ra**.
+
+Và mục tiêu được phát biểu như một thất bại cần tránh:
+
+> *"A collection of hundreds of narrow skills where each one captures one session's specific bug is a
+> **FAILURE of the library — not a feature**."*
+
+### 9.3 Một con số cứng: **57 ký tự**
+
+> *"An agent searching skills matches on **descriptions**, not on exact names (note: long descriptions
+> are truncated to **57 chars** in the system prompt skill index — keep the trigger class in that
+> window)."*
+
+Đây là ràng buộc vật lý đẻ ra cả chiến lược umbrella: nếu agent chỉ nhìn 57 ký tự đầu để định tuyến,
+thì **một umbrella rộng với các subsection có nhãn dễ tìm hơn năm skill hẹp** — ngược hẳn với trực giác
+"chia nhỏ cho rõ ràng".
+
+*(Ở đây `MaxDescriptionRunes` đang là **400** và ta in trọn vào index. Rộng hơn nhiều, nên ràng buộc
+này nhẹ hơn — nhưng nó cũng có nghĩa index của ta **đắt hơn của họ trên mỗi skill**.)*
+
+### 9.4 Phương pháp: cụm tiền tố
+
+Không phải so từng cặp — mà **quét tìm cụm**:
+
+> *"Identify **PREFIX CLUSTERS** (skills sharing a first word or domain keyword)… `hermes-config-*`,
+> `gateway-*`, `codex-*`, `pr-*`… **Expect 10–25 clusters.**"*
+>
+> *"For each cluster with 2+ members, do NOT ask 'are these pairs overlapping?' — ask **'what is the
+> UMBRELLA CLASS these skills all serve?'**"*
+
+Cộng một tín hiệu độc lập: **tên quá hẹp**. Tên chứa số PR, codename, một chuỗi lỗi cụ thể, hay dấu vết
+một phiên làm việc (`audit-`, `diagnosis-`, `salvage-`) — *"these almost always belong as a subsection
+or support file under a class-level umbrella."*
+
+Và: *"**Iterate.** After one consolidation round, scan the remaining set… Don't stop after 3 merges."*
+
+### 9.5 Ba cách gộp, và cái không phải gộp
+
+| Cách | Khi nào |
+|---|---|
+| **a. Gộp vào umbrella có sẵn** | một thành viên trong cụm đã đủ rộng |
+| **b. Tạo umbrella mới** | không cái nào đủ rộng |
+| **c. Demote xuống `references/` / `templates/` / `scripts/`** | có chiều sâu hẹp-mà-quý, chỉ thỉnh thoảng cần |
+
+Câu định nghĩa sắc nhất trong cả prompt:
+
+> *"Consolidation means **DISTILLING**… **Moving a file unchanged under `references/` is filing, not
+> consolidating.**"*
+
+Nội dung được hấp thụ phải **thành quy tắc** (mệnh lệnh + một mệnh đề *vì sao*), cùng bài học nói hai
+lần thành **một** quy tắc, và tường thuật sự cố / số PR / ngày tháng / trích chat **bị bỏ** — *"the rule
+must stand without the story."*
+
+Cũng có cảnh báo về mặt trái: một umbrella **tích trữ một file `references/` cho mỗi sibling bị hấp
+thụ** cũng là hình dạng sai.
+
+### 9.6 Toàn vẹn gói — chỗ đã từng hỏng thật
+
+Trước khi demote hay archive, phải xem skill như **một gói thư mục hoàn chỉnh**, không phải chỉ
+`SKILL.md`. Nếu nó có file hỗ trợ, hoặc `SKILL.md` có link tương đối tới `references/…`, thì **không
+được** dẹp mỗi `SKILL.md` xuống `<umbrella>/references/<old>.md`. Ba đường an toàn: giữ nguyên làm skill
+độc lập · **re-home mọi file cần thiết** rồi viết lại đường dẫn · archive **trọn gói** không đổi.
+
+Và phải đi qua **tool có ledger** (`write_file` → `remove_file` → `delete`), **không bao giờ** `mv` qua
+terminal — vì shell ghi đúng bytes nhưng **không sinh ledger entry**, nên bản archive ngay sau đó chụp
+một package **đã bị rút ruột** và `rollback` khôi phục ra một skill **rỗng** (issue #96962 của họ).
+
+Đó là lý do §4.6: **bỏ hẳn toolset `terminal` khỏi fork** — *"no command heuristic can"* đóng được lỗ
+này.
+
+### 9.7 Sequence của riêng Phase 2
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Curator
+    participant L as Danh sách ứng viên
+    participant M as Model (fork)
+    participant G as Guard
+    participant F as Cây skill
+
+    C->>L: lọc: bỏ bundled, bỏ hub, bỏ external, bỏ disabled
+    Note over L: mỗi dòng: state · pinned · cron<br/>activity/use/view/patches · last_activity<br/>(bối cảnh, KHÔNG phải tiêu chí)
+    L-->>M: "Agent-created skills (N): …"
+    M->>M: tìm cụm tiền tố (dự kiến 10–25)
+    loop mỗi cụm ≥ 2 thành viên
+        M->>M: "một người bảo trì sẽ viết N skill,<br/>hay 1 skill với N mục có nhãn?"
+        alt gộp được
+            M->>G: skill_view umbrella  (đọc TƯƠI)
+            M->>G: patch umbrella — chưng cất thành quy tắc
+            M->>G: delete sibling, absorbed_into=umbrella
+            alt umbrella không tồn tại
+                G-->>M: TỪ CHỐI — prune là việc của Phase 1
+            else
+                G->>F: archive sibling (khôi phục được)
+            end
+        else giữ nguyên
+            M->>M: sang cụm sau
+        end
+    end
+    M->>M: lặp lại — đừng dừng sau 3 lần gộp
+    C->>C: rewrite cron refs sang umbrella (§5.7)
+```
+
+### 9.8 Áp vào đây
+
+Ba điều bê được **ngay khi làm bước 4**, và một điều phải nghĩ khác:
+
+1. **Hai thước đo phải tách.** Ở đây cũng vậy: thời gian quyết định *có còn sống không*; nội dung quyết
+   định *có nên gộp không*. Trộn chung là cách một pass đem archive một skill chỉ vì nó mới.
+
+2. **Prune và merge phải là hai quyền khác nhau.** Ràng buộc `absorbed_into` bắt buộc — và **bị từ chối
+   khi không có đích** — làm cho pass gộp **về mặt cấu trúc không thể** đánh mất nội dung. Rẻ để làm,
+   và nó loại bỏ hẳn một lớp lỗi thay vì canh chừng nó.
+
+3. **Archive, không delete.** Ta đã có thói quen này rồi — `ArchiveChannel` ở #187 chọn đúng lý lẽ đó.
+
+4. **Cái phải nghĩ khác: ta có `view_ok` / `view_failed` (§8.3), họ không có.** Quy tắc *"đừng dùng
+   counter để quyết"* của họ đúng **với counter của họ** — một tổng không phân biệt, phần lớn bằng 0.
+   Counter tách theo kết cục thì **khác về chất**: `view_ok = 0, view_failed = 12` không phải "thiếu
+   bằng chứng", nó **là** bằng chứng. Nhưng nó là bằng chứng cho *"skill này đang dẫn sai"* — tức một
+   ứng viên để **sửa**, và vẫn **không** phải để prune hay để gộp.
+
+   Nói cách khác: chiều dữ liệu ta có thêm mở ra một **hành động thứ ba** mà hermes không có — *sửa vì
+   nó đang gây hại* — chứ không làm counter trở thành thước đo cho hai hành động kia.
