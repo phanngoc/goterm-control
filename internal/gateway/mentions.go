@@ -12,6 +12,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/skills"
 )
 
 // Answering a mention.
@@ -515,35 +516,24 @@ func (w *MentionWatcher) roster() string {
 	if err != nil || len(agents) <= 1 {
 		return ""
 	}
-	var lines []string
+	var peers []skills.Peer
 	for _, a := range agents {
 		if a.ID == w.deps.AgentID {
 			continue
 		}
-		state := "online"
-		if !a.Online {
-			state = "offline right now"
-		}
-		backend := a.Provider
-		if a.Model != "" {
-			backend = fmt.Sprintf("%s · %s", a.Provider, a.Model)
-		}
-		lines = append(lines, fmt.Sprintf("- **%s** — %s (%s)", a.ID, backend, state))
+		peers = append(peers, skills.Peer{
+			ID: a.ID, Provider: a.Provider, Model: a.Model,
+			Workspace: a.Workspace, Online: a.Online,
+		})
 	}
-	if len(lines) == 0 {
+	list := skills.Roster(peers)
+	if list == "" {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("## The other agents on this machine\n\n")
-	for _, l := range lines {
-		b.WriteString(l)
-		b.WriteString("\n")
-	}
-	b.WriteString("\nThey run different backends, so they are good at different things and cost " +
-		"different amounts. Name one with @ to bring it into this thread — it arrives having read " +
-		"the conversation. Hand work over with `bomclaw task new --to <agent>`; " +
-		"`bomclaw agents` is the same list, live.\n\n")
-	return b.String()
+	return list + "\nThe lines under each name are its skills — that is what it is actually set up " +
+		"to do, read from its own toolkit rather than described here, so it cannot go stale. " +
+		"Name one with @ to bring it into this thread; it arrives having read the conversation. " +
+		"Hand work over with `bomclaw task new --to <agent>`; `bomclaw agents` is the same list, live.\n\n"
 }
 
 // threadContext is what the agent needs to read before answering, and it is a
