@@ -245,3 +245,209 @@ bước **đề xuất chép sang** khi hai bản của cùng một skill lệch
 
 **Và cái rủi ro lớn nhất vẫn là §2.2**: một agent tự dạy mình rằng một công cụ hỏng, rồi trích dẫn
 chính nó để từ chối làm việc, hàng tháng sau khi sự cố đã được sửa.
+
+---
+
+## 7. Sequence — ba tầng, ai gọi ai
+
+### 7.1 Trong lượt: skill chỉ tốn tiền khi được dùng
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Người / task
+    participant A as Agent
+    participant P as System prompt
+    participant F as SKILL.md
+
+    Note over P: index: name + description + đường dẫn<br/>(vài trăm token, bao nhiêu skill cũng thế)
+    U->>A: một việc
+    A->>P: đọc index
+    alt description khớp việc
+        A->>F: Read đường dẫn
+        F-->>A: toàn văn hướng dẫn
+        Note over A: +1 view
+    else không khớp
+        Note over A: không đọc gì — chi phí ≈ 0
+    end
+    A-->>U: làm việc
+```
+
+Đây là phần **đã chạy** ở đây. `description` là **tín hiệu định tuyến**; thân file là thứ trả tiền
+theo nhu cầu.
+
+### 7.2 Sau lượt: chỗ việc học thật sự xảy ra *(chưa có ở đây)*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as Task vừa xong
+    participant R as Review pass
+    participant G as Guard
+    participant F as SKILL.md
+    participant L as Ledger
+
+    T->>R: hội thoại + kết quả
+    Note over R: chỉ được: đọc file, đọc skill, ghi skill<br/>KHÔNG có terminal (§4.6)
+    R->>R: có bài học nào không?
+    alt không có
+        R-->>T: "Nothing to save"
+    else có
+        R->>F: đọc TƯƠI bản hiện tại
+        F-->>R: nội dung
+        R->>G: xin vá
+        alt chưa đọc tươi trong chính lượt này
+            G-->>R: từ chối (§4.1)
+        else đã đọc
+            G->>F: ghi
+            G->>L: một dòng: ai, cái gì, khi nào
+            Note over F: +1 patch
+        end
+    end
+```
+
+Bước `đọc TƯƠI` là chỗ hermes suýt chết: guard đòi nó, nhưng whitelist ban đầu **cấm phương tiện thực
+hiện nó** (§3).
+
+### 7.3 Hàng tuần: curator *(chưa có ở đây)*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Curator
+    participant S as .curator_state
+    participant B as Snapshot
+    participant U as Counters
+    participant M as Model
+
+    C->>S: đã quá interval chưa? máy rảnh chưa?
+    alt lần đầu quan sát
+        S-->>C: seed last_run_at = now
+        Note over C: KHÔNG làm gì — cho người<br/>trọn một interval để pin (§4.3)
+    else tới hạn
+        C->>B: tar.gz cả cây (best-effort)
+        C->>U: PHASE 1 — máy trạng thái, KHÔNG LLM
+        U-->>C: {stale, archived, reactivated}
+        C->>S: ghi last_run_at TRƯỚC khi gọi model (§4.4)
+        opt consolidate bật
+            C->>M: PHASE 2 — gộp skill trùng
+            M-->>C: đã xoá X, absorbed_into Y
+        end
+        C->>C: đối chiếu 3 nguồn tín hiệu (§4.5)
+    end
+```
+
+---
+
+## 8. Đối tượng tác động, trọng số, và công thức
+
+### 8.1 Ai được đụng vào việc học, và mạnh đến đâu
+
+Không phải mọi tín hiệu đều ngang nhau. hermes phân quyền theo **ai là tác nhân**, không theo file nằm
+ở đâu:
+
+| Tác nhân | Được sửa skill nào | Sức nặng | Vì sao |
+|---|---|---|---|
+| **Người, foreground** | tất cả | **tuyệt đối** | người đang ngồi đó; `pinned` chặn cả agent |
+| **Người, sửa style/tone** | — (là *tín hiệu*) | **hạng nhất** | *"quá dài dòng"* ⇒ skill quản việc đó phải mang bài học |
+| **Agent, foreground** (`/learn`) | tạo mới → `created_by=learn` | cao | user chỉ đạo ⇒ **curator không đụng** |
+| **Review fork** | chỉ skill `created_by=agent` | vừa | tự chủ, không người giám sát |
+| **Curator** | chỉ skill `created_by=agent` | thấp | chỉ dọn, và có snapshot trước |
+| **Cron job tham chiếu** | — (là *lá chắn*) | = pinned | `use_count` chỉ tăng khi job bắn |
+| **Linter / validator** | — (là *rào*) | chặn / cảnh báo | validator **chặn**, linter **chỉ cảnh báo** |
+
+Dòng quan trọng nhất là dòng thứ hai: **lời phàn nàn của người về *cách* một việc được làm là tín hiệu
+SKILL, không phải tín hiệu memory.** Memory nói *"user là ai"*; skill nói *"làm lớp việc này cho user
+này thế nào"*.
+
+### 8.2 Công thức của hermes: **không có**
+
+Cần nói thẳng, vì dễ tưởng là có. `tools/skill_usage.py`:
+
+```python
+def activity_count(record):
+    return sum(record.get(k) for k in ("use_count", "view_count", "patch_count"))
+```
+
+**Tổng không trọng số** của ba loại sự kiện:
+
+| Sự kiện | Tăng khi | Mốc thời gian |
+|---|---|---|
+| `use` | skill được gọi (slash command, cron job) | `last_used_at` |
+| `view` | `skill_view` đọc thân file | `last_viewed_at` |
+| `patch` | vòng lặp sửa nó | `last_patched_at` |
+
+Và mốc tuổi:
+
+```
+last_activity_at = max(last_used_at, last_viewed_at, last_patched_at)
+```
+
+với một chi tiết được ghi thành comment: **`created_at` bị loại khỏi phép max** — *"so never-active
+skills stay distinguishable"*. Skill chưa từng hoạt động phải **phân biệt được** với skill vừa dùng.
+
+Toàn bộ "trọng số" nằm trong **các cổng**, không nằm trong một con số:
+
+| Cổng | Giá trị | Tác dụng |
+|---|---|---|
+| stale | 14 ngày không hoạt động | đánh dấu, chưa đụng |
+| archive | 30 ngày | chuyển vào `.archive/` |
+| sàn ân hạn | `use_count == 0` và còn trẻ hơn stale | **không đụng** — skill mới có thời gian |
+| reactivate | dùng lại sau khi stale | **quay về active** — chuyển dịch hai chiều |
+| pinned / cron-referenced | — | miễn nhiễm hoàn toàn |
+| nudge | 10 lượt user / 15 iteration | khi nào fork chạy |
+
+**Đây là một lựa chọn, không phải một thiếu sót.** Một tổng không trọng số cộng vài ngưỡng thời gian
+thì **giải thích được** — người đọc report hiểu vì sao một skill bị archive. Một điểm số có hệ số thì
+không ai truy được, và khi nó sai thì không ai biết chỉnh cái gì.
+
+### 8.3 Công thức cho hệ này
+
+Ở đây khác hermes ở **một điểm quyết định**: ta **không** thấy `skill_view` như một sự kiện riêng — agent
+đọc bằng tool `Read` của CLI, ta chỉ thấy một tool span. Nhưng ta thấy một thứ hermes không có:
+**kết cục của công việc**. Mỗi task có `state`, và mỗi lượt có một trace.
+
+Nên tín hiệu mạnh nhất ở đây không phải *"skill này được đọc bao nhiêu lần"* mà **_"skill này được đọc
+trong những việc đã thành công bao nhiêu lần"_**.
+
+Đề xuất — giữ đúng nguyên tắc *giải thích được* của họ, chỉ thêm đúng một chiều mà ta có dữ liệu:
+
+```
+activity(s) = view_ok(s) + view_failed(s) + patch(s)
+
+   view_ok      số lần SKILL.md được đọc trong một task kết thúc completed
+   view_failed  … trong một task kết thúc failed / canceled
+   patch        số lần skill được sửa (bởi người hoặc bởi vòng lặp)
+
+last_activity(s) = max(mọi mốc thời gian ở trên)      # KHÔNG gồm created_at
+
+state(s):
+   pinned hoặc được một schedule tham chiếu   → miễn nhiễm
+   chưa từng có hoạt động và created_at trẻ hơn stale_cutoff → miễn nhiễm (sàn ân hạn)
+   last_activity ≤ now − 30d                 → archived
+   last_activity ≤ now − 14d                 → stale
+   last_activity >  now − 14d và đang stale   → active   (hai chiều)
+```
+
+**Vì sao tách `view_ok` / `view_failed` thay vì gán hệ số.** Một con số `0.3 × view_failed` thì không
+ai truy được. Hai cột thì đọc ra ngay: một skill có `view_ok = 0, view_failed = 12` **không phải là
+skill ít dùng — nó là skill đang dẫn người ta đi sai**, và đó là thứ đáng đưa lên đầu report chứ không
+phải đáng đem archive.
+
+Đây cũng là chỗ **#126 vừa làm cho khả thi**: trace đã có tag `channel:` / `message:`, và một task đã
+có trace riêng — nên "skill nào được đọc trong task nào, task đó kết thúc ra sao" là một câu **join
+được**, không cần agent hợp tác ghi chép.
+
+### 8.4 Ngưỡng nào phải đo trước khi chốt
+
+Ba con số dưới đây **không được bê nguyên** từ hermes, vì nhịp ở đây khác hẳn:
+
+| Ngưỡng | hermes | ở đây cần đo |
+|---|---|---|
+| **stale** | 14 ngày | ba agent, mỗi ngày vài chục lượt — 14 ngày có thể là cả một kỉ nguyên |
+| **archive** | 30 ngày | như trên |
+| **kích hoạt review** | mỗi 10 lượt user | ở đây đề xuất **sau mỗi task completed**, vì một "lượt" trải trên ba làn và task là nơi có bài học đáng học nhất |
+
+Và một con số **phải đo ngay khi làm bước 1**: khối luật (§2) vào **mọi prompt**. `MaxIndexRunes` hiện
+là 4000 cho **cả** index. Luật là hằng số, index co giãn theo số skill — nếu để chung một ngân sách thì
+agent thứ mười lăm sẽ đẩy luật ra ngoài mà không ai thấy.
