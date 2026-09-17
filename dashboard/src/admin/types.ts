@@ -314,3 +314,28 @@ export interface Artifact {
   created_at: string
   role?: 'input' | 'output'
 }
+
+// --- skills -----------------------------------------------------------------
+
+export interface HubSkill {
+  name: string
+  description: string
+  path: string
+  dir: string
+  /** bundled: one of the defaults every agent is seeded with, so it can be
+   *  offered back after a removal. */
+  bundled: boolean
+  /** edited: this agent's copy no longer matches what it was seeded with — the
+   *  mark of a lesson this agent has and its peers do not. */
+  edited: boolean
+}
+
+export interface AgentSkills {
+  agent_id: string
+  workspace: string
+  skills: HubSkill[]
+  missing?: string[]
+  error?: string
+  online: boolean
+  provider?: string
+}
