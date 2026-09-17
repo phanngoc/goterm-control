@@ -1,6 +1,9 @@
 package coord
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The dashboard's Direct list was empty because every DM was agent↔agent and
 // the owner was a member of nothing. "Message this one privately" had no room
@@ -94,5 +97,64 @@ func TestAnAgentRemembersWhichBotItAnswersOn(t *testing.T) {
 	agents, _ = db.ListAgents()
 	if agents[0].TelegramBot != "Goterm3_bot" {
 		t.Error("re-registering wiped which bot the agent answers on")
+	}
+}
+
+// `bomclaw msg --to <anything>` took any string at all, and EnsureDM would
+// build a room for it. An agent once passed a message id; the result was a
+// permanent room named after that id, holding a report nobody would ever read.
+func TestAMessageToSomebodyWhoIsNotAnAgentIsRefused(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+
+	before, _ := db.ListChannels("", "")
+	if _, err := db.SendMessage("bomclaw", "cm_61e75346-b21c-4e43", "", "Xong báo cáo"); err == nil {
+		t.Fatal("accepted a message id as a recipient")
+	}
+	after, _ := db.ListChannels("", "")
+	if len(after) != len(before) {
+		t.Fatalf("a room was created for a recipient that does not exist: %d → %d", len(before), len(after))
+	}
+
+	// And the refusal says where to look, because the agent reading it is the
+	// one that has to pick a different name.
+	_, err := db.SendMessage("bomclaw", "nobody", "", "hello")
+	if err == nil || !strings.Contains(err.Error(), "bomclaw agents") {
+		t.Errorf("error = %v — it does not say how to find a real recipient", err)
+	}
+}
+
+// Archiving hides a room without destroying what was said in it. The rooms this
+// cleans up were made by a bug, but the lines inside them are real things an
+// agent said.
+func TestArchivingHidesARoomAndKeepsItsMessages(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+	ch, err := db.EnsureDM("bomclaw", "bomclaw2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: ch.ID, AuthorID: "bomclaw", Body: "việc đã làm thật",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.ArchiveChannel(ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := db.ListChannels(MemberAgent, "bomclaw")
+	for _, c := range list {
+		if c.ID == ch.ID {
+			t.Fatal("an archived room is still listed")
+		}
+	}
+	got, err := db.GetMessage(m.ID)
+	if err != nil || got.Body != "việc đã làm thật" {
+		t.Fatalf("archiving destroyed the message: %+v %v", got, err)
+	}
+	if err := db.ArchiveChannel(ch.ID); err == nil {
+		t.Error("archiving twice reported success")
 	}
 }

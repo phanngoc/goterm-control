@@ -29,6 +29,18 @@ type Message struct {
 // SendMessage posts to the DM channel between the two agents and names the
 // recipient, so it lands in their mentions like any other summons.
 func (db *DB) SendMessage(from, to, taskID, body string) (*Message, error) {
+	// The recipient has to be somebody. This took any string, and EnsureDM
+	// would build a room for it — an agent once passed a message id and left a
+	// permanent room named after it, holding a report nobody would ever read.
+	// Refused rather than guessed: a near-miss delivered to the wrong agent is
+	// worse than a message that did not send.
+	known, err := db.IsAgent(to)
+	if err != nil {
+		return nil, err
+	}
+	if !known {
+		return nil, fmt.Errorf("coord: no agent %q — `bomclaw agents` lists the ones there are", to)
+	}
 	ch, err := db.EnsureDM(from, to)
 	if err != nil {
 		return nil, err

@@ -114,9 +114,21 @@ func TestParentIsWokenWithChildResults(t *testing.T) {
 // marked read; unrelated mail stays in the inbox for the chat.
 func TestTaskMailIsInThePromptAndMarkedRead(t *testing.T) {
 	db := testDB(t)
+	// Both ends have to be registered: a message to somebody who is not an
+	// agent is refused now, and swallowing that error here would make this
+	// test fail later on a prompt assertion that explains nothing.
+	for _, id := range []string{"a1", "a2"} {
+		if err := db.RegisterAgent(coord.Agent{ID: id, DisplayName: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	task, _ := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "Review the PR", AssignedTo: "a2"})
-	db.SendMessage("a1", "a2", task.ID, "Skip the Windows job, it is known-flaky.")
-	db.SendMessage("a1", "a2", "", "Unrelated: lunch?")
+	if _, err := db.SendMessage("a1", "a2", task.ID, "Skip the Windows job, it is known-flaky."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SendMessage("a1", "a2", "", "Unrelated: lunch?"); err != nil {
+		t.Fatal(err)
+	}
 
 	llm := &stubLLM{reply: "Reviewed."}
 	r := newRunner(db, llm)

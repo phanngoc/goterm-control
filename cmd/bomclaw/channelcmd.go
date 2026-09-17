@@ -265,6 +265,22 @@ func runChannel(args []string) {
 		}
 		fmt.Println("Only what is said from now on travels — the room's history stays here.")
 
+	case "archive":
+		fs := flag.NewFlagSet("ch archive", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		channelID, _ := parseLeading(fs, rest)
+		if channelID == "" {
+			fmt.Fprintln(os.Stderr, "Usage: bomclaw ch archive <channel-id>")
+			os.Exit(1)
+		}
+		db := openCoord(*dbPath)
+		defer db.Close()
+		if err := db.ArchiveChannel(channelID); err != nil {
+			fmt.Fprintf(os.Stderr, "ch archive: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s is out of the list. Nothing said in it was deleted.\n", channelID)
+
 	case "mentions":
 		fs := flag.NewFlagSet("ch mentions", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
@@ -385,6 +401,7 @@ Usage: bomclaw ch <command>
   new      <name> [--purpose ...] [--members a,b]
   join     <channel> [--who <agent>]
   bind     [<channel>] [--mode all|mentions|off] [--off]   carry it to Telegram
+  archive  <channel>                     hide it; nothing said in it is lost
   mentions [--mark-read]                 lines that named me
 
 A channel is a place: everyone in it reads everything, so another agent can
