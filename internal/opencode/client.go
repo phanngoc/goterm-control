@@ -38,7 +38,7 @@ const ProviderName = "opencode"
 type Client struct {
 	systemPrompt string
 	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
-	systemExtra func() string
+	systemExtra func(workspace string) string
 	pool        *credentials.Pool
 	workspace   string
 }
@@ -107,7 +107,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	prompt := userText
 	if isNew {
-		prompt = c.firstTurnPrompt(userText, memoryContext)
+		prompt = c.firstTurnPrompt(userText, memoryContext, chat.WorkspaceFor(sess, c.workspace))
 	}
 
 	cmd := exec.CommandContext(ctx, opencodeBin, buildArgs(modelID, sessionID, isNew)...)
@@ -283,9 +283,9 @@ func buildArgs(modelID, sessionID string, isNew bool) []string {
 // firstTurnPrompt folds the system prompt and memory into the opening message,
 // because opencode has no flag that carries them separately. Later turns resume
 // a session that already holds them.
-func (c *Client) firstTurnPrompt(userText, memoryContext string) string {
+func (c *Client) firstTurnPrompt(userText, memoryContext, workspace string) string {
 	var b strings.Builder
-	if p := strings.TrimSpace(c.prompt()); p != "" {
+	if p := strings.TrimSpace(c.prompt(workspace)); p != "" {
 		b.WriteString(p)
 		b.WriteString("\n\n")
 	}
@@ -353,13 +353,13 @@ func init() {
 
 // SetSystemExtra registers a function evaluated on every turn and appended to
 // the system prompt. See chat.Deps.SystemExtra.
-func (c *Client) SetSystemExtra(f func() string) { c.systemExtra = f }
+func (c *Client) SetSystemExtra(f func(workspace string) string) { c.systemExtra = f }
 
 // prompt is the operating instructions for THIS turn: the fixed system prompt
 // plus whatever systemExtra says right now.
-func (c *Client) prompt() string {
+func (c *Client) prompt(workspace string) string {
 	if c.systemExtra == nil {
 		return c.systemPrompt
 	}
-	return c.systemPrompt + c.systemExtra()
+	return c.systemPrompt + c.systemExtra(workspace)
 }
