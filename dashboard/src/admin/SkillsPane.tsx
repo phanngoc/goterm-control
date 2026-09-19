@@ -152,62 +152,82 @@ function SkillModal({ call, agent, name, onClose, onSaved }: {
   )
 }
 
+// SkillRow — the whole row opens the skill, the controls on the right do not.
+//
+// The name alone was the click target and nobody found it: it renders as a
+// heading, and a heading is not something people try clicking. A task card on
+// the board opens the same way, so this is the pattern the screen already has.
 function SkillRow({ skill, agent, peers, onOpen, onRemove, onCopy }: {
   skill: HubSkill; agent: string; peers: string[]
   onOpen: () => void; onRemove: () => void; onCopy: (to: string) => void
 }) {
   return (
-    <li className="py-2 border-b border-gray-800/60 last:border-0">
-      <div className="flex items-baseline gap-2">
-        <button
-          onClick={onOpen}
-          title="Đọc toàn văn skill này"
-          className="text-sm text-gray-100 hover:text-sky-300 hover:underline"
-        >
-          {skill.name}
-        </button>
-        {skill.edited && (
-          <span
-            title="Bản của agent này đã khác bản gốc — nó học được điều gì đó các con khác chưa có"
-            className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-amber-500/30 bg-amber-500/10 text-amber-300"
-          >
-            đã sửa
-          </span>
-        )}
-        {skill.category && (
-          <span
-            title="Backend của agent tự xếp skill này vào nhóm đó"
-            className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-500 font-mono"
-          >
-            {skill.category}
-          </span>
-        )}
-        {!skill.bundled && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-500">riêng</span>
-        )}
-        <div className="ml-auto flex items-center gap-1.5">
-          {peers.length > 0 && (
-            <select
-              value=""
-              onChange={e => { if (e.target.value) onCopy(e.target.value) }}
-              title="Chép bản này sang agent khác"
-              className="px-1.5 py-0.5 text-[11px] bg-gray-950 rounded ring-1 ring-gray-800 text-gray-400 outline-none"
+    <li className="border-b border-gray-800/60 last:border-0">
+      <div
+        onClick={onOpen}
+        role="button"
+        tabIndex={0}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
+        title="Mở để đọc toàn văn"
+        className="group py-2 -mx-1 px-1 rounded cursor-pointer hover:bg-gray-800/40
+                   focus:outline-none focus:ring-1 focus:ring-sky-500/40"
+      >
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm text-gray-100 group-hover:text-sky-300">{skill.name}</span>
+
+          {skill.edited && (
+            <span
+              title="Bản của agent này đã khác bản gốc — nó học được điều gì đó các con khác chưa có"
+              className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-amber-500/30 bg-amber-500/10 text-amber-300"
             >
-              <option value="">chép sang…</option>
-              {peers.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+              đã sửa
+            </span>
           )}
-          <button onClick={onRemove}
-            className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-500 hover:text-red-300 hover:ring-red-500/40">
-            gỡ
-          </button>
+          {skill.category && (
+            <span
+              title="Backend của agent tự xếp skill này vào nhóm đó"
+              className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-500 font-mono"
+            >
+              {skill.category}
+            </span>
+          )}
+          {!skill.bundled && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-500">riêng</span>
+          )}
+
+          {/* Says what a click does, and only while the row is under the
+              cursor — a permanent label on every row is nine labels nobody
+              reads. */}
+          <span className="text-[10px] text-sky-300/0 group-hover:text-sky-300/80 transition-colors">đọc</span>
+
+          {/* The controls are inside the clickable row, so each one has to stop
+              the click reaching it. A "gỡ" that also opened the reader would be
+              a confirm dialog behind a modal. */}
+          <div className="ml-auto flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+            {peers.length > 0 && (
+              <select
+                value=""
+                onChange={e => { if (e.target.value) onCopy(e.target.value) }}
+                title="Chép bản này sang agent khác"
+                className="px-1.5 py-0.5 text-[11px] bg-gray-950 rounded ring-1 ring-gray-800 text-gray-400 outline-none"
+              >
+                <option value="">chép sang…</option>
+                {peers.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            )}
+            <button onClick={onRemove}
+              className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-500 hover:text-red-300 hover:ring-red-500/40">
+              gỡ
+            </button>
+          </div>
         </div>
+
+        <p className="mt-0.5 text-xs text-gray-500 leading-snug">
+          {skill.description || <span className="text-gray-600 italic">chưa ai nói khi nào dùng nó</span>}
+        </p>
+        <p className="mt-0.5 text-[10px] text-gray-700 font-mono break-all">{skill.path}</p>
+        <span className="sr-only">{agent}</span>
       </div>
-      <p className="mt-0.5 text-xs text-gray-500 leading-snug">
-        {skill.description || <span className="text-gray-600 italic">chưa ai nói khi nào dùng nó</span>}
-      </p>
-      <p className="mt-0.5 text-[10px] text-gray-700 font-mono break-all">{skill.path}</p>
-      <span className="sr-only">{agent}</span>
     </li>
   )
 }
