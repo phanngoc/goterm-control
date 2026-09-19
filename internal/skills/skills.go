@@ -40,8 +40,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Dir is the folder inside an agent's workspace that holds its skills.
+// Dir is the folder inside a workspace that holds its skills.
 const Dir = "skills"
+
+// ProjectDir is where a source repository keeps the skills that belong to IT
+// rather than to whoever is working on it — how this codebase is deployed, what
+// its migrations trip over, what a review of it must check.
+//
+// A second location because the two are different kinds of knowledge and they
+// travel differently. An agent's skills follow the agent between projects; a
+// repo's skills are checked into the repo, reviewed with the code they
+// describe, and stop applying the moment the agent works on something else.
+//
+// Dotted and nested rather than a bare `skills/` at the repo root: a source
+// tree usually already has a directory by that name meaning something else.
+const ProjectDir = ".agents/skills"
 
 // File is the one file that makes a directory a skill.
 const File = "SKILL.md"
@@ -97,7 +110,38 @@ func Load(workspace string) ([]Skill, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, nil
 	}
-	root := filepath.Join(workspace, Dir)
+	own, err := loadRoot(filepath.Join(workspace, Dir))
+	if err != nil {
+		return nil, err
+	}
+	// A repo's own skills, when this directory is a source tree rather than an
+	// agent's workspace. They win a name collision: the project's way of doing
+	// a thing beats the general one, which is the whole reason to have both.
+	project, err := loadRoot(filepath.Join(workspace, ProjectDir))
+	if err != nil {
+		return nil, err
+	}
+	return Merge(own, project), nil
+}
+
+// Merge combines sets by name, later winning, and re-sorts. Exported because
+// the caller assembling a turn's toolkit does the same join across roots.
+func Merge(sets ...[]Skill) []Skill {
+	byName := map[string]Skill{}
+	for _, set := range sets {
+		for _, s := range set {
+			byName[s.Name] = s
+		}
+	}
+	out := make([]Skill, 0, len(byName))
+	for _, s := range byName {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func loadRoot(root string) ([]Skill, error) {
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil

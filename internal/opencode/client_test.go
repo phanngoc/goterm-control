@@ -103,14 +103,14 @@ func TestEmptyToolInputIsAnEmptyObject(t *testing.T) {
 
 func TestFirstTurnPromptCarriesInstructionsAndMemory(t *testing.T) {
 	c := New("You are terse.")
-	got := c.firstTurnPrompt("what time is it", "The user is in Hanoi.")
+	got := c.firstTurnPrompt("what time is it", "The user is in Hanoi.", "")
 	for _, want := range []string{"You are terse.", "The user is in Hanoi.", "what time is it"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("first-turn prompt is missing %q:\n%s", want, got)
 		}
 	}
 	// And a resumed session must not get them again.
-	if again := c.firstTurnPrompt("next", ""); strings.Contains(again, "Hanoi") {
+	if again := c.firstTurnPrompt("next", "", ""); strings.Contains(again, "Hanoi") {
 		t.Error("memory leaked into a prompt that was not given any")
 	}
 }

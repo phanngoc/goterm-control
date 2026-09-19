@@ -223,10 +223,13 @@ func TestTheHubReachesASkillTheBackendNested(t *testing.T) {
 	}
 }
 
-// The bundled set goes into every prompt of every agent, forever. Six of them
-// already use well over half the index budget — which is the measurement that
-// makes splitting the budget (#189) urgent rather than tidy, and this test is
-// what will say so when a seventh is added.
+// The bundled set goes into every prompt of every agent, forever — so it holds
+// only what is true of the MACHINE, not of any one repo. A skill about how some
+// codebase deploys belongs in that codebase (skills.ProjectDir), where it stops
+// applying the moment the agent works on something else.
+//
+// This test is the budget alarm: it fails when the bundled set grows past the
+// room an agent needs for skills of its own.
 func TestTheBundledSetFitsWithRoomLeft(t *testing.T) {
 	ws := t.TempDir()
 	if _, err := EnsureDefaults(ws); err != nil {

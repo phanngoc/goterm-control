@@ -107,7 +107,7 @@ func TestScreenshotBecomesImage(t *testing.T) {
 
 func TestFirstTurnPromptCarriesInstructionsAndMemory(t *testing.T) {
 	c := &Client{systemPrompt: "You are AGENT 2."}
-	got := c.firstTurnPrompt("what time is it?", "## Memory\nuser likes brevity")
+	got := c.firstTurnPrompt("what time is it?", "## Memory\nuser likes brevity", "")
 
 	for _, want := range []string{"You are AGENT 2.", "## File access", "user likes brevity", "what time is it?"} {
 		if !strings.Contains(got, want) {
@@ -124,7 +124,7 @@ func TestResumedTurnSendsRawUserText(t *testing.T) {
 	c := &Client{systemPrompt: "You are AGENT 2."}
 	// A resumed thread already holds the instructions; SendMessage only calls
 	// firstTurnPrompt for new threads, so the raw text is what goes over stdin.
-	if got := c.firstTurnPrompt("hello", ""); strings.Contains(got, "## Memory") {
+	if got := c.firstTurnPrompt("hello", "", ""); strings.Contains(got, "## Memory") {
 		t.Errorf("empty memory must not add a memory section: %q", got)
 	}
 }

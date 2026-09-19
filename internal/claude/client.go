@@ -39,7 +39,7 @@ type StreamCallbacks = chat.StreamCallbacks
 type Client struct {
 	systemPrompt string
 	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
-	systemExtra func() string
+	systemExtra func(workspace string) string
 	workspace   string // working directory for the CLI subprocess
 	pool        *credentials.Pool
 }
@@ -161,7 +161,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// Resumed sessions already carry full conversation history in the CLI,
 	// so injecting memory again causes context pollution (e.g. old topics
 	// overriding the user's current intent).
-	systemPrompt := c.prompt() + fsGuardPrompt
+	systemPrompt := c.prompt(chat.WorkspaceFor(sess, c.workspace)) + fsGuardPrompt
 	if memoryContext != "" && isNewSession {
 		systemPrompt += memoryContext
 	}
@@ -480,13 +480,13 @@ func init() {
 
 // SetSystemExtra registers a function evaluated on every turn and appended to
 // the system prompt. See chat.Deps.SystemExtra.
-func (c *Client) SetSystemExtra(f func() string) { c.systemExtra = f }
+func (c *Client) SetSystemExtra(f func(workspace string) string) { c.systemExtra = f }
 
 // prompt is the operating instructions for THIS turn: the fixed system prompt
 // plus whatever systemExtra says right now.
-func (c *Client) prompt() string {
+func (c *Client) prompt(workspace string) string {
 	if c.systemExtra == nil {
 		return c.systemPrompt
 	}
-	return c.systemPrompt + c.systemExtra()
+	return c.systemPrompt + c.systemExtra(workspace)
 }

@@ -159,10 +159,14 @@ func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *c
 	// Skills are read on every turn rather than baked in here. Attaching one
 	// to an agent has to take effect on its next turn: a toolkit you can only
 	// change by restarting the gateway is not a toolkit anybody edits.
+	//
+	// Two roots, because there are two kinds. The agent's own skills follow it
+	// between projects; a project's or a repo's skills belong to the work and
+	// apply only while the turn is inside it.
 	workspace := cfg.Claude.Workspace
 	c, err := chat.Resolve(api, chat.Deps{
 		SystemPrompt: cfg.Claude.SystemPrompt,
-		SystemExtra:  func() string { return SkillIndex(workspace) },
+		SystemExtra:  func(turn string) string { return SkillIndex(workspace, turn) },
 		Workspace:    workspace,
 		Executor:     executor,
 		Pool:         pool,
@@ -388,18 +392,34 @@ func (b *Bot) Shutdown() {
 	log.Println("bot: shutdown complete")
 }
 
-// SkillIndex is this agent's toolkit as it stands right now: the name and the
-// when-to-use of each skill in its workspace, plus the file to open for the
-// rest.
+// SkillIndex is the toolkit in front of THIS turn: the agent's own skills, plus
+// whatever the directory it is working in carries.
+//
+// Two roots rather than one because the two are different kinds of knowledge.
+// An agent's skills are about this machine and follow the agent everywhere. A
+// project's — or a source repo's — are about that work: how it is deployed,
+// what its migrations trip over. Carrying the second set into a turn on a
+// different project would be handing the agent a deploy procedure for something
+// it is not touching.
+//
+// The turn's directory wins a name collision: the project's way of doing a
+// thing beats the general one, which is the only reason to have both.
 //
 // Errors are logged and swallowed. A broken skills folder must not take the
-// agent's turn down with it — it can still do everything it could before
-// skills existed.
-func SkillIndex(workspace string) string {
-	list, err := skills.Load(workspace)
-	if err != nil {
-		log.Printf("skills: %v", err)
-		return ""
+// agent's turn down with it — it can still do everything it could before skills
+// existed.
+func SkillIndex(agentWorkspace, turnWorkspace string) string {
+	var all []skills.Skill
+	for _, root := range []string{agentWorkspace, turnWorkspace} {
+		if root == "" {
+			continue
+		}
+		list, err := skills.Load(root)
+		if err != nil {
+			log.Printf("skills: %v", err)
+			continue
+		}
+		all = skills.Merge(all, list)
 	}
-	return skills.Index(list)
+	return skills.Index(all)
 }
