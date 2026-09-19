@@ -222,3 +222,40 @@ func TestTheHubReachesASkillTheBackendNested(t *testing.T) {
 		t.Fatalf("still there: %+v", list)
 	}
 }
+
+// The bundled set goes into every prompt of every agent, forever. Six of them
+// already use well over half the index budget — which is the measurement that
+// makes splitting the budget (#189) urgent rather than tidy, and this test is
+// what will say so when a seventh is added.
+func TestTheBundledSetFitsWithRoomLeft(t *testing.T) {
+	ws := t.TempDir()
+	if _, err := EnsureDefaults(ws); err != nil {
+		t.Fatal(err)
+	}
+	list, err := Load(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := []rune(Index(list))
+	if len(idx) > MaxIndexRunes {
+		t.Fatalf("the bundled skills alone are %d runes, past the %d cap — an agent\n"+
+			"with skills of its own would have them silently cut", len(idx), MaxIndexRunes)
+	}
+	// Two thirds is the line. Past it there is no room for an agent's own
+	// skills, and the ones it wrote are the first to be dropped.
+	if limit := MaxIndexRunes * 2 / 3; len(idx) > limit {
+		t.Errorf("the bundled skills use %d of %d runes (over %d). Either shorten a\n"+
+			"description or give the rules their own budget before adding another.",
+			len(idx), MaxIndexRunes, limit)
+	}
+	// Every bundled description has to say when to use it AND when not to:
+	// the index is where routing happens, and "NOT for" is half the decision.
+	for _, s := range list {
+		if !strings.Contains(s.Description, "Use when") {
+			t.Errorf("%q does not say when to use it", s.Name)
+		}
+		if !strings.Contains(s.Description, "NOT for") {
+			t.Errorf("%q does not say when NOT to use it — half the routing signal", s.Name)
+		}
+	}
+}
