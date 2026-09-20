@@ -356,13 +356,19 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// under this id, so resuming it is what makes run 2 remember run 1.
 	sess := session.New(taskChatID)
 	sess.ID = coord.TaskSessionID(task.ID)
-	// Work filed under a project runs in that project's folder, the same as a
-	// turn in its room. A task with no project runs where the agent lives.
-	if task.ChannelID != "" {
-		if c, err := r.db.GetChannel(task.ChannelID); err == nil {
-			sess.SetWorkspace(c.Workspace)
-		}
+	// Where this run happens. Work filed under a project runs in that project's
+	// folder, the same as a turn in its room. Everything else runs in the task
+	// tree's own shared folder — because a delegated task is rarely one agent:
+	// agent2 hands one piece to agent1 and another to agent3, and "where the
+	// agent lives" puts the three of them on three different disks with nothing
+	// but prose to carry a file between them.
+	workspace, shared, err := r.db.EnsureTaskWorkspace(task)
+	if err != nil {
+		// Not fatal. A run in the agent's own workspace is worse than a shared
+		// one and better than a task that cannot start at all.
+		log.Printf("taskrunner: %s: %v — running in this agent's own workspace", task.ID, err)
 	}
+	sess.SetWorkspace(workspace)
 	resumed := false
 	if ref := coord.ParseSessionRef(task.SessionRef); ref.Provider != "" {
 		// Only the same CLI can resume its own session; a ref from the other
@@ -386,7 +392,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// this task while nobody was running it, both belong in front of the model.
 	children, _ := r.db.Children(task.ID)
 	inbox := r.taskMail(task.ID)
-	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers())
+	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers(), workspace, shared)
 
 	// Same rule as the chat lane: only a brand-new session. A resumed one
 	// already carries this, and injecting it again pollutes the context.
@@ -652,7 +658,7 @@ func (r *Runner) peers() []coord.Agent {
 	return out
 }
 
-func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message, peers []coord.Agent) string {
+func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message, peers []coord.Agent, workspace string, shared bool) string {
 	var b strings.Builder
 	if t.Continuations > 0 || resumed {
 		fmt.Fprintf(&b, "You are continuing a task from the shared queue (run %d).\n\n", t.Continuations+1)
@@ -663,7 +669,22 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 	if t.ParentID != "" {
 		fmt.Fprintf(&b, "Parent task: %s (your result is gathered by it — state findings, not plans)\n", t.ParentID)
 	}
-	fmt.Fprintf(&b, "Context: %s (depth %d of %d)\n\n", t.ContextID, t.Depth, coord.MaxDepth)
+	fmt.Fprintf(&b, "Context: %s (depth %d of %d)\n", t.ContextID, t.Depth, coord.MaxDepth)
+	if workspace != "" {
+		if shared {
+			// Saying it is shared is the whole point. An agent that thinks the
+			// folder is its own will not look in it for a peer's work, and will
+			// write a path into a message instead of just leaving the file.
+			fmt.Fprintf(&b, "Working directory: %s\n"+
+				"This folder is shared by every task in this context, so a peer working on a "+
+				"sibling task is in the same directory. Leave files here for each other rather "+
+				"than describing where they are. It is scratch and it ages out — see below for "+
+				"what to do with anything the work produced.\n", workspace)
+		} else {
+			fmt.Fprintf(&b, "Working directory: %s (this project's folder)\n", workspace)
+		}
+	}
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "## %s\n", t.Title)
 	if t.Body != "" {
 		b.WriteString("\n")
@@ -740,10 +761,11 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"with the task, not described in prose:\n\n"+
 		"    bomclaw artifact put --task %s --title \"<what it is>\" --file <path>\n"+
 		"    bomclaw artifact put --task %s --title \"<what it is>\" --kind link --url <url>\n\n"+
-		"A path written into a sentence is findable for about a day: the next run has a different working "+
-		"directory, the person reading this is looking at a board and not a terminal, and nothing survives "+
-		"the file being moved. An artifact is found by id, shows up beside the task, and can be handed to a "+
-		"child task as an input.\n\n"+
+		"The working directory above is shared inside this task tree and nowhere else: it is where you and "+
+		"your peers hand files to each other while the work is in progress, and it is deleted once the tree "+
+		"has been finished a while. A path written into a sentence outlives neither — the person reading this "+
+		"is looking at a board and not a terminal, and nothing survives the file being moved. An artifact is "+
+		"found by id, shows up beside the task, and can be handed to a child task as an input.\n\n"+
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+
 		"the requesting agent reads, so state what you did and what you found. If you cannot proceed without "+
 		"a person: `bomclaw task block --id %s --on human --note \"<exactly what you need>\"` and stop.\n\n"+

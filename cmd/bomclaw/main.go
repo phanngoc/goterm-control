@@ -257,6 +257,13 @@ func runGateway(args []string) {
 			log.Printf("gateway: could not export BOMCLAW_ARTIFACTS_DIR: %v", err)
 		}
 	}
+	// And run folders, so `bomclaw task show` from an agent's shell names the
+	// directory that agent is actually standing in.
+	if cfg.Coord.RunsDir != "" {
+		if err := os.Setenv("BOMCLAW_RUNS_DIR", cfg.Coord.RunsDir); err != nil {
+			log.Printf("gateway: could not export BOMCLAW_RUNS_DIR: %v", err)
+		}
+	}
 
 	// And the same for the owner's Telegram chat, so `bomclaw ch bind` needs no
 	// chat id typed by hand. A private chat's id equals the user's id, so the
@@ -323,6 +330,9 @@ func runGateway(args []string) {
 		coordDB, err = coord.Open(cfg.Coord.Path)
 		if err == nil && cfg.Coord.ArtifactsDir != "" {
 			coordDB.SetArtifactsDir(cfg.Coord.ArtifactsDir)
+		}
+		if err == nil && cfg.Coord.RunsDir != "" {
+			coordDB.SetRunsDir(cfg.Coord.RunsDir)
 		}
 		if err == nil && cfg.Tasks.MaxPerContext > 0 {
 			coordDB.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
@@ -936,6 +946,15 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 						log.Printf("coord: purge artifacts: %v", err)
 					} else if rows > 0 {
 						log.Printf("coord: purged %d artifacts (%d files) from task trees finished over %d days ago", rows, files, artifactDays)
+					}
+					// Shared run folders go out on the same clock. They are
+					// scratch belonging to a finished tree, so a second
+					// retention knob would be two names for one decision.
+					n, err := cdb.PurgeRunspaces(time.Now().AddDate(0, 0, -artifactDays))
+					if err != nil {
+						log.Printf("coord: purge run folders: %v", err)
+					} else if n > 0 {
+						log.Printf("coord: removed %d run folders from task trees finished over %d days ago", n, artifactDays)
 					}
 				}
 			}

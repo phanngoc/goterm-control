@@ -19,7 +19,7 @@ func TestTaskPromptCarriesTheRightIDInEveryCommand(t *testing.T) {
 		ID: "t_real", Title: "visualize 3D", Body: "làm viewer",
 		Depth: 1, ContextID: "ctx_1",
 	}
-	p := taskPrompt(task, 8*time.Minute, false, nil, nil, nil)
+	p := taskPrompt(task, 8*time.Minute, false, nil, nil, nil, "", false)
 
 	if strings.Contains(p, "%!") || strings.Contains(p, "MISSING") || strings.Contains(p, "EXTRA") {
 		t.Fatalf("the prompt has a formatting error in it:\n%s", p)
@@ -45,7 +45,7 @@ func TestTaskPromptCarriesTheRightIDInEveryCommand(t *testing.T) {
 // command existing was not enough: a whole 3D viewer was handed over as a
 // localhost URL in prose, and the task's own output panel was empty.
 func TestTaskPromptAsksForTheOutputToBeFiled(t *testing.T) {
-	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, nil)
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, nil, "", false)
 	if !strings.Contains(p, "artifact put") {
 		t.Fatal("nothing tells the agent to file what it produced")
 	}
@@ -59,7 +59,7 @@ func TestTaskPromptAsksForTheOutputToBeFiled(t *testing.T) {
 // about this work has to be filed against it or the exchange is lost.
 func TestTaskPromptAsksForMessagesToBeFiledUnderTheTask(t *testing.T) {
 	peers := []coord.Agent{{ID: "bomclaw3", Provider: "opencode", Online: true}}
-	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers)
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers, "", false)
 	if !strings.Contains(p, "bomclaw msg --to <agent> --task t_real") {
 		t.Fatalf("the agent is told who its peers are and not how to write to them about this task:\n%s", p)
 	}
@@ -78,7 +78,7 @@ func TestTaskPromptSaysWhatEachPeerIsGoodAt(t *testing.T) {
 	peers := []coord.Agent{{
 		ID: "bomclaw3", Provider: "opencode", Model: "muse", Online: true, Workspace: ws,
 	}}
-	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers)
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers, "", false)
 
 	if !strings.Contains(p, "bomclaw3") {
 		t.Fatal("the peer is not named at all")
@@ -88,5 +88,36 @@ func TestTaskPromptSaysWhatEachPeerIsGoodAt(t *testing.T) {
 	}
 	if strings.Contains(p, "different strengths and different costs") {
 		t.Error("still carries the sentence that promised strengths and named none")
+	}
+}
+
+// An agent that does not know the folder is shared will not look in it for a
+// peer's work, and will describe a path in a message instead of just leaving
+// the file there.
+func TestTaskPromptSaysTheFolderIsSharedWhenItIs(t *testing.T) {
+	task := &coord.Task{ID: "t_real", Title: "dựng landing page", ContextID: "ctx_1"}
+
+	p := taskPrompt(task, time.Minute, false, nil, nil, nil, "/shared/runs/ctx_1", true)
+	if !strings.Contains(p, "/shared/runs/ctx_1") {
+		t.Fatalf("the agent is never told where it is standing:\n%s", p)
+	}
+	if !strings.Contains(p, "shared by every task in this context") {
+		t.Errorf("the folder is shared and the prompt does not say so:\n%s", p)
+	}
+
+	// A project folder is not the context's scratch and must not be described
+	// as something that ages out.
+	p = taskPrompt(task, time.Minute, false, nil, nil, nil, "/projects/trading", false)
+	if !strings.Contains(p, "this project's folder") {
+		t.Errorf("a project run does not name its project folder:\n%s", p)
+	}
+	if strings.Contains(p, "shared by every task in this context") {
+		t.Error("a project folder was described as context scratch")
+	}
+
+	// No workspace at all (the agent's own) must not invent a line about one.
+	p = taskPrompt(task, time.Minute, false, nil, nil, nil, "", false)
+	if strings.Contains(p, "Working directory:") {
+		t.Errorf("claimed a working directory there is none of:\n%s", p)
 	}
 }
