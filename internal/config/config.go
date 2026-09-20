@@ -79,7 +79,11 @@ type CoordConfig struct {
 	// ProjectsDir is where a channel's project folder is created; default
 	// ~/goterm-projects. Outside any agent's own workspace on purpose: a
 	// project belongs to everyone working on it.
-	ProjectsDir        string `yaml:"projects_dir"`
+	ProjectsDir string `yaml:"projects_dir"`
+	// RunsDir is where a task tree with no project does its work; default
+	// ~/goterm-shared/runs. One folder per context, shared by every agent
+	// carrying a piece of that tree — see coord/runspace.go.
+	RunsDir            string `yaml:"runs_dir"`
 	TraceRetentionDays int    `yaml:"trace_retention_days"` // default 7; 0 disables the purge
 
 	// ArtifactRetentionDays is how long the work product of a FINISHED task
@@ -344,6 +348,10 @@ func Load(path string) (*Config, error) {
 	if strings.HasPrefix(cfg.Coord.ArtifactsDir, "~/") {
 		home, _ := os.UserHomeDir()
 		cfg.Coord.ArtifactsDir = home + cfg.Coord.ArtifactsDir[1:]
+	}
+	if strings.HasPrefix(cfg.Coord.RunsDir, "~/") {
+		home, _ := os.UserHomeDir()
+		cfg.Coord.RunsDir = home + cfg.Coord.RunsDir[1:]
 	}
 	if cfg.Coord.TraceRetentionDays == 0 {
 		cfg.Coord.TraceRetentionDays = 7

@@ -413,6 +413,13 @@ func runTask(args []string) {
 		fmt.Printf("from %s → %s   attempts %d/%d   continuations %d/%d   depth %d   kind %s\n",
 			task.CreatedBy, orAny(task.ClaimedBy, task.AssignedTo), task.Attempts, task.MaxAttempts,
 			task.Continuations, task.MaxContinuations, task.Depth, task.Kind)
+		if dir, shared := db.TaskWorkspace(task); dir != "" {
+			if shared {
+				fmt.Printf("working in: %s (shared by this context)\n", dir)
+			} else {
+				fmt.Printf("working in: %s (project folder)\n", dir)
+			}
+		}
 		if ref := coord.ParseSessionRef(task.SessionRef); ref.SessionID != "" {
 			fmt.Printf("session: %s/%s%s (next run resumes it on %s)\n",
 				ref.Provider, shortID(ref.SessionID), accountSuffix(ref.Account), orAny(task.AssignedTo, "any agent"))

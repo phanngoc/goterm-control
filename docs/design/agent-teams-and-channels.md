@@ -280,6 +280,24 @@ Làm R2 trước sẽ là dựng một Slack cho hai người dùng.
 
 **Chưa làm:** ~~forward kênh sang Telegram~~ (đã ship, xem §7.3); TTL dọn artifact; `max_tasks_per_context`. Vẫn là câu hỏi mở bên dưới.
 
+**Thêm 2026-09-20 — thư mục làm việc chung cho một cây task.** §5.3 giải quyết
+việc *bàn giao sản phẩm* (artifact: tìm bằng id, sống sót khi file bị move, hiện
+cạnh task trên board). Nó không giải quyết việc *cùng làm*: một task không thuộc
+project nào chạy "nơi agent sống", nên agent2 giao một mảnh cho agent1 và một
+mảnh cho agent3 là ba tiến trình ở `~/goterm-workspace`, `-2` và `-3` — cùng một
+việc, ba cái đĩa, và thứ duy nhất đi được giữa chúng là một đường dẫn viết trong
+văn xuôi, đúng cái mà task prompt dành hẳn một đoạn để bảo đừng làm.
+
+Nên một context **không có project** giờ được một thư mục riêng:
+`~/goterm-shared/runs/<context_id>/` (đổi bằng `coord.runs_dir`). Khoá theo
+*context* chứ không theo task, vì `CreateSubTask` chép `ContextID` xuống mọi con
+— context đã sẵn là "tập các task thuộc một việc được giao", bất kể ai cầm mảnh
+nào. Có project thì thư mục project thắng.
+
+Đây là **scratch, không phải sản phẩm**: nó chỉ chung trong phạm vi context của
+chính nó, và bị xoá theo cùng `artifact_retention_days` khi cả cây đã xong. Cái
+gì công việc *tạo ra* vẫn là artifact. Code: `internal/coord/runspace.go`.
+
 ---
 
 ## 7. Rủi ro & câu hỏi mở
