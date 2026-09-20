@@ -91,6 +91,69 @@ func TestAProjectsFolderWinsOverTheRunFolder(t *testing.T) {
 	}
 }
 
+// A child belongs to the same project as its parent (children.go), so a whole
+// delegated tree meets in the project folder and the run folder never enters
+// into it. Pinned because it is the interaction between two mechanisms that
+// were written apart: nothing in runspace.go mentions children, and nothing in
+// children.go mentions workspaces.
+func TestADelegatedTreeInAProjectStaysInTheProjectFolder(t *testing.T) {
+	db := runsDB(t)
+	projects := t.TempDir()
+	p, err := db.CreateProject("trading", "bot giao dịch", "owner", projects, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := db.CreateTask(NewTask{
+		Title: "backtest chiến lược", Body: "toàn bộ", CreatedBy: "bomclaw2", ChannelID: p.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ClaimTask("bomclaw2"); err != nil {
+		t.Fatal(err)
+	}
+	one, err := db.CreateSubTask(parent.ID, "bomclaw2", NewTask{
+		Title: "tải dữ liệu", Body: "Tải nến 1h của BTC/ETH hai năm, lưu parquet, kiểm tra nến thiếu.",
+		AssignedTo: "bomclaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	three, err := db.CreateSubTask(parent.ID, "bomclaw2", NewTask{
+		Title: "vẽ báo cáo", Body: "Vẽ equity curve và drawdown, xuất PNG kèm bảng số liệu tóm tắt.",
+		AssignedTo: "bomclaw3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, task := range []*Task{parent, one, three} {
+		dir, shared := db.TaskWorkspace(task)
+		if dir != p.Workspace {
+			t.Errorf("%s (%s) works in %q, want the project folder %q",
+				task.Title, orDefault(task.AssignedTo, task.CreatedBy), dir, p.Workspace)
+		}
+		if shared {
+			t.Errorf("%s was handed context scratch although its tree has a project", task.Title)
+		}
+	}
+	// And nothing was created under the runs root for a tree that never needed
+	// one.
+	if _, err := os.Stat(db.RunsDir()); !os.IsNotExist(err) {
+		entries, _ := os.ReadDir(db.RunsDir())
+		if len(entries) > 0 {
+			t.Errorf("a project's tree left %d folders in the runs root", len(entries))
+		}
+	}
+}
+
+func orDefault(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
 // #general is a room, not a project, so a task filed there still needs
 // somewhere for three agents to meet.
 func TestATaskInARoomWithNoFolderStillGetsOne(t *testing.T) {
