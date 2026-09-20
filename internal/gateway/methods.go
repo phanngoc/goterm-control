@@ -60,6 +60,13 @@ type Deps struct {
 	// screen says so rather than editing a file nothing will reload.
 	Restart func() error
 
+	// OwnerChatID is the Telegram conversation that belongs to the owner, so a
+	// screen can bind a room to their phone without anyone typing a chat id.
+	// There is only one owner, and a number typed by hand is a number that can
+	// be mistyped — the same argument that removed --chat from the CLI. Zero
+	// when this gateway has no allow-list to read it from.
+	OwnerChatID int64
+
 	// PokeTasks asks the local task runner to check the queue immediately.
 	// Nil when this agent does not claim tasks.
 	PokeTasks func()
@@ -217,6 +224,12 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelCreate(deps, params)
 		case "channels.read":
 			return handleChannelRead(deps, params)
+		case "channels.gateways":
+			return handleChannelGateways(deps, params)
+		case "channels.bind":
+			return handleChannelBind(deps, params)
+		case "channels.unbind":
+			return handleChannelUnbind(deps, params)
 		case "skills.list":
 			return handleSkillsList(deps, params)
 		case "skills.get":

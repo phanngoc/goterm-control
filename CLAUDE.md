@@ -48,7 +48,11 @@ When restarting the gateway service, stale Claude CLI subprocesses (spawned by p
    have `poll: true`. The mechanism above still applies the moment two agents
    share a token again. Anything that assumes "only agent 1 polls" is wrong
    now — that assumption shipped a channel forwarder that three gateways would
-   have raced for, which is why bindings name the agent that carries them.
+   have raced for, which is why every channel gateway names the agent that
+   carries it. Since 2026-09-20 a room may have several gateways (coord v11,
+   `channel_gateways` + `channel_deliveries`), and that per-row carrier is
+   still what divides the work: a row is only ever seen by the process named
+   on it. See `docs/channel-gateways.md`.
 
 **Agents on this machine:** `bomclaw` (:18789, claude), `bomclaw2` (:18790,
 codex), `bomclaw3` (:18791, opencode). One shared binary at

@@ -20,15 +20,17 @@ func testCoordDB(t *testing.T) *coord.DB {
 }
 
 type fakeSender struct {
-	mu   sync.Mutex
-	sent []string
-	next int64
-	err  error
+	mu       sync.Mutex
+	sent     []string
+	attempts int
+	next     int64
+	err      error
 }
 
 func (f *fakeSender) SendChannelLine(chatID int64, text string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attempts++
 	if f.err != nil {
 		return 0, f.err
 	}
@@ -37,23 +39,45 @@ func (f *fakeSender) SendChannelLine(chatID int64, text string) (int64, error) {
 	return 8800 + f.next, nil
 }
 
-func forwardFixture(t *testing.T, mode string) (*coord.DB, *ForwardWatcher, *fakeSender) {
+// carrier registers an agent that has logged a Telegram bot in, which is what
+// a telegram gateway asks of the process that carries it.
+func carrier(t *testing.T, db *coord.DB, id string) {
 	t.Helper()
-	db := testCoordDB(t)
-	if err := db.RegisterAgent(coord.Agent{ID: "bomclaw2", DisplayName: "bomclaw2"}); err != nil {
+	if err := db.RegisterAgent(coord.Agent{ID: id, DisplayName: id}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.BindChannelTelegram(coord.GeneralChannelID, "bomclaw2", 4242, mode); err != nil {
+	if err := db.SetAgentTelegramBot(id, "Goterm_"+id+"_bot"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bindGateway registers a destination with its cut-off far in the past, so a
+// line posted a millisecond later is after it.
+func bindGateway(t *testing.T, db *coord.DB, kind, target, mode string) coord.ChannelGateway {
+	t.Helper()
+	g, err := db.AddChannelGateway(coord.ChannelGateway{
+		ChannelID: coord.GeneralChannelID, Kind: kind, AgentID: "bomclaw2",
+		Target: target, Mode: mode,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Conn().Exec(
-		`UPDATE channel_telegram SET created_at = '2000-01-01T00:00:00.000000000Z'`); err != nil {
+		`UPDATE channel_gateways SET since = '2000-01-01T00:00:00.000000000Z' WHERE id = ?`, g.ID); err != nil {
 		t.Fatal(err)
 	}
+	return g
+}
+
+func forwardFixture(t *testing.T, mode string) (*coord.DB, *ForwardWatcher, *fakeSender) {
+	t.Helper()
+	db := testCoordDB(t)
+	carrier(t, db, "bomclaw2")
+	bindGateway(t, db, coord.GatewayTelegram, "4242", mode)
 	send := &fakeSender{}
-	w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw2"}, send)
+	w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw2"}, NewTelegramTransport(send))
 	if w == nil {
-		t.Fatal("no watcher was built although coord and a sender were both there")
+		t.Fatal("no watcher was built although coord and a transport were both there")
 	}
 	return db, w, send
 }
@@ -108,8 +132,9 @@ func TestASendThatFailedIsNotMarkedDelivered(t *testing.T) {
 		t.Fatal("a line lost to a Telegram outage was marked delivered; nobody would ever see it")
 	}
 
-	// It goes out once Telegram is back.
+	// It goes out once Telegram is back and the cooldown has passed.
 	send.err = nil
+	w.backoff = 0
 	w.sweep()
 	if len(send.sent) != 1 {
 		t.Fatalf("the delayed line never went: %q", send.sent)
@@ -157,14 +182,149 @@ func TestForwardLineNamesTheRoom(t *testing.T) {
 	}
 }
 
-func TestNoSenderMeansNoWatcher(t *testing.T) {
+func TestNoTransportMeansNoWatcher(t *testing.T) {
 	db := testCoordDB(t)
-	if w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw"}, nil); w != nil {
-		t.Fatal("a gateway that cannot send built a watcher anyway")
+	if w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw"}); w != nil {
+		t.Fatal("a gateway with nothing to deliver over built a watcher anyway")
 	}
-	if w := NewForwardWatcher(Deps{AgentID: "bomclaw"}, &fakeSender{}); w != nil {
+	if w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw"}, NewTelegramTransport(nil)); w != nil {
+		t.Fatal("a gateway that does not poll built a Telegram watcher anyway")
+	}
+	if w := NewForwardWatcher(Deps{AgentID: "bomclaw"}, NewWebhookTransport()); w != nil {
 		t.Fatal("a gateway with no shared database built a watcher anyway")
 	}
+	// A process with no bot still carries webhooks. Before v11 the watcher was
+	// only built when Telegram polled, which would have left every webhook on
+	// agents 2 and 3 undelivered.
+	if w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw"}, NewWebhookTransport()); w == nil {
+		t.Fatal("a gateway that does not poll Telegram cannot carry a webhook either")
+	}
+}
+
+// A destination that refuses a line is left alone for a while. Without that, a
+// webhook pointed at a host that is not coming back takes a POST every sweep
+// for every line it is behind on — and it is behind on all of them, because a
+// failed send is deliberately not settled.
+func TestARefusedDestinationIsLeftAloneForAWhile(t *testing.T) {
+	db, w, send := forwardFixture(t, coord.ForwardAll)
+	send.err = errSendFailed
+
+	for i := 0; i < 3; i++ {
+		if _, _, err := db.PostMessage(coord.NewChannelMessage{
+			ChannelID: coord.GeneralChannelID, AuthorID: "bomclaw2", Body: "một dòng",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.sweep()
+	w.sweep()
+	w.sweep()
+	if send.attempts != 1 {
+		t.Fatalf("a dead destination was tried %d times across three sweeps, want 1", send.attempts)
+	}
+}
+
+// A dead destination must only starve itself. The per-sweep budget is per
+// gateway for exactly this reason: a shared one would be eaten by the stuck
+// lines of whichever destination is down, and the healthy one beside it would
+// never get a turn.
+func TestADeadGatewayDoesNotStarveAHealthyOne(t *testing.T) {
+	db := testCoordDB(t)
+	carrier(t, db, "bomclaw2")
+	bindGateway(t, db, coord.GatewayTelegram, "4242", coord.ForwardAll)
+	bindGateway(t, db, coord.GatewayWebhook, "https://dead.test/hook", coord.ForwardAll)
+
+	send := &fakeSender{}
+	w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw2"},
+		NewTelegramTransport(send), deadTransport{})
+
+	// More lines than one sweep's budget, so a shared budget would show.
+	for i := 0; i < ForwardsPerSweep+4; i++ {
+		if _, _, err := db.PostMessage(coord.NewChannelMessage{
+			ChannelID: coord.GeneralChannelID, AuthorID: "bomclaw2", Body: "một dòng",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.sweep()
+	if len(send.sent) != ForwardsPerSweep {
+		t.Fatalf("Telegram got %d of its %d-line budget; the dead webhook ate it",
+			len(send.sent), ForwardsPerSweep)
+	}
+	w.backoff = 0
+	w.sweep()
+	if len(send.sent) != ForwardsPerSweep+4 {
+		t.Fatalf("Telegram is stuck at %d lines while a dead webhook keeps failing", len(send.sent))
+	}
+}
+
+// coord refuses to create a row this process cannot serve, so reaching this is
+// a misconfiguration — and a misconfiguration must not eat the line. Leaving it
+// pending is what makes fixing the config enough to deliver it.
+func TestAKindThisProcessCannotCarryIsNotSettled(t *testing.T) {
+	db := testCoordDB(t)
+	carrier(t, db, "bomclaw2")
+	bindGateway(t, db, coord.GatewayWebhook, "https://example.test/hook", coord.ForwardAll)
+
+	send := &fakeSender{}
+	w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw2"}, NewTelegramTransport(send))
+	if _, _, err := db.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorID: "bomclaw2", Body: "một dòng",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.sweep()
+
+	pending, err := db.PendingForwards("bomclaw2", coord.ProgressPrefix, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatal("a line for a transport this process does not have was silently settled;\n" +
+			"fixing the configuration would no longer deliver it")
+	}
+}
+
+// One room with three destinations asks the same "is the owner in this" once,
+// not three times.
+func TestOwnerFollowsIsAskedOncePerLine(t *testing.T) {
+	db := testCoordDB(t)
+	carrier(t, db, "bomclaw2")
+	bindGateway(t, db, coord.GatewayTelegram, "4242", coord.ForwardMentions)
+	bindGateway(t, db, coord.GatewayWebhook, "https://a.test/hook", coord.ForwardMentions)
+	bindGateway(t, db, coord.GatewayWebhook, "https://b.test/hook", coord.ForwardMentions)
+
+	send := &fakeSender{}
+	w := NewForwardWatcher(Deps{Coord: db, AgentID: "bomclaw2"},
+		NewTelegramTransport(send), deadTransport{})
+
+	if _, _, err := db.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorID: "bomclaw2", Body: "chỉ là chuyện phiếm",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	follows := map[string]bool{}
+	pending, err := db.PendingForwards("bomclaw2", coord.ProgressPrefix, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 3 {
+		t.Fatalf("three destinations produced %d pending lines", len(pending))
+	}
+	for _, f := range pending {
+		w.deliver(f, follows)
+	}
+	if len(follows) != 1 {
+		t.Fatalf("the same question was cached %d ways for one line", len(follows))
+	}
+}
+
+// deadTransport is a webhook that never answers, without the HTTP round trip.
+type deadTransport struct{}
+
+func (deadTransport) Kind() string { return coord.GatewayWebhook }
+func (deadTransport) Deliver(coord.Forward, string) (string, error) {
+	return "", errSendFailed
 }
 
 type sendError struct{}

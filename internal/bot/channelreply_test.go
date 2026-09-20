@@ -19,8 +19,29 @@ func replyTestDB(t *testing.T) *coord.DB {
 		if err := cdb.RegisterAgent(coord.Agent{ID: id, DisplayName: id}); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
+		if err := cdb.SetAgentTelegramBot(id, "Goterm_"+id+"_bot"); err != nil {
+			t.Fatalf("bot for %s: %v", id, err)
+		}
 	}
 	return cdb
+}
+
+// sent records that a line went out over bomclaw's bot as Telegram message
+// tgID, which is what the return path looks itself up by.
+func sent(t *testing.T, db *coord.DB, messageID string, tgID string) {
+	t.Helper()
+	g, err := db.AddChannelGateway(coord.ChannelGateway{
+		ChannelID: coord.GeneralChannelID, Kind: coord.GatewayTelegram,
+		AgentID: "bomclaw", Target: "4242", Mode: coord.ForwardAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordDelivery(coord.Forward{
+		MessageID: messageID, GatewayID: g.ID, AgentID: "bomclaw",
+	}, coord.DeliverySent, tgID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func reply(to int, text string) *tgbotapi.Message {
@@ -42,9 +63,7 @@ func TestAReplyLandsInTheThreadAndWakesTheAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded("bomclaw", line.ID, 8821); err != nil {
-		t.Fatal(err)
-	}
+	sent(t, db, line.ID, "8821")
 
 	var woke []string
 	var room string
@@ -122,9 +141,7 @@ func TestAReplyToAThreadedLineStaysInThatThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkForwarded("bomclaw", inThread.ID, 8822); err != nil {
-		t.Fatal(err)
-	}
+	sent(t, db, inThread.ID, "8822")
 
 	h := &Handler{coord: db, agentID: "bomclaw", onChannelReply: func(string, []string) {}}
 	if !h.channelReply(reply(8822, "còn ETH?")) {
