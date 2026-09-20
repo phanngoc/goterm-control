@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
@@ -287,6 +288,123 @@ func handleChannelRead(deps Deps, params json.RawMessage) (json.RawMessage, erro
 		}
 	}
 	return json.Marshal(map[string]any{"ok": true, "mentions_cleared": cleared})
+}
+
+// --- channel gateways ------------------------------------------------------
+//
+// Registering a destination was a CLI command and nothing else, so the only
+// way to give a room a phone was a terminal. These three put it on the screen
+// where the rooms already are.
+
+type channelGatewaysParams struct {
+	// ChannelID empty means every room's gateways, which is one small array
+	// and saves the sidebar a call per room.
+	ChannelID string `json:"channel_id,omitempty"`
+}
+
+func handleChannelGateways(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p channelGatewaysParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	gws, err := deps.Coord.ChannelGateways(p.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	// default_target is what the owner's own chat is, so the screen can offer
+	// "your private chat" instead of a box for a number nobody remembers.
+	target := ""
+	if deps.OwnerChatID != 0 {
+		target = strconv.FormatInt(deps.OwnerChatID, 10)
+	}
+	return json.Marshal(map[string]any{
+		"gateways":       gws,
+		"kinds":          coord.GatewayKinds,
+		"modes":          coord.ForwardModes,
+		"default_target": target,
+		"default_agent":  deps.AgentID,
+	})
+}
+
+type channelBindParams struct {
+	// ID set means edit that row; the rest of the fields are then optional and
+	// an empty one leaves what is stored alone. That is what lets the screen
+	// change a mode without resending a secret it was never shown.
+	ID        string `json:"id,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+	Kind      string `json:"kind,omitempty"`   // default telegram
+	Target    string `json:"target,omitempty"` // default: the owner's chat, for telegram
+	Secret    string `json:"secret,omitempty"`
+	Mode      string `json:"mode,omitempty"` // default: whatever the kind starts at
+	Label     string `json:"label,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"` // default: this gateway's agent
+}
+
+func handleChannelBind(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p channelBindParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ID != "" {
+		g, err := deps.Coord.UpdateChannelGateway(p.ID, p.Mode, p.Label, p.Target, p.Secret)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(g)
+	}
+	if p.ChannelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	if p.Kind == "" {
+		p.Kind = coord.GatewayTelegram
+	}
+	if p.AgentID == "" {
+		// The agent whose dashboard this is, which is also the bot the person
+		// is already talking to.
+		p.AgentID = deps.AgentID
+	}
+	if p.Target == "" && p.Kind == coord.GatewayTelegram {
+		if deps.OwnerChatID == 0 {
+			return nil, fmt.Errorf("no Telegram chat id: this gateway has no allowed_user_ids to take one from, " +
+				"so the chat has to be given explicitly")
+		}
+		p.Target = strconv.FormatInt(deps.OwnerChatID, 10)
+	}
+	g, err := deps.Coord.AddChannelGateway(coord.ChannelGateway{
+		ChannelID: p.ChannelID, Kind: p.Kind, AgentID: p.AgentID,
+		Target: p.Target, Secret: p.Secret, Mode: p.Mode, Label: p.Label,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(g)
+}
+
+type channelUnbindParams struct {
+	ID string `json:"id"`
+}
+
+func handleChannelUnbind(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p channelUnbindParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	if err := deps.Coord.RemoveChannelGateway(p.ID); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"ok": true})
 }
 
 // --- artifacts -------------------------------------------------------------

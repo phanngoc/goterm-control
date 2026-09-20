@@ -11,7 +11,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 )
 
-// Carrying a bound channel out to Telegram.
+// Carrying a bound room out to the places it speaks into.
 //
 // Why a watcher and not a hook on the post: seven places write a line into a
 // room — the dashboard's RPC, an agent answering a mention, an agent's own CLI,
@@ -32,40 +32,66 @@ const (
 	forwardPoll = 10 * time.Second
 
 	// ForwardsPerSweep keeps a gateway that was down from firing a hundred
-	// notifications the moment it comes back.
+	// notifications the moment it comes back. It is counted per destination,
+	// not per sweep: see coord.PendingForwards on why a shared budget lets one
+	// dead endpoint starve every healthy one beside it.
 	ForwardsPerSweep = 10
 
 	// MaxForwardRunes is how much of one line travels. Telegram's own cap is
 	// 4096 bytes, and an agent's answer can be far longer than that; past this
 	// the dashboard is the place to read it.
 	MaxForwardRunes = 2800
+
+	// failureCooldown is how long a destination is left alone after it refuses
+	// a line. Without it a webhook pointed at a dead host takes a POST every
+	// sweep for every line it is behind on, forever.
+	//
+	// Deliberately in memory rather than in the database: this is a delay, not
+	// a fact about the line. A restart trying again immediately is the right
+	// behaviour, because a restart is usually what fixed it.
+	failureCooldown = 60 * time.Second
 )
 
-// TelegramSender delivers one line and reports which Telegram message it
-// became. That id is the whole return path: a reply quoting it is how an
-// answer from the phone finds the thread it belongs to.
-type TelegramSender interface {
-	SendChannelLine(chatID int64, text string) (int64, error)
-}
-
-// ForwardWatcher pushes bound channels' lines to Telegram.
+// ForwardWatcher pushes bound rooms' lines out to their destinations.
 type ForwardWatcher struct {
-	deps Deps
-	send TelegramSender
-	poke chan struct{}
-	mu   sync.Mutex
+	deps       Deps
+	transports map[string]ChannelTransport
+	poke       chan struct{}
+
+	mu     sync.Mutex
+	failed map[string]time.Time // gateway id → when it last refused a line
+	quiet  map[string]bool      // gateway id → already complained about
+	// backoff is failureCooldown, as a field so a test can watch a retry
+	// without waiting a minute for it.
+	backoff time.Duration
 }
 
-// NewForwardWatcher returns nil unless this gateway can actually deliver.
+// NewForwardWatcher returns nil unless this gateway can actually deliver
+// something.
 //
-// Every gateway builds one, and that is fine: a binding names the agent whose
-// bot carries it, so each watcher only ever sees its own rooms. There is no
-// race to lose and no line that two bots could both send.
-func NewForwardWatcher(deps Deps, send TelegramSender) *ForwardWatcher {
-	if deps.Coord == nil || send == nil || deps.AgentID == "" {
+// Every gateway process builds one, and that is fine: a gateway row names the
+// agent whose process carries it, so each watcher only ever sees its own
+// destinations. There is no race to lose and no line that two processes could
+// both send — which is what makes several destinations on one room safe.
+func NewForwardWatcher(deps Deps, transports ...ChannelTransport) *ForwardWatcher {
+	if deps.Coord == nil || deps.AgentID == "" {
 		return nil
 	}
-	return &ForwardWatcher{deps: deps, send: send, poke: make(chan struct{}, 1)}
+	byKind := map[string]ChannelTransport{}
+	for _, t := range transports {
+		if t == nil {
+			continue // a gateway that does not poll has no Telegram transport
+		}
+		byKind[t.Kind()] = t
+	}
+	if len(byKind) == 0 {
+		return nil
+	}
+	return &ForwardWatcher{
+		deps: deps, transports: byKind, poke: make(chan struct{}, 1),
+		failed: map[string]time.Time{}, quiet: map[string]bool{},
+		backoff: failureCooldown,
+	}
 }
 
 // Poke asks for a sweep now. Non-blocking and coalescing, like the mention
@@ -85,7 +111,11 @@ func (w *ForwardWatcher) Start(ctx context.Context) {
 	if w == nil {
 		return
 	}
-	log.Println("forward: carrying bound channels to Telegram")
+	kinds := make([]string, 0, len(w.transports))
+	for k := range w.transports {
+		kinds = append(kinds, k)
+	}
+	log.Printf("forward: carrying bound rooms out over %s", strings.Join(kinds, ", "))
 	go func() {
 		t := time.NewTicker(forwardPoll)
 		defer t.Stop()
@@ -110,49 +140,80 @@ func (w *ForwardWatcher) sweep() {
 		log.Printf("forward: read pending: %v", err)
 		return
 	}
+	// One room with three destinations asks the same "does the owner follow
+	// this line" question three times. The answer cannot change inside a
+	// sweep, so it is asked once.
+	follows := map[string]bool{}
 	for _, f := range pending {
-		w.deliver(f)
+		w.deliver(f, follows)
 	}
 }
 
-// deliver decides about one line and settles it either way.
+// deliver decides about one line for one destination and settles it either way.
 //
-// "Settles" is the important half: a line the mode filters out is stamped as
-// handled with no Telegram id, because the mode will not have changed its mind
+// "Settles" is the important half: a line the mode filters out is recorded as
+// handled with no external id, because the mode will not have changed its mind
 // by the next sweep and re-asking forever is how a poll loop becomes a
 // treadmill.
-func (w *ForwardWatcher) deliver(f coord.Forward) {
-	if f.Mode == coord.ForwardMentions {
-		follows, err := w.deps.Coord.OwnerFollows(f.MessageID, f.ThreadRoot)
-		if err != nil {
-			log.Printf("forward: %s: %v", f.MessageID, err)
-			return // a read that failed is not a decision; try again next sweep
+func (w *ForwardWatcher) deliver(f coord.Forward, follows map[string]bool) {
+	transport := w.transports[f.Kind]
+	if transport == nil {
+		// A row this process cannot serve is a misconfiguration to fix, not a
+		// line to throw away — so it is left pending rather than settled. coord
+		// refuses to create one, so this is close to unreachable; the log names
+		// the row once so that "close to" is debuggable.
+		if !w.quiet[f.GatewayID] {
+			w.quiet[f.GatewayID] = true
+			log.Printf("forward: %s carries %s gateway %s but registered no %s transport — its lines are waiting",
+				w.deps.AgentID, f.Kind, f.GatewayID, f.Kind)
 		}
-		if !follows {
-			if err := w.deps.Coord.MarkForwarded(w.deps.AgentID, f.MessageID, 0); err != nil {
+		return
+	}
+	if last, ok := w.failed[f.GatewayID]; ok {
+		if time.Since(last) < w.backoff {
+			return
+		}
+		delete(w.failed, f.GatewayID)
+	}
+
+	if f.Mode == coord.ForwardMentions {
+		ok, cached := follows[f.MessageID]
+		if !cached {
+			var err error
+			ok, err = w.deps.Coord.OwnerFollows(f.MessageID, f.ThreadRoot)
+			if err != nil {
+				log.Printf("forward: %s: %v", f.MessageID, err)
+				return // a read that failed is not a decision; try again next sweep
+			}
+			follows[f.MessageID] = ok
+		}
+		if !ok {
+			if err := w.deps.Coord.RecordDelivery(f, coord.DeliverySkipped, ""); err != nil {
 				log.Printf("forward: settle %s: %v", f.MessageID, err)
 			}
 			return
 		}
 	}
 
-	tgID, err := w.send.SendChannelLine(f.ChatID, ForwardLine(f))
+	ext, err := transport.Deliver(f, ForwardLine(f))
 	if err != nil {
-		// Left unsettled on purpose: a Telegram outage should delay the line,
-		// not swallow it.
-		log.Printf("forward: send %s to chat %d: %v", f.MessageID, f.ChatID, err)
+		// Left unsettled on purpose: an outage should delay the line, not
+		// swallow it. The cooldown is what keeps that from becoming a retry
+		// storm at a host that is not coming back this minute.
+		log.Printf("forward: send %s to %s %s: %v", f.MessageID, f.Kind, f.Target, err)
+		w.failed[f.GatewayID] = time.Now()
 		return
 	}
-	if err := w.deps.Coord.MarkForwarded(w.deps.AgentID, f.MessageID, tgID); err != nil {
+	if err := w.deps.Coord.RecordDelivery(f, coord.DeliverySent, ext); err != nil {
 		log.Printf("forward: settle %s: %v", f.MessageID, err)
 	}
 }
 
-// ForwardLine is what the owner reads on their phone.
+// ForwardLine is what a person reads at the other end.
 //
-// The room's name leads, because on Telegram every bound channel arrives in
-// the same conversation: without it two projects read as one. The author is
-// next — three agents write here, and which one answered is usually the point.
+// The room's name leads, because every bound room arrives in the same
+// conversation: without it two projects read as one. The author is next —
+// three agents write here, and which one answered is usually the point.
 func ForwardLine(f coord.Forward) string {
 	room := f.ChannelName
 	if room == "" {

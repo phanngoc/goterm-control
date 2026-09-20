@@ -278,7 +278,7 @@ Làm R2 trước sẽ là dựng một Slack cho hai người dùng.
 
 **RPC mới:** `channels.list|messages|post|create|read`, `artifacts.list|get`. Dashboard đọc bằng danh tính người dùng (`owner`) chứ không phải danh tính agent của gateway — đó là lý do trước đây lời của người dùng không hề có trong lịch sử agent.
 
-**Chưa làm:** forward kênh sang Telegram; TTL dọn artifact; `max_tasks_per_context`. Vẫn là câu hỏi mở bên dưới.
+**Chưa làm:** ~~forward kênh sang Telegram~~ (đã ship, xem §7.3); TTL dọn artifact; `max_tasks_per_context`. Vẫn là câu hỏi mở bên dưới.
 
 ---
 
@@ -286,7 +286,7 @@ Làm R2 trước sẽ là dựng một Slack cho hai người dùng.
 
 1. **Hai khái niệm "conversation".** `storage` (session DB, per-agent) đã có `conversations` + `channel_bindings` nối Telegram↔web (schema v6). Doc này thêm `channels` ở **coord.db**. Chúng *phải* tách — kênh cần mọi agent nhìn thấy, session DB thì không — nhưng hai cái tên giống nhau sẽ gây nhầm. **Cần chốt tên trước khi code.**
 2. **Danh tính người dùng xuyên DB.** `users` nằm ở session DB per-agent; `channel_members.member_id` cho `kind='user'` cần một id **dùng chung**. Đơn giản nhất: một hằng `user:owner` (hệ single-account, PR #63 đã bỏ role). Đủ chưa?
-3. **Telegram có thấy kênh không?** Nếu một tin trong `#build` phải bay sang Telegram thì cần binding kênh→chat. Chưa thiết kế. Đề xuất P4c không làm.
+3. **Telegram có thấy kênh không?** ~~Nếu một tin trong `#build` phải bay sang Telegram thì cần binding kênh→chat. Chưa thiết kế.~~ **Đã trả lời.** `def0a8a` (2026-09-14) cho mỗi phòng một chat Telegram; `6ac6462` buộc binding nêu tên bot mang nó, sau khi ba gateway cùng gửi một dòng ba lần. Coord v11 (2026-09-20) bỏ giới hạn một-đích-một-phòng: `channel_gateways` + `channel_deliveries`, nhiều đích đến cho một phòng và transport không còn chỉ là Telegram. Chi tiết ở `docs/channel-gateways.md`.
 4. **Quota.** 5 agent Claude cùng một OAuth = một quota. `accounts.pool` + `cooldown_minutes` giảm đau chứ không tạo thêm hạn mức. Có sẵn sàng trả tiền nhiều tài khoản không?
 5. **Cây con nở.** `MaxOpenChildren=8` × `MaxDepth=5` = 32768 task trên lý thuyết. Con giao cho agent khác (R3) làm việc này *dễ hơn* trước. Cần thêm cap theo cây: `max_tasks_per_context`, đề xuất 50.
 6. **Artifact rác.** Không có TTL thì `~/goterm-shared/artifacts/` phình mãi. Đề xuất theo `coord.trace_retention_days`: xoá artifact của context đã terminal quá N ngày, `kind='document'` được giữ.

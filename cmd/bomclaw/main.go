@@ -262,8 +262,8 @@ func runGateway(args []string) {
 	// chat id typed by hand. A private chat's id equals the user's id, so the
 	// first trusted user is the owner's conversation — the same assumption
 	// Bot.Notify already makes when it sends a schedule's result.
-	if len(cfg.Security.AllowedUserIDs) > 0 {
-		if err := os.Setenv("BOMCLAW_OWNER_CHAT_ID", fmt.Sprint(cfg.Security.AllowedUserIDs[0])); err != nil {
+	if chat := ownerChat(cfg); chat != 0 {
+		if err := os.Setenv("BOMCLAW_OWNER_CHAT_ID", fmt.Sprint(chat)); err != nil {
 			log.Printf("gateway: could not export BOMCLAW_OWNER_CHAT_ID: %v", err)
 		}
 	}
@@ -541,6 +541,7 @@ func runGateway(args []string) {
 		Coord:         coordDB,
 		AgentID:       cfg.Agent.ID,
 		AgentName:     cfg.Agent.Name,
+		OwnerChatID:   ownerChat(cfg),
 		Workspace:     cfg.Claude.Workspace,
 		ProviderName:  cfg.Provider,
 		Trace:         gwTrace,
@@ -569,16 +570,21 @@ func runGateway(args []string) {
 		log.Printf("mentions: answering off (coord.reply_to_mentions=false)")
 	}
 
-	// Carrying bound channels out to Telegram.
+	// Carrying bound rooms out to the places they speak into.
 	//
-	// Only a gateway that polls gets one. Each agent here has its own bot, so
-	// several could carry rooms at once — but a room whose bot nobody listens
-	// to is a one-way street: the owner would read the answers and have nowhere
-	// to reply. The binding names the agent, so which rooms this one carries is
-	// a decision made at bind time, not a race between gateways.
-	var forwards *gateway.ForwardWatcher
+	// Every gateway process carries the rooms bound to it, and which rooms
+	// those are is a decision made at bind time rather than a race between
+	// gateways: a gateway row names the agent that carries it.
+	//
+	// Telegram is registered only when this process actually polls. Each agent
+	// here has its own bot, so several could carry rooms at once — but a room
+	// whose bot nobody listens to is a one-way street: the owner would read the
+	// answers and have nowhere to reply. A webhook has no such half. It is
+	// one-way by nature, needs no bot and no poller, so every process can carry
+	// one — which is why the watcher is now built outside this branch.
+	var transports []gateway.ChannelTransport
 	if tgBot != nil && cfg.Telegram.Polling() {
-		forwards = gateway.NewForwardWatcher(deps, tgBot.Handler())
+		transports = append(transports, gateway.NewTelegramTransport(tgBot.Handler()))
 		tgBot.Handler().SetChannelReplyListener(func(channelID string, wake []string) {
 			for _, who := range wake {
 				gateway.NotifyAgents(coordDB, who, "", "about a mention in "+channelID)
@@ -586,6 +592,8 @@ func runGateway(args []string) {
 			mentions.Poke()
 		})
 	}
+	transports = append(transports, gateway.NewWebhookTransport())
+	forwards := gateway.NewForwardWatcher(deps, transports...)
 	// Everything running right now, from both sources: chat turns and claimed
 	// tasks. The tray's awake-while-running mode, `bomclaw status` and the
 	// dashboard all read this list — a task run missing from it meant the Mac
@@ -1607,4 +1615,16 @@ func restartSelf(agentID string) func() error {
 		defer cancel()
 		return svc.Restart(ctx)
 	}
+}
+
+// ownerChat is the Telegram conversation that belongs to the owner. A private
+// chat's id equals the user's id, so the first trusted user is that
+// conversation — the same assumption Bot.Notify already makes. Zero when there
+// is no allow-list, in which case the screens and the CLI say so rather than
+// guessing a number.
+func ownerChat(cfg *config.Config) int64 {
+	if len(cfg.Security.AllowedUserIDs) == 0 {
+		return 0
+	}
+	return cfg.Security.AllowedUserIDs[0]
 }

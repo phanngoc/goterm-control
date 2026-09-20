@@ -288,6 +288,42 @@ export interface ChannelMessage {
   last_reply_text?: string
 }
 
+// --- channel gateways -------------------------------------------------------
+// Where a room speaks outside the dashboard. A room may have several: the same
+// sentence can reach a phone and a Slack channel at once.
+//
+// agent_id is the carrier — which gateway process does the sending. It is not
+// bookkeeping: it is what stops three gateways from all sending the same line.
+// `since` is the cut-off, so adding a destination to a busy room does not empty
+// the week onto it.
+
+export type GatewayKind = 'telegram' | 'webhook'
+export type ForwardMode = 'all' | 'mentions' | 'off'
+
+export interface ChannelGateway {
+  id: string
+  channel_id: string
+  kind: GatewayKind
+  agent_id: string
+  target: string
+  /** There is a secret; the secret itself never leaves the server. */
+  has_secret: boolean
+  mode: ForwardMode
+  label?: string
+  since: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GatewayList {
+  gateways: ChannelGateway[]
+  kinds: GatewayKind[]
+  modes: ForwardMode[]
+  /** The owner's own Telegram chat, so nobody has to remember a chat id. */
+  default_target: string
+  default_agent: string
+}
+
 // --- artifacts --------------------------------------------------------------
 
 export type ArtifactKind = 'document' | 'patch' | 'file' | 'link' | 'result'

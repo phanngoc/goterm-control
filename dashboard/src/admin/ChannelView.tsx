@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Artifact, Channel, ChannelMessage } from './types'
+import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { ArtifactModal, isPage } from './ArtifactView'
+import GatewayEditor from './GatewayEditor'
 import { ago, clock } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -46,6 +47,11 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
   const [more, setMore] = useState(false)
   const [briefFor, setBriefFor] = useState('')
   const [filesFor, setFilesFor] = useState('')
+  // Where each room speaks outside the dashboard. Loaded for every room at
+  // once — it is a short list — so the header can show a count without a call
+  // per room.
+  const [gateways, setGateways] = useState<ChannelGateway[]>([])
+  const [gatewaysFor, setGatewaysFor] = useState('')
   const sending = useRef(false)
   const loadingOlder = useRef(false)
   const scroller = useRef<HTMLDivElement>(null)
@@ -56,6 +62,8 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
     try {
       const list: Channel[] = (await call('channels.list')) || []
       setChannels(list)
+      const gw: GatewayList = await call('channels.gateways')
+      setGateways(gw?.gateways ?? [])
       setErr(null)
       return list
     } catch (e: any) {
@@ -234,6 +242,7 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
 
   const ordered = useMemo(() => [...msgs].reverse(), [msgs])
   const current = channels.find(c => c.id === active)
+  const roomGateways = gateways.filter(g => g.channel_id === active)
 
   return (
     <div className="h-full flex min-h-0">
@@ -279,6 +288,22 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
               AGENTS.md
             </button>
           )}
+          {current && (
+            <button
+              onClick={() => setGatewaysFor(current.id)}
+              title="Nơi phòng này nói ra ngoài dashboard"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              Gateways
+              {roomGateways.length > 0 && (
+                // Amber when one is paused: a destination that has quietly
+                // stopped carrying is worth seeing without opening the panel.
+                <span className={`ml-1 ${roomGateways.some(g => g.mode === 'off') ? 'text-amber-300' : 'text-sky-300'}`}>
+                  {roomGateways.length}
+                </span>
+              )}
+            </button>
+          )}
           <span className="ml-auto text-[11px] text-gray-600 font-mono">
             {current?.members?.map(m => m.id).join(' · ')}
           </span>
@@ -320,6 +345,15 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
       </div>
 
       {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
+      {gatewaysFor && (
+        <GatewayEditor
+          call={call} channelID={gatewaysFor}
+          channelName={channels.find(c => c.id === gatewaysFor)?.name ?? gatewaysFor}
+          agents={agents} bots={bots}
+          onChanged={loadChannels}
+          onClose={() => setGatewaysFor('')}
+        />
+      )}
       {filesFor && (
         <FileBrowser
           call={call} channelID={filesFor}

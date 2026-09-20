@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -422,6 +422,76 @@ var ddl = []string{
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY (thread_key, agent_id)
 	) STRICT`,
+
+	// --- v11: a room speaks to several places, not to one bot --------------
+	//
+	// channel_telegram held exactly one binding by construction — channel_id
+	// was its primary key — so #trading reached Telegram or it reached nothing.
+	// A room with a Telegram chat, a Slack webhook and a dashboard is three
+	// destinations for the same sentence, and there was nowhere to write the
+	// second one down.
+	//
+	// agent_id is still the carrier, and still load-bearing: every gateway
+	// process runs the same sweep, and a row is only ever seen by the process
+	// named here. That is what keeps 6ac6462's triple send from coming back
+	// now that one room can have several rows.
+	//
+	// since is split from created_at. One column used to carry both the row's
+	// birth and the forward cut-off, which is why the re-bind path has a
+	// comment defending not touching it — and why there was no way to move the
+	// cut-off forward when a paused destination was switched back on.
+	`CREATE TABLE IF NOT EXISTS channel_gateways (
+		id         TEXT PRIMARY KEY,                 -- 'cg_' || uuid
+		channel_id TEXT NOT NULL,
+		kind       TEXT NOT NULL,                    -- telegram | webhook
+		agent_id   TEXT NOT NULL,                    -- which process carries it
+		target     TEXT NOT NULL,                    -- chat id (decimal) or URL
+		secret     TEXT NOT NULL DEFAULT '',         -- bearer token for webhook
+		mode       TEXT NOT NULL DEFAULT 'mentions', -- all | mentions | off
+		label      TEXT NOT NULL DEFAULT '',         -- what a person calls it
+		since      TEXT NOT NULL,                    -- cut-off: nothing older travels
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	) STRICT`,
+
+	// The unique index deliberately leaves out agent_id. Two different bots
+	// firing into one chat is the owner getting two notifications for one
+	// sentence — 6ac6462 wearing a different hat. Several gateways means
+	// several DESTINATIONS, not several roads to one destination.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_gateways_dest
+		ON channel_gateways(channel_id, kind, target)`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_gateways_agent
+		ON channel_gateways(agent_id, mode)`,
+
+	// --- v11: one delivery per (line, destination) -------------------------
+	//
+	// This is the column-to-row move. forwarded_at/tg_message_id/forwarded_by
+	// sat on the message itself, so a line could be delivered exactly once,
+	// forever.
+	//
+	// state records both outcomes: 'sent' with the id the far side gave it,
+	// and 'skipped' when the mode declined it — because a declined line whose
+	// answer can never change must not be re-asked every ten seconds.
+	//
+	// The primary key is the idempotency latch: inserting is how a delivery is
+	// claimed, and a second attempt is a no-op rather than a second
+	// notification. It is not the thing that prevents the race — it cannot
+	// recall a message that has already left. Carrier scoping does that.
+	//
+	// agent_id duplicates the gateway's carrier on purpose: it is the scope of
+	// the return path, it replaces forwarded_by one for one, and moving a
+	// binding to another agent must not orphan the Telegram ids already sent.
+	`CREATE TABLE IF NOT EXISTS channel_deliveries (
+		message_id  TEXT NOT NULL,
+		gateway_id  TEXT NOT NULL,
+		state       TEXT NOT NULL,              -- sent | skipped
+		external_id TEXT NOT NULL DEFAULT '',   -- telegram message id; '' when there is none
+		agent_id    TEXT NOT NULL DEFAULT '',   -- the bot that sent it: a tg id is per-bot
+		created_at  TEXT NOT NULL,
+		PRIMARY KEY (message_id, gateway_id)
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_deliveries_ext
+		ON channel_deliveries(agent_id, external_id)`,
 }
 
 // v3Columns are the columns added to tasks after it first shipped. CREATE TABLE
@@ -533,13 +603,16 @@ var v3Indexes = []string{
 	// sit in ddl — a fresh database would build it before the column exists.
 	// The test suite said so within a minute of it being put there.
 	`CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id, state)`,
-	// v9, same rule again: both of these index columns the ALTERs add.
-	`CREATE INDEX IF NOT EXISTS idx_channel_messages_forward ON channel_messages(forwarded_at, created_at)`,
-	// Dropped and rebuilt under a new name: the first shape indexed
-	// tg_message_id alone, and CREATE INDEX IF NOT EXISTS would have left that
-	// one in place forever while looking like it had been changed.
+	// v9 indexed forwarded_at and (forwarded_by, tg_message_id) on
+	// channel_messages. v11 moved delivery state out to channel_deliveries, so
+	// all three are dead columns now. The columns themselves stay one more
+	// version — if the migration got something wrong the data is still where it
+	// was — but an index nothing reads is pure write cost on every message
+	// inserted, so the indexes go. Dropping by name rather than deleting the
+	// CREATEs: a database that already has them is the case that matters.
 	`DROP INDEX IF EXISTS idx_channel_messages_tg`,
-	`CREATE INDEX IF NOT EXISTS idx_channel_messages_tgmsg ON channel_messages(forwarded_by, tg_message_id)`,
+	`DROP INDEX IF EXISTS idx_channel_messages_forward`,
+	`DROP INDEX IF EXISTS idx_channel_messages_tgmsg`,
 }
 
 func (db *DB) migrate() error {
@@ -604,6 +677,9 @@ func (db *DB) migrate() error {
 		}
 	}
 	if err := db.migrateMessagesToChannels(); err != nil {
+		return err
+	}
+	if err := db.migrateBindingsToGateways(); err != nil {
 		return err
 	}
 	_, err := db.conn.Exec(
