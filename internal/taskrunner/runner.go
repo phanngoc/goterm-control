@@ -414,7 +414,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// this task while nobody was running it, both belong in front of the model.
 	children, _ := r.db.Children(task.ID)
 	inbox := r.taskMail(task.ID)
-	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers(), workspace, shared)
+	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers(), workspace, r.db.RunspacePath(task.ContextID), shared)
 
 	// Same rule as the chat lane: only a brand-new session. A resumed one
 	// already carries this, and injecting it again pollutes the context.
@@ -707,7 +707,7 @@ func (r *Runner) peers() []coord.Agent {
 	return out
 }
 
-func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message, peers []coord.Agent, workspace string, shared bool) string {
+func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []coord.Task, inbox []coord.Message, peers []coord.Agent, workspace, scratch string, shared bool) string {
 	var b strings.Builder
 	if t.Continuations > 0 || resumed {
 		fmt.Fprintf(&b, "You are continuing a task from the shared queue (run %d).\n\n", t.Continuations+1)
@@ -730,7 +730,17 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 				"than describing where they are. It is scratch and it ages out — see below for "+
 				"what to do with anything the work produced.\n", workspace)
 		} else {
-			fmt.Fprintf(&b, "Working directory: %s (this project's folder)\n", workspace)
+			// The root of a tree stands in the project, and its children stand
+			// somewhere else. Without this second line it looks around the
+			// project folder, sees none of their work, and concludes they did
+			// nothing.
+			fmt.Fprintf(&b, "Working directory: %s (this project's folder — assemble the deliverable here)\n",
+				workspace)
+			if scratch != "" {
+				fmt.Fprintf(&b, "Your sub-tasks work in %s instead, and hand each other files there. "+
+					"Read what they produced from that folder; put what is finished into the project.\n",
+					scratch)
+			}
 		}
 	}
 	b.WriteString("\n")
