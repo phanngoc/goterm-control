@@ -314,3 +314,94 @@ func TestContextCapDefaultsWhenUnset(t *testing.T) {
 		t.Fatalf("cap set to 0: got %d, want the default %d", got, DefaultMaxTasksPerContext)
 	}
 }
+
+// A wave that finishes without a single child completing moved nothing
+// forward, whatever it cost. One of those is a bad round; two in a row is a
+// goal circling rather than closing, and it stops to ask instead of splitting
+// a third time.
+func TestTwoWavesThatProduceNothingStopAndAsk(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "a1")
+	goal, err := db.CreateTask(NewTask{Title: "việc lớn", CreatedBy: "a1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wave := func(childState string) *Task {
+		t.Helper()
+		parent, err := db.GetTask(goal.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parent.State != TaskWorking {
+			if _, err := db.ClaimTask("a1"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		child, err := db.CreateSubTask(goal.ID, "a1", NewTask{
+			Title: "mảnh", Body: "Một mô tả đủ dài để qua ràng buộc brief tự đứng được của con.",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cur, err := db.GetTask(goal.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.BlockTask(goal.ID, "a1", cur.Attempts, BlockedOnChildren, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.conn.Exec(`UPDATE tasks SET state = ? WHERE id = ?`, childState, child.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.WakeParents(time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		after, err := db.GetTask(goal.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return after
+	}
+
+	// One fruitless wave still gets called back: one bad round is not a pattern.
+	if after := wave(TaskFailed); after.State != TaskSubmitted {
+		t.Fatalf("after one fruitless wave the goal is %s, want to be called back once more", after.State)
+	}
+	after := wave(TaskFailed)
+	if after.State != TaskBlocked || after.BlockedOn != BlockedOnHuman {
+		t.Fatalf("after two fruitless waves the goal is %s/%s, want blocked on a person",
+			after.State, after.BlockedOn)
+	}
+	if !strings.Contains(after.Checkpoint, "without a single") {
+		t.Errorf("the checkpoint does not say why it stopped: %q", after.Checkpoint)
+	}
+
+	// A productive wave clears the count, so an earlier bad round is not held
+	// against a goal that recovered.
+	if _, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', fruitless_waves = 1 WHERE id = ?`,
+		TaskSubmitted, goal.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := wave(TaskCompleted); got.FruitlessWaves != 0 {
+		t.Fatalf("a wave that completed something left the stall count at %d", got.FruitlessWaves)
+	}
+}
+
+// The parent is woken because it is open, so counting itself as outstanding
+// work would read as "one thing left" forever.
+func TestTheRemainingLineDoesNotCountTheParentItself(t *testing.T) {
+	p := &ContextProgress{
+		Total: 2, Runs: 3,
+		Open: []Task{{ID: "t_parent", State: TaskBlocked, Title: "goal"}},
+	}
+	line := remainingLine(p, "t_parent")
+	if !strings.Contains(line, "nothing") {
+		t.Fatalf("the goal counted itself as work still to do: %q", line)
+	}
+	p.Open = append(p.Open, Task{ID: "t_child", State: TaskSubmitted, Title: "mảnh"})
+	line = remainingLine(p, "t_parent")
+	if !strings.Contains(line, "t_child") || strings.Contains(line, "t_parent") {
+		t.Fatalf("the remaining line is wrong: %q", line)
+	}
+}

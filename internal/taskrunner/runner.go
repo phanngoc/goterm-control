@@ -838,7 +838,12 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"Work a peer could do in parallel can be split off: `bomclaw task sub --parent %s --title \"<piece>\" "+
 		"[--body ...] [--to <agent>]` (at most %d unfinished at once, depth %d of %d here), then "+
 		"`bomclaw task block --id %s --on children` and stop. You are called back with every child's result "+
-		"once they have all finished. Sub-tasks are for parallel work only, never for continuing your own.\n\n"+
+		"once they have all finished.\n\n"+
+		"Two things that sound alike and are not. Do NOT create a task to carry on your own turn — "+
+		"that is what `task progress` is for, and the system calls you back. But when you HAVE been "+
+		"called back with a wave of results and the goal is not met yet, splitting the remainder into "+
+		"another wave is the right move, not a loop: gather, see what is left, split again, and stop "+
+		"when the criteria are met.\n\n"+
 		"Anything the work PRODUCED — a report, a patch, a page, a file somebody will open — is filed "+
 		"with the task, not described in prose:\n\n"+
 		"    bomclaw artifact put --task %s --title \"<what it is>\" --file <path>\n"+

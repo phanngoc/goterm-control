@@ -109,6 +109,9 @@ type Task struct {
 	// v5: set once this task's outcome has been delivered to whoever asked for
 	// it. Empty on a terminal task means a report is still owed.
 	ReportedAt string `json:"reported_at,omitempty"`
+	// FruitlessWaves is how many consecutive fan-outs finished without a
+	// single child completing. Any wave that produces one resets it.
+	FruitlessWaves int `json:"fruitless_waves,omitempty"`
 
 	// v6: the bar this task is judged against, written by whoever scoped it.
 	// Paperclip's rule — a piece of work a reviewer could call "half done" was
@@ -157,7 +160,8 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	priority, title, body, result, trace_id, lease_until, attempts,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id`
+	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id,
+	fruitless_waves`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -807,7 +811,7 @@ func scanTask(s scanner) (*Task, error) {
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
 		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance,
-		&t.ChannelID); err != nil {
+		&t.ChannelID, &t.FruitlessWaves); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)
