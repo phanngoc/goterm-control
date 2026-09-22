@@ -104,6 +104,18 @@ func (db *DB) CreateSubTask(parentID, byAgent string, n NewTask) (*Task, error) 
 			"this piece of work has grown past what one tree should carry: finish or merge "+
 			"some of it, or start a separate task rather than another child", parent.ContextID, inContext, cap)
 	}
+	// The tree's run budget. The caps above bound the SHAPE of a tree — how
+	// wide, how deep, how many rows. None of them bound what it costs, and a
+	// goal that keeps splitting with every split legal is exactly the thing
+	// they cannot see. Refused here rather than silently: the agent reading
+	// this is the one deciding whether to split again.
+	if spent, runs, err := db.GoalBudgetSpent(parent.ContextID); err != nil {
+		return nil, err
+	} else if spent {
+		return nil, fmt.Errorf("coord: this goal has already cost %d runs (max %d) — "+
+			"it has spent its budget, so finish with what you have or block on a person "+
+			"rather than splitting again", runs, db.RunsPerGoal())
+	}
 	if utf8.RuneCountInString(strings.TrimSpace(n.Body)) < MinSubTaskBody {
 		return nil, fmt.Errorf("coord: a child needs a brief of its own (at least %d characters). "+
 			"Whoever claims it may be a different agent on a different harness with none of your "+

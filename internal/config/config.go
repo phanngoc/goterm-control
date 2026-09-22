@@ -123,6 +123,24 @@ type TasksConfig struct {
 	// included (default 50). MaxOpenChildren and MaxDepth are local caps and
 	// cannot see the size of the tree they are building between them.
 	MaxPerContext int `yaml:"max_per_context"`
+
+	// RunsPerGoal caps how many runs one task tree may cost before it stops to
+	// ask a person. Absent means 40; a negative number removes the ceiling.
+	// (Not "0 disables": absent and explicitly-zero are the same value in YAML
+	// for an int, and a config that reads as "no budget" when someone simply
+	// did not write the key is the wrong way round for a spend limit.)
+	//
+	// Every other ceiling is per task
+	// (attempts, continuations) or on the shape of the tree (open children,
+	// depth, task count), and none of them can see a goal that keeps splitting
+	// with every split legal.
+	//
+	// Forty is measured, not guessed: the heaviest tree this machine has ever
+	// run took 11 runs and the average is 2.2, so it is roughly four times the
+	// worst case observed. It also matters more than it looks — three agents
+	// here share one quota, so fanning out divides capacity rather than
+	// multiplying it.
+	RunsPerGoal int `yaml:"runs_per_goal"`
 }
 
 // SchedulesConfig tunes the scheduler (docs/design/scheduling-and-long-tasks.md
@@ -358,6 +376,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Coord.ArtifactRetentionDays == 0 {
 		cfg.Coord.ArtifactRetentionDays = 30
+	}
+	if cfg.Tasks.RunsPerGoal == 0 {
+		cfg.Tasks.RunsPerGoal = 40
 	}
 	if cfg.Tasks.PollIntervalSeconds == 0 {
 		cfg.Tasks.PollIntervalSeconds = 60

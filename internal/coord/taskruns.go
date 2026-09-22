@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -191,6 +192,19 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 	// in this agent's config directory. RelaxDeadAssignments lifts the pin if
 	// the agent dies.
 	notDone := func(reason string) error {
+		// The tree's budget, before granting another run. Blocked on a person
+		// rather than failed: the work is not wrong, it has become expensive,
+		// and a person is the only one who can say whether to keep paying.
+		// Failing it here would throw away a tree that may be nearly finished.
+		if spent, runs, err := db.GoalBudgetSpent(t.ContextID); err == nil && spent {
+			t.State, t.BlockedOn = TaskBlocked, BlockedOnHuman
+			t.Checkpoint = appendNote(t.Checkpoint, fmt.Sprintf(
+				"Stopped on budget: this goal has cost %d runs (max %d). "+
+					"Unblock it to keep going, or cancel the tree.", runs, db.RunsPerGoal()))
+			t.LeaseUntil = now
+			event(TaskWorking, TaskBlocked, fmt.Sprintf("goal budget spent after %d runs", runs))
+			return nil
+		}
 		t.Continuations++
 		if t.Continuations >= t.MaxContinuations {
 			t.State, t.FailReason = TaskFailed, FailContinuationsExhausted
@@ -393,4 +407,16 @@ func isTerminal(state string) bool {
 		return true
 	}
 	return false
+}
+
+// appendNote adds a line to a checkpoint without losing what was already there.
+// The checkpoint is what the next run reads, and it is the only thing that
+// survives when a conversation cannot be resumed — overwriting it to say one
+// new thing throws away everything the previous runs recorded.
+func appendNote(checkpoint, note string) string {
+	checkpoint = strings.TrimSpace(checkpoint)
+	if checkpoint == "" {
+		return note
+	}
+	return checkpoint + "\n\n" + note
 }

@@ -105,3 +105,36 @@ func (db *DB) ContextRuns(contextID string) (int, error) {
 	}
 	return n, nil
 }
+
+// DefaultRunsPerGoal is how many runs one tree may cost before it stops to ask
+// a person. Measured rather than guessed: the heaviest tree this machine has
+// run took 11 runs and the average is 2.2, so this is about four times the
+// worst case seen.
+const DefaultRunsPerGoal = 40
+
+// SetRunsPerGoal overrides the ceiling. Config calls it at startup; a negative
+// value removes it.
+func (db *DB) SetRunsPerGoal(n int) { db.runsPerGoal = n }
+
+// RunsPerGoal is the ceiling in force. Zero from config means "unset", so it
+// resolves to the default; a caller wanting no ceiling passes a negative.
+func (db *DB) RunsPerGoal() int {
+	if db.runsPerGoal == 0 {
+		return DefaultRunsPerGoal
+	}
+	return db.runsPerGoal
+}
+
+// GoalBudgetSpent reports whether a tree has used up its run budget, and what
+// it has spent. A tree with no ceiling never has.
+func (db *DB) GoalBudgetSpent(contextID string) (bool, int, error) {
+	cap := db.RunsPerGoal()
+	if cap <= 0 {
+		return false, 0, nil
+	}
+	runs, err := db.ContextRuns(contextID)
+	if err != nil {
+		return false, 0, err
+	}
+	return runs >= cap, runs, nil
+}

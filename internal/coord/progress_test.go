@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -153,5 +154,90 @@ func TestListTasksCanScopeToOneTree(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != mine.ID {
 		t.Fatalf("scoping to a tree returned %d tasks from other trees too", len(got))
+	}
+}
+
+// A goal that has spent its budget stops to ask, and is not thrown away. The
+// work is not wrong, it has become expensive, and only a person can say whether
+// to keep paying — failing it would discard a tree that may be nearly done.
+func TestAGoalStopsToAskWhenItHasSpentItsRuns(t *testing.T) {
+	db := progressDB(t)
+	db.SetRunsPerGoal(2)
+
+	goal, err := db.CreateTask(NewTask{Title: "việc lớn", CreatedBy: "bomclaw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two runs: the budget is now spent.
+	for i := 0; i < 2; i++ {
+		c, err := db.ClaimTask("bomclaw")
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := db.StartRun(c.ID, "bomclaw", c.Attempts, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if _, err := db.FinishRun(run.ID, RunOutcome{Liveness: RunAdvanced, Checkpoint: "đang làm"}); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			final, err := db.FinishRun(run.ID, RunOutcome{Liveness: RunAdvanced, Checkpoint: "vẫn đang làm"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if final.State != TaskBlocked || final.BlockedOn != BlockedOnHuman {
+				t.Fatalf("a goal over budget went to %s/%s, want blocked on a human",
+					final.State, final.BlockedOn)
+			}
+			if final.FailReason != "" {
+				t.Errorf("a goal over budget was failed (%q) — a tree that may be nearly done was thrown away",
+					final.FailReason)
+			}
+			if !strings.Contains(final.Checkpoint, "budget") {
+				t.Errorf("the checkpoint does not say why it stopped: %q", final.Checkpoint)
+			}
+			if !strings.Contains(final.Checkpoint, "đang làm") {
+				t.Errorf("stopping overwrote what earlier runs recorded: %q", final.Checkpoint)
+			}
+		}
+	}
+	_ = goal
+}
+
+// And splitting again is refused, with the numbers in the message: the agent
+// reading it is the one deciding what to do instead.
+func TestAGoalOverBudgetCannotSplitAgain(t *testing.T) {
+	db := progressDB(t)
+	goal, err := db.CreateTask(NewTask{Title: "việc lớn", CreatedBy: "bomclaw2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := db.ClaimTask("bomclaw2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.StartRun(c.ID, "bomclaw2", c.Attempts, ""); err != nil {
+		t.Fatal(err)
+	}
+	db.SetRunsPerGoal(1)
+
+	_, err = db.CreateSubTask(goal.ID, "bomclaw2", NewTask{
+		Title: "mảnh", Body: "Một mô tả đủ dài để qua ràng buộc brief tự đứng được của con.",
+	})
+	if err == nil {
+		t.Fatal("a goal with no budget left was allowed to split again")
+	}
+	if !strings.Contains(err.Error(), "budget") {
+		t.Errorf("the refusal does not say why: %v", err)
+	}
+
+	// No ceiling means no refusal.
+	db.SetRunsPerGoal(-1)
+	if _, err := db.CreateSubTask(goal.ID, "bomclaw2", NewTask{
+		Title: "mảnh", Body: "Một mô tả đủ dài để qua ràng buộc brief tự đứng được của con.",
+	}); err != nil {
+		t.Fatalf("a negative ceiling should remove the budget entirely: %v", err)
 	}
 }

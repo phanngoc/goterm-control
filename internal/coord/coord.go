@@ -43,6 +43,9 @@ type DB struct {
 	// runsDir is the root shared run folders are created under; empty means
 	// DefaultRunsDir. Same rules as artifactsDir.
 	runsDir string
+	// runsPerGoal caps how many runs one tree may cost; 0 means the default,
+	// negative means no ceiling.
+	runsPerGoal int
 	// maxTasksPerContext caps the size of one task tree; 0 means the default.
 	maxTasksPerContext int
 }

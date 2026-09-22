@@ -337,6 +337,9 @@ func runGateway(args []string) {
 		if err == nil && cfg.Tasks.MaxPerContext > 0 {
 			coordDB.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
 		}
+		if err == nil && cfg.Tasks.RunsPerGoal != 0 {
+			coordDB.SetRunsPerGoal(cfg.Tasks.RunsPerGoal)
+		}
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
 			coordDB = nil
