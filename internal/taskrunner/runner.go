@@ -369,6 +369,17 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		log.Printf("taskrunner: %s: %v — running in this agent's own workspace", task.ID, err)
 	}
 	sess.SetWorkspace(workspace)
+	// What the CLI this run spawns should know about the work it is inside.
+	//
+	// The project is the one that matters: `bomclaw task sub` already inherits
+	// it from the parent row, but `bomclaw task new --to <peer>` — which is how
+	// an agent hands a whole piece over — opens a ROOT task, with nothing to
+	// inherit from. Without this the work leaves the project silently, and the
+	// board it was filed on stops showing it.
+	sess.SetEnv("BOMCLAW_TASK_ID", task.ID)
+	if task.ChannelID != "" {
+		sess.SetEnv("BOMCLAW_TASK_CHANNEL", task.ChannelID)
+	}
 	resumed := false
 	if ref := coord.ParseSessionRef(task.SessionRef); ref.Provider != "" {
 		// Only the same CLI can resume its own session; a ref from the other

@@ -580,3 +580,70 @@ func TestMissingSessionRetriesFreshWithCheckpointAndAccount(t *testing.T) {
 		t.Fatalf("bad recovery prompt: %s", prompts[2])
 	}
 }
+
+// A piece handed to a peer stays in the project the work already belongs to.
+//
+// `bomclaw task sub` inherits the project from the parent row, but
+// `bomclaw task new --to <peer>` opens a ROOT task with nothing to inherit
+// from — so the CLI has to be told, and the only honest place to tell it is the
+// run it is spawned inside. Five real pieces of work left a project this way
+// before anybody noticed.
+func TestARunTellsItsCLIWhichProjectTheWorkIsIn(t *testing.T) {
+	db := testDB(t)
+	p, err := db.CreateProject("bất động sản", "", "owner", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateTask(coord.NewTask{
+		CreatedBy: "a1", Title: "viewer 3D", ChannelID: p.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var env []string
+	llm := &stubLLM{reply: "ok", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		env = sess.GetEnv()
+	}}
+	newRunner(db, llm).claimAndRun(context.Background())
+
+	var channel string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BOMCLAW_TASK_CHANNEL=") {
+			channel = strings.TrimPrefix(kv, "BOMCLAW_TASK_CHANNEL=")
+		}
+	}
+	if channel != p.ID {
+		t.Fatalf("the CLI was spawned with BOMCLAW_TASK_CHANNEL=%q, want %q.\n"+
+			"Work this agent hands to a peer will silently leave the project.", channel, p.ID)
+	}
+}
+
+// And a task belonging to no project says nothing, rather than naming one.
+func TestARunWithNoProjectNamesNone(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "việc lẻ"}); err != nil {
+		t.Fatal(err)
+	}
+	var env []string
+	llm := &stubLLM{reply: "ok", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		env = sess.GetEnv()
+	}}
+	newRunner(db, llm).claimAndRun(context.Background())
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BOMCLAW_TASK_CHANNEL=") {
+			t.Fatalf("a task in no project handed its CLI %q", kv)
+		}
+	}
+	// The task id is always there: it is what `bomclaw artifact put` and
+	// `task progress` need, and it does not depend on a project.
+	found := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BOMCLAW_TASK_ID=") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the run did not tell its CLI which task it is: %v", env)
+	}
+}

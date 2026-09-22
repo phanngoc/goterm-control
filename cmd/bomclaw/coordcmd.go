@@ -107,6 +107,14 @@ func runTask(args []string) {
 		if channelID == "" && *thread != "" {
 			channelID = threadChannel(db, *thread)
 		}
+		// Work handed to a peer from inside a task stays in that task's
+		// project. `task sub` inherits it from the parent row; this is the
+		// other half — `task new --to <peer>` opens a root task with nothing to
+		// inherit from, and five real pieces of work left a project this way
+		// before anybody noticed. The gateway exports it per run.
+		if channelID == "" {
+			channelID = strings.TrimSpace(os.Getenv("BOMCLAW_TASK_CHANNEL"))
+		}
 		task, err := db.CreateTask(coord.NewTask{
 			CreatedBy: me, AssignedTo: *to, Title: *title, Body: *body,
 			Priority: *priority, Depth: *depth, ContextID: *context,
@@ -126,7 +134,7 @@ func runTask(args []string) {
 				os.Exit(1)
 			}
 			if _, _, err := db.PostMessage(coord.NewChannelMessage{
-				ChannelID: threadChannel(db, *thread), ThreadRoot: *thread, AuthorID: me,
+				ChannelID: threadRoom(db, *thread), ThreadRoot: *thread, AuthorID: me,
 				Body: fmt.Sprintf("Đã mở task %s cho việc này: %s", task.ID, *title),
 			}); err != nil {
 				fmt.Fprintf(os.Stderr, "task new: bound, but could not say so in the thread: %v\n", err)
@@ -802,10 +810,38 @@ func orAny(primary, fallback string) string {
 	return "any"
 }
 
-// threadChannel is the room a thread lives in. The caller already named the
-// thread, and making it also name the channel would be asking for a fact the
-// database holds.
+// threadChannel is the PROJECT a thread lives in, or "" when it does not live
+// in one. The caller already named the thread, and making it also name the
+// channel would be asking for a fact the database holds.
+//
+// A room that is not a project gives "" on purpose. #general and DMs have no
+// folder and do not appear in the board's project list, so filing a task there
+// hides it from every filter at once — it is not unfiled, it is filed somewhere
+// nothing looks. A real piece of work went into a DM this way and was invisible
+// on the board for two days. Unfiled is worse than filed and far better than
+// filed out of sight: it shows up under "no project", where it can be moved.
+//
+// The thread↔task link does not depend on this. BindThreadToTask keeps it in
+// both directions whatever the channel is.
 func threadChannel(db *coord.DB, rootID string) string {
+	channelID := threadRoom(db, rootID)
+	if channelID == "" {
+		return ""
+	}
+	c, err := db.GetChannel(channelID)
+	if err != nil || c.Workspace == "" {
+		return ""
+	}
+	return channelID
+}
+
+// threadRoom is where a thread's messages go — any room, project or not.
+//
+// Separate from threadChannel because they answer different questions with the
+// same-looking answer: "which project does this work belong to" may be nothing,
+// but "which room do I reply in" must always be somewhere, or the note saying a
+// task was opened is posted into the void.
+func threadRoom(db *coord.DB, rootID string) string {
 	channelID, err := db.MessageChannel(rootID)
 	if err != nil || channelID == "" {
 		return coord.GeneralChannelID

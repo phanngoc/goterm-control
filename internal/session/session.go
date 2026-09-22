@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -23,6 +24,17 @@ type Session struct {
 	// Not persisted: it is derived from the room the turn is answering, and a
 	// stale value would silently run a project's work somewhere else.
 	Workspace string `json:"-"`
+	// Env is what the CLI this turn spawns should see beyond the gateway's own
+	// environment. A task run puts the task and its project here, so a
+	// `bomclaw task new` the agent runs inside that turn can default to the
+	// project the work already belongs to.
+	//
+	// Per session rather than os.Setenv because a gateway runs several turns at
+	// once — a chat, a mention, one or more tasks — and a process-wide variable
+	// would hand one turn's task id to another turn's CLI.
+	//
+	// Not persisted, for the same reason as Workspace: it describes this run.
+	Env map[string]string `json:"-"`
 	// TraceTags is what this conversation IS, for the trace of every turn it
 	// runs. A channel turn carries its room and the line that summoned it, so a
 	// message in the room can be opened as the trace it produced; a chat turn
@@ -163,6 +175,36 @@ func (s *Session) GetTraceTags() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.TraceTags...)
+}
+
+// SetEnv adds one variable to what this conversation's CLI is spawned with.
+// Call it before the turn; the clients read it when they spawn.
+func (s *Session) SetEnv(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Env == nil {
+		s.Env = map[string]string{}
+	}
+	s.Env[key] = value
+}
+
+// GetEnv returns this conversation's extra environment as KEY=VALUE lines,
+// ready to append to a command's own environment. Nil when there is none.
+func (s *Session) GetEnv() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.Env) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.Env))
+	for k, v := range s.Env {
+		out = append(out, k+"="+v)
+	}
+	sort.Strings(out) // deterministic, so a test can read it
+	return out
 }
 
 // GetWorkspace returns the directory this conversation runs in, or "" for the
