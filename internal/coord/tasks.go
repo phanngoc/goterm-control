@@ -422,6 +422,11 @@ type TaskFilter struct {
 	// opposite: work that belongs to no project, which would otherwise have
 	// nowhere to be seen once the board defaults to a project.
 	ChannelID string
+	// ContextID scopes the listing to one task tree — one goal and everything
+	// split out of it. Without it a tree could only be read by walking
+	// parent_id by hand, which is why nobody could answer "how far along is
+	// this goal".
+	ContextID string
 	Limit     int
 }
 
@@ -452,6 +457,10 @@ func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
 	default:
 		where = append(where, "channel_id = ?")
 		args = append(args, f.ChannelID)
+	}
+	if f.ContextID != "" {
+		where = append(where, "context_id = ?")
+		args = append(args, f.ContextID)
 	}
 	args = append(args, limit)
 

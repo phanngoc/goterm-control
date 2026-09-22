@@ -395,6 +395,58 @@ func runTask(args []string) {
 		}
 		w.Flush()
 
+	case "tree":
+		// How far along is this goal? Before ContextProgress the answer meant
+		// walking parent_id by hand, so in practice nobody asked it.
+		fs := flag.NewFlagSet("task tree", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		id := fs.String("id", "", "Any task in the tree (required)")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		task, err := db.GetTask(*id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task tree: %v\n", err)
+			os.Exit(1)
+		}
+		p, err := db.ContextProgress(task.ContextID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task tree: %v\n", err)
+			os.Exit(1)
+		}
+		if p.Goal != nil {
+			fmt.Printf("%s  [%s]  %s\n", p.Goal.ID, p.Goal.State, p.Goal.Title)
+			if p.Goal.Acceptance != "" {
+				fmt.Printf("accepted if:\n%s\n", p.Goal.Acceptance)
+			}
+		}
+		fmt.Printf("%s   %d tasks, %d runs, last moved %s\n",
+			p.ContextID, p.Total, p.Runs, age(p.LastMovedAt))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprint(w, "STATE\tCOUNT\n")
+		for _, st := range []string{coord.TaskSubmitted, coord.TaskWorking, coord.TaskBlocked,
+			coord.TaskCompleted, coord.TaskFailed, coord.TaskCanceled, coord.TaskRejected} {
+			if n := p.ByState[st]; n > 0 {
+				fmt.Fprintf(w, "%s\t%d\n", st, n)
+			}
+		}
+		w.Flush()
+		if len(p.Open) == 0 {
+			// Said plainly, because "nothing open" is not "goal met" and the
+			// difference is the whole reason this command exists.
+			fmt.Println("\nNothing is open. That means the pieces that exist are finished —\n" +
+				"whether the goal is met is a separate question, answered against the criteria above.")
+			return
+		}
+		fmt.Printf("\nStill open (%d):\n", len(p.Open))
+		w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		for _, o := range p.Open {
+			who := orAny(o.ClaimedBy, o.AssignedTo)
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", shortID(o.ID), o.State, who, truncate(o.Title, 50))
+		}
+		w.Flush()
+
 	case "show":
 		fs := flag.NewFlagSet("task show", flag.ExitOnError)
 		dbPath := dbFlag(fs)
@@ -530,6 +582,7 @@ func taskUsage() {
   resume --id ID [--more N]                                 (person) reopen a task the system gave up on
   list   [--state S] [--mine] [--limit N]                   see the queue
   show   --id ID                                            one task: runs, checkpoint, history
+  tree   --id ID                                            the whole goal: what is left, what it cost
 
 Every command accepts --agent (default $BOMCLAW_AGENT_ID) and --db.`)
 }
