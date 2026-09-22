@@ -647,3 +647,50 @@ func TestARunWithNoProjectNamesNone(t *testing.T) {
 		t.Errorf("the run did not tell its CLI which task it is: %v", env)
 	}
 }
+
+// Losing the lease has to stop the work, not just stop renewing it.
+//
+// Until this, the renewal goroutine logged and returned while the run carried
+// on: a peer claimed the task and started running it, and the first agent kept
+// calling tools against the same files. The database rejected the loser's
+// RESULT — FinishRun is fenced on claimed_by and attempts — but nothing
+// rejected its WRITES, and since the shared run folder shipped, both agents
+// stand in the same directory. It had happened 8 times in 170 real runs.
+func TestLosingTheLeaseStopsTheRun(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "long job"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stopped := make(chan error, 1)
+	llm := &stubLLM{reply: "ok", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		// Stand in for a peer taking the task over: the lease no longer
+		// belongs to this agent, so the next renewal fails.
+		if _, err := db.Conn().Exec(`UPDATE tasks SET claimed_by = 'a9'`); err != nil {
+			t.Error(err)
+		}
+		select {
+		case <-ctx.Done():
+			stopped <- context.Cause(ctx)
+		case <-time.After(3 * time.Second):
+			stopped <- nil // never cancelled
+		}
+	}}
+
+	r := newRunner(db, llm)
+	r.renewEvery = 5 * time.Millisecond
+	r.claimAndRun(context.Background())
+
+	select {
+	case cause := <-stopped:
+		if cause == nil {
+			t.Fatal("the run kept going after the lease was lost — it is writing into the same\n" +
+				"folder as the agent that now owns the task")
+		}
+		if !errors.Is(cause, ErrLeaseLost) {
+			t.Fatalf("run stopped for the wrong reason: %v", cause)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run never returned")
+	}
+}

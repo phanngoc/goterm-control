@@ -95,6 +95,10 @@ type Runner struct {
 
 	onEvent func(Event)
 	onWake  func(coord.WokenParent)
+
+	// renewEvery is how often the lease is pushed out, as a field so a test can
+	// watch a lease being lost without waiting two minutes for it.
+	renewEvery time.Duration
 }
 
 // New builds a Runner. A nil db or llm returns nil, which is a working no-op —
@@ -114,6 +118,8 @@ func New(db *coord.DB, llm chat.Client, rec *trace.Recorder, cfg Config) *Runner
 		poke:  make(chan struct{}, 1),
 		done:  make(chan struct{}),
 		slots: make(chan struct{}, cfg.Concurrency),
+
+		renewEvery: renewEvery,
 	}
 }
 
@@ -345,11 +351,16 @@ func orAny(s, fallback string) string {
 }
 
 func (r *Runner) execute(ctx context.Context, task *coord.Task) {
-	runCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
-	defer cancel()
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, r.cfg.Timeout)
+	defer cancelTimeout()
+	// Layered so losing the lease can stop the work and say why. The cause is
+	// what tells `classify` the difference between this and a shutdown.
+	runCtx, abort := context.WithCancelCause(timeoutCtx)
+	defer abort(nil)
 
-	// Keep the lease alive for as long as the work actually takes.
-	stopRenew := r.renewLease(runCtx, task.ID)
+	// Keep the lease alive for as long as the work actually takes — and stop
+	// the work when we can no longer hold it.
+	stopRenew := r.renewLease(runCtx, task.ID, abort)
 	defer stopRenew()
 
 	// One session per task, kept across runs: the CLI stores the conversation
@@ -478,7 +489,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		log.Printf("taskrunner: reload %s: %v", task.ID, err)
 		after = nil
 	}
-	outcome := classify(task, after, sendErr, runCtx.Err(), reply.String(), todoPending)
+	// context.Cause, not runCtx.Err(): both a deadline and a lost lease report
+	// themselves as a plain cancellation on the context, and they are not the
+	// same event. Cause still yields DeadlineExceeded for the timeout, so the
+	// existing branches keep working.
+	outcome := classify(task, after, sendErr, context.Cause(runCtx), reply.String(), todoPending)
 	outcome.SessionRef = coord.SessionRef{
 		Provider: r.llm.Name(), SessionID: sess.GetSessionID(), Account: sess.GetAccount(),
 	}
@@ -554,6 +569,13 @@ func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, to
 	case errors.Is(ctxErr, context.DeadlineExceeded) || errors.Is(sendErr, context.DeadlineExceeded):
 		return coord.RunOutcome{Liveness: coord.RunTimedOut, Checkpoint: checkpoint, Result: reply,
 			Note: "hit the run time cap"}
+	case errors.Is(ctxErr, ErrLeaseLost):
+		// Canceled, not failed: the attempt is refunded, which is right —
+		// losing a lease is not the agent's mistake. FinishRun will usually
+		// reject this outcome anyway, because whoever took the lease is the
+		// one the fence now recognises.
+		return coord.RunOutcome{Liveness: coord.RunCanceled, Checkpoint: checkpoint,
+			Note: "lease lost to another agent; run stopped"}
 	case errors.Is(ctxErr, context.Canceled) || errors.Is(sendErr, context.Canceled):
 		return coord.RunOutcome{Liveness: coord.RunCanceled, Checkpoint: checkpoint, Note: "run canceled"}
 	case sendErr != nil:
@@ -602,10 +624,25 @@ func hasPendingTodos(inputJSON string) bool {
 // renewLease keeps the claim alive while the task runs, and returns a stop
 // function. If the lease is lost the renewal simply stops: FinishRun's fencing
 // check is what actually protects the other agent's result.
-func (r *Runner) renewLease(ctx context.Context, taskID string) func() {
+// ErrLeaseLost is why a run was stopped when its lease could no longer be
+// renewed. It is a cancellation cause rather than an error return: the run is
+// already in flight by then, and the only way to stop it is through its
+// context.
+var ErrLeaseLost = errors.New("taskrunner: lease lost")
+
+// renewLease holds the task's lease for as long as the run takes, and aborts
+// the run when it can no longer hold it.
+//
+// Stopping the renewal without stopping the work was the bug: the lease lapsed,
+// a peer claimed the task and started running it, and this agent carried on
+// calling tools against the same files. The database rejected the loser's
+// RESULT — FinishRun is fenced on claimed_by and attempts — but nothing
+// rejected its WRITES, and since 2026-09-20 both agents stand in the same
+// shared run folder. It has happened 8 times in 170 runs.
+func (r *Runner) renewLease(ctx context.Context, taskID string, abort func(error)) func() {
 	stop := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(renewEvery)
+		ticker := time.NewTicker(r.renewEvery)
 		defer ticker.Stop()
 		for {
 			select {
@@ -615,7 +652,8 @@ func (r *Runner) renewLease(ctx context.Context, taskID string) func() {
 				return
 			case <-ticker.C:
 				if err := r.db.RenewLease(taskID, r.cfg.AgentID); err != nil {
-					log.Printf("taskrunner: lease on %s: %v", taskID, err)
+					log.Printf("taskrunner: lease on %s: %v — stopping this run", taskID, err)
+					abort(ErrLeaseLost)
 					return
 				}
 			}

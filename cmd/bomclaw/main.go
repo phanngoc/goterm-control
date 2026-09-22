@@ -485,7 +485,7 @@ func runGateway(args []string) {
 	if coordDB != nil {
 		report = reporter.New(coordDB, reporter.Config{AgentID: cfg.Agent.ID})
 		if tgBot != nil {
-			report.SetNotify(func(text string) { tgBot.Notify(text) })
+			report.SetNotify(tgBot.Notify)
 		}
 		report.Start(ctx)
 	}
@@ -507,7 +507,9 @@ func runGateway(args []string) {
 		// an `agent` schedule produces a task, and that task's run already
 		// opens a trace of its own.
 		sched.SetRecorder(gwTrace)
-		sched.SetNotify(func(text string) { tgBot.Notify(text) })
+		// The scheduler has nowhere to put a delivery failure: its result is
+		// already recorded and there is no claim to give back.
+		sched.SetNotify(func(text string) { _ = tgBot.Notify(text) })
 		sched.SetWake(func(t *coord.Task) {
 			if runner != nil {
 				runner.Poke()

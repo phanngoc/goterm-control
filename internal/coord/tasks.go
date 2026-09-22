@@ -889,3 +889,24 @@ func (db *DB) MarkReported(taskID string, now time.Time) (bool, error) {
 	n, _ := res.RowsAffected()
 	return n == 1, nil
 }
+
+// UnmarkReported gives a claimed delivery back, for a report that was won and
+// then could not be sent.
+//
+// Winning before sending is what stops three gateways delivering the same
+// result three times, so the claim has to come first. The cost of that order is
+// that a failed send leaves a task marked delivered and never delivered — the
+// marker makes the silence permanent. This is the compensation: put it back and
+// let the next tick, on this gateway or another, try again.
+//
+// Guarded on the timestamp we wrote, so a release can never clear a claim that
+// somebody else has since made.
+func (db *DB) UnmarkReported(taskID string, claimedAt time.Time) error {
+	_, err := db.conn.Exec(
+		`UPDATE tasks SET reported_at = '' WHERE id = ? AND reported_at = ?`,
+		taskID, ts(claimedAt))
+	if err != nil {
+		return fmt.Errorf("release report claim %s: %w", taskID, err)
+	}
+	return nil
+}
