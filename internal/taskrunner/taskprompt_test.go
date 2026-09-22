@@ -147,3 +147,28 @@ func TestAGoalIsToldWhereItsChildrenWork(t *testing.T) {
 		t.Errorf("a child was not told the folder is shared:\n%s", p)
 	}
 }
+
+// The bar was stored, printed in two places, and never shown to the one agent
+// whose work is measured against it — only to its parent, about its children.
+// Nobody was asked for criteria, so nobody wrote any: not one task in the first
+// eighty-nine had them.
+func TestAcceptanceReachesTheAgentRunningTheTask(t *testing.T) {
+	task := &coord.Task{
+		ID: "t_goal", Title: "viewer v2", ContextID: "ctx_1",
+		Acceptance: "1) tải dưới 2s; 2) lọc theo quận; 3) có test",
+	}
+	p := taskPrompt(task, time.Minute, false, nil, nil, nil, "/w", "/w", true)
+
+	if !strings.Contains(p, "lọc theo quận") {
+		t.Fatalf("the agent cannot see the bar its work is judged against:\n%s", p)
+	}
+	if !strings.Contains(p, "answer each of them in turn") {
+		t.Errorf("the criteria are shown but never asked for back:\n%s", p)
+	}
+
+	// A task with no criteria must not grow a paragraph about criteria.
+	plain := taskPrompt(&coord.Task{ID: "t_x", Title: "việc nhỏ"}, time.Minute, false, nil, nil, nil, "", "", false)
+	if strings.Contains(plain, "acceptance criteria") {
+		t.Errorf("a task with no bar was lectured about one:\n%s", plain)
+	}
+}

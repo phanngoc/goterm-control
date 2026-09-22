@@ -694,3 +694,31 @@ func TestLosingTheLeaseStopsTheRun(t *testing.T) {
 		t.Fatal("the run never returned")
 	}
 }
+
+// Everywhere else this system refuses to read completion out of prose:
+// classify believes what the agent TYPED. The default branch was the one hole
+// left — any non-empty reply became `completed`. For a short task that is
+// convenient; for a goal with criteria it means "done because it said
+// something".
+func TestATaskWithAcceptanceDoesNotFinishOnProseAlone(t *testing.T) {
+	withBar := &coord.Task{ID: "t_1", Acceptance: "phải có test"}
+	got := classify(withBar, withBar, nil, nil, "tôi nghĩ là xong rồi", false)
+	if got.Liveness == coord.RunCompleted {
+		t.Fatal("a goal with criteria completed itself by talking — nobody checked anything")
+	}
+	if got.Liveness != coord.RunAdvanced {
+		t.Fatalf("liveness = %q, want advanced (call it back with the criteria in front of it)", got.Liveness)
+	}
+
+	// Typing the command still finishes it, as it always did.
+	done := &coord.Task{ID: "t_1", Acceptance: "phải có test", State: coord.TaskCompleted, Result: "xong"}
+	if got := classify(withBar, done, nil, nil, "", false); got.Liveness != coord.RunCompleted {
+		t.Fatalf("`task done` no longer finishes a task with criteria: %q", got.Liveness)
+	}
+
+	// And a task with no criteria keeps the old, convenient behaviour.
+	plain := &coord.Task{ID: "t_2"}
+	if got := classify(plain, plain, nil, nil, "đây là câu trả lời", false); got.Liveness != coord.RunCompleted {
+		t.Fatalf("a short task without criteria stopped completing on its reply: %q", got.Liveness)
+	}
+}

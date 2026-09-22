@@ -595,6 +595,20 @@ func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, to
 		// work instead of doing it. Call it back rather than accept the plan
 		// as the deliverable.
 		return coord.RunOutcome{Liveness: coord.RunPlanOnly, Result: reply, Note: "TodoWrite left items pending"}
+	case before.Acceptance != "":
+		// A task with a bar written on it does not get to finish by talking.
+		// Everywhere else this system already refuses to read completion out of
+		// prose — classify believes what the agent TYPED, not what it said —
+		// and this default branch was the one hole left: any non-empty reply
+		// became `completed`. For a short task that is convenient. For a goal
+		// with criteria it means "done because it said something".
+		//
+		// So it is called back instead, with the criteria in front of it, until
+		// it types `task done`. The continuation ceiling is what stops this
+		// being a loop.
+		return coord.RunOutcome{Liveness: coord.RunAdvanced, Result: reply,
+			Checkpoint: checkpoint,
+			Note:       "reply only; a task with acceptance criteria ends with `task done`"}
 	default:
 		// A plain reply with no commands: the reply IS the deliverable. This is
 		// the pre-P0 behaviour and what a short task still looks like.
@@ -745,6 +759,15 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "## %s\n", t.Title)
+	if t.Acceptance != "" {
+		// The bar was stored, printed in two places, and never shown to the
+		// one agent whose work is measured against it — only to its parent,
+		// about its children. Nobody was asked for criteria, so nobody wrote
+		// any: not one task in the first eighty-nine had them.
+		b.WriteString("\n**Accepted when:**\n")
+		b.WriteString(t.Acceptance)
+		b.WriteString("\n")
+	}
 	if t.Body != "" {
 		b.WriteString("\n")
 		b.WriteString(t.Body)
@@ -828,11 +851,28 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+
 		"the requesting agent reads, so state what you did and what you found. If you cannot proceed without "+
 		"a person: `bomclaw task block --id %s --on human --note \"<exactly what you need>\"` and stop.\n\n"+
+		"%s"+
 		"The final reply is the deliverable, not a plan — do not ask follow-up questions, there is nobody "+
 		"waiting to answer them; use `task block` instead.",
 		minutes, t.ID, t.ID, coord.MaxOpenChildren, t.Depth, coord.MaxDepth, t.ID,
-		t.ID, t.ID, t.ID, t.ID)
+		t.ID, t.ID, t.ID, t.ID, acceptanceClause(t))
 	return b.String()
+}
+
+// acceptanceClause is what a task with a bar written on it has to answer for.
+//
+// Two sentences rather than a gate: refusing `task done` for a missing line
+// would hard-fail an agent mid-turn, and that trade was already judged and
+// rejected — a brief of its own is what enforces a child standing alone, not a
+// checklist. What changed is that the criteria now reach the agent at all, so
+// asking it to answer them is asking for something it can see.
+func acceptanceClause(t *coord.Task) string {
+	if t.Acceptance == "" {
+		return ""
+	}
+	return "This task carries acceptance criteria, listed above. Your result must answer each of " +
+		"them in turn — what you did about it and whether it is met. A criterion you could not " +
+		"meet is a fact worth reporting, not a reason to stay silent: say so and say why.\n\n"
 }
 
 func truncate(s string, n int) string {

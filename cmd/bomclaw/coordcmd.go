@@ -95,6 +95,10 @@ func runTask(args []string) {
 		context := fs.String("context", "", "Existing context id to attach this task to")
 		thread := fs.String("thread", "", "Root message id of the conversation this work came out of")
 		channel := fs.String("channel", "", "Project this work belongs to (default: the thread's)")
+		// A goal is a root task with a bar written on it. Until now only
+		// `task sub` could set one, so the only tasks that could carry criteria
+		// were the ones nobody was opening a goal with.
+		acceptance := fs.String("acceptance", "", "How anyone knows this is done — the bar it is judged against")
 		fs.Parse(rest)
 
 		db := openCoord(*dbPath)
@@ -118,7 +122,7 @@ func runTask(args []string) {
 		task, err := db.CreateTask(coord.NewTask{
 			CreatedBy: me, AssignedTo: *to, Title: *title, Body: *body,
 			Priority: *priority, Depth: *depth, ContextID: *context,
-			ChannelID: channelID,
+			ChannelID: channelID, Acceptance: *acceptance,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "task new: %v\n", err)
@@ -569,7 +573,7 @@ func accountSuffix(a string) string {
 func taskUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: bomclaw task <command>
 
-  new    --title T [--body B] [--to agent] [--priority N]   create work
+  new    --title T [--body B] [--to agent] [--acceptance A]  create work (a goal is one with criteria)
   sub    --parent ID --title T --body B [--acceptance A]    split a piece off a task you hold (max 8 open)
          [--to agent] [--input a_id,a_id]                   the body must stand alone: another agent may claim it
   claim  [--json]                                           take the next claimable task
