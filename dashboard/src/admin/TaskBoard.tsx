@@ -510,6 +510,23 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                     )}
                   </dd>
                 </div>
+                <div>
+                  <dt className="text-gray-600">goal</dt>
+                  <dd className="text-gray-300">
+                    {detail.context_open
+                      ? <span className="text-sky-300">{detail.context_open} still open</span>
+                      : <span className="text-emerald-300">nothing open</span>}
+                    {!!detail.context_budget && (
+                      // Amber as the budget runs out: past it the goal stops
+                      // and waits for a person, so the warning is worth having
+                      // before that happens rather than after.
+                      <span className={(detail.context_runs ?? 0) >= detail.context_budget * 3 / 4
+                        ? 'ml-1 text-amber-400' : 'ml-1 text-gray-500'}>
+                        · {detail.context_runs}/{detail.context_budget} runs
+                      </span>
+                    )}
+                  </dd>
+                </div>
               </dl>
 
               <Project

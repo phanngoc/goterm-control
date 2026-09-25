@@ -138,6 +138,12 @@ export interface TaskDetail {
   children: Task[]
   context_count?: number
   context_cap?: number
+  /** The whole goal, not this task: how much is still moving, what it has cost,
+   *  and the ceiling it stops at. One level of children said "2/2 finished"
+   *  while half a three-wave goal was still running. */
+  context_open?: number
+  context_runs?: number
+  context_budget?: number
   thread_root?: string // the conversation this work came out of, when it came from one
 
   // The project this work belongs to, and so the folder its next run happens

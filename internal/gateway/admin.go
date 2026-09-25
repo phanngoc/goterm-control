@@ -144,6 +144,13 @@ type TaskDetail struct {
 	// its limit, so counting there would be quietly wrong on a large tree.
 	ContextCount int `json:"context_count"`
 	ContextCap   int `json:"context_cap"`
+	// ContextOpen and ContextRuns are the tree, not this task: how much of the
+	// goal is still moving and what it has cost so far. The board could show
+	// one level of children and nothing else, so a goal three waves deep read
+	// as "2/2 children finished" while half of it was still running.
+	ContextOpen   int `json:"context_open"`
+	ContextRuns   int `json:"context_runs"`
+	ContextBudget int `json:"context_budget"`
 
 	// The conversation this work came out of, when it came out of one, so the
 	// board has a way back to the room instead of being a dead end.
@@ -228,6 +235,12 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Best effort: a detail pane that fails to open because a progress number
+	// could not be read is worse than a detail pane without the number.
+	contextOpen, contextRuns := 0, 0
+	if prog, err := deps.Coord.ContextProgress(task.ContextID); err == nil {
+		contextOpen, contextRuns = len(prog.Open), prog.Runs
+	}
 	threadRoot, _, err := deps.Coord.TaskThread(p.ID)
 	if err != nil {
 		return nil, err
@@ -269,6 +282,7 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 		Artifacts: artifacts, Mail: mail, SideTalk: sideTalk,
 		Project: project, SessionID: coord.TaskSessionID(task.ID),
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
+		ContextOpen: contextOpen, ContextRuns: contextRuns, ContextBudget: deps.Coord.RunsPerGoal(),
 		ThreadRoot: threadRoot, Live: live,
 	})
 }
