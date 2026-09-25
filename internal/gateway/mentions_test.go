@@ -1012,3 +1012,60 @@ func TestAChannelTurnAsksForCriteriaWhenItOpensWork(t *testing.T) {
 		t.Error("the task would be detached from the conversation that asked for it")
 	}
 }
+
+// A goal that stops waits for `bomclaw task unblock`, which is a terminal
+// command — but the notification reaches a phone. The owner's natural move is
+// to reply in the thread, and the agent woken by that reply has to know a task
+// is sitting there waiting for exactly those words.
+func TestAThreadWhoseTaskIsBlockedTellsTheAgentToUnblockIt(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{reply: "ừ"})
+	w := NewMentionWatcher(deps)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser,
+		AuthorID: coord.OwnerUserID, Body: "@bomclaw2 dựng viewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := cdb.CreateTask(coord.NewTask{CreatedBy: "bomclaw2", Title: "dựng viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cdb.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// While it is merely running, the prompt says nothing about unblocking.
+	reply, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "dùng domain a.vn nhé",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := w.prompt(*reply, &coord.ThreadSession{}, root.ID); strings.Contains(p, "task unblock") {
+		t.Fatal("a running task was offered up to be unblocked")
+	}
+
+	// Once it stops for a person, the answer in the thread is the way through.
+	c, err := cdb.ClaimTask("bomclaw2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cdb.BlockTask(c.ID, "bomclaw2", c.Attempts, coord.BlockedOnHuman, "dùng domain nào?"); err != nil {
+		t.Fatal(err)
+	}
+	p := w.prompt(*reply, &coord.ThreadSession{}, root.ID)
+	if !strings.Contains(p, "task unblock") {
+		t.Fatal("the agent answering a stuck goal's thread was never told it could free it —\n" +
+			"so the only way through is a terminal, and the notification that reached a phone\n" +
+			"cannot be acted on from there")
+	}
+	if !strings.Contains(p, "dùng domain nào?") {
+		t.Error("the prompt does not say what the task is actually waiting to know")
+	}
+	if !strings.Contains(p, task.ID) {
+		t.Error("the unblock command does not name the task")
+	}
+}

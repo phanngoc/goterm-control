@@ -406,6 +406,27 @@ func runTask(args []string) {
 		}
 		w.Flush()
 
+	case "accept":
+		// Writing the bar for a goal that arrived without one. Write-once: an
+		// agent that can lower the bar it is judged against is not being
+		// judged.
+		fs := flag.NewFlagSet("task accept", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		acceptance := fs.String("acceptance", "", "What makes this done — numbered and checkable")
+		fs.Parse(rest)
+		if *acceptance == "" && fs.NArg() > 0 {
+			*acceptance = strings.Join(fs.Args(), " ")
+		}
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		if err := db.SetAcceptance(*id, *acceptance); err != nil {
+			fmt.Fprintf(os.Stderr, "task accept: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s will be judged against:\n%s\n", *id, *acceptance)
+
 	case "tree":
 		// How far along is this goal? Before ContextProgress the answer meant
 		// walking parent_id by hand, so in practice nobody asked it.
@@ -594,6 +615,7 @@ func taskUsage() {
   list   [--state S] [--mine] [--limit N]                   see the queue
   show   --id ID                                            one task: runs, checkpoint, history
   tree   --id ID                                            the whole goal: what is left, what it cost
+  accept --id ID --acceptance A                             write what done means (once)
 
 Every command accepts --agent (default $BOMCLAW_AGENT_ID) and --db.`)
 }

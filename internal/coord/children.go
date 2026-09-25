@@ -114,7 +114,7 @@ func (db *DB) CreateSubTask(parentID, byAgent string, n NewTask) (*Task, error) 
 	} else if spent {
 		return nil, fmt.Errorf("coord: this goal has already cost %d runs (max %d) — "+
 			"it has spent its budget, so finish with what you have or block on a person "+
-			"rather than splitting again", runs, db.RunsPerGoal())
+			"rather than splitting again", runs, goalLimitOf(db, parent.ContextID))
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(n.Body)) < MinSubTaskBody {
 		return nil, fmt.Errorf("coord: a child needs a brief of its own (at least %d characters). "+

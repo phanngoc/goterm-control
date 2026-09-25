@@ -340,6 +340,9 @@ func runGateway(args []string) {
 		if err == nil && cfg.Tasks.RunsPerGoal != 0 {
 			coordDB.SetRunsPerGoal(cfg.Tasks.RunsPerGoal)
 		}
+		if err == nil && cfg.Tasks.GoalExtensions != 0 {
+			coordDB.SetGoalExtensions(cfg.Tasks.GoalExtensions)
+		}
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
 			coordDB = nil

@@ -802,7 +802,8 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "## %s\n", t.Title)
-	if t.Acceptance != "" {
+	switch {
+	case t.Acceptance != "":
 		// The bar was stored, printed in two places, and never shown to the
 		// one agent whose work is measured against it — only to its parent,
 		// about its children. Nobody was asked for criteria, so nobody wrote
@@ -810,6 +811,19 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		b.WriteString("\n**Accepted when:**\n")
 		b.WriteString(t.Acceptance)
 		b.WriteString("\n")
+	case t.ParentID == "" && t.Kind != coord.KindVerify:
+		// A goal that arrived without a bar. Asking whoever opened it helped,
+		// but it cannot be relied on, and a goal with no definition of done
+		// finishes when somebody says it is finished. So the first thing the
+		// agent doing it writes is what done means — in this same run, before
+		// the work, costing nothing extra.
+		fmt.Fprintf(&b, "\n**This goal has no definition of done yet. Write one first:**\n\n"+
+			"    bomclaw task accept --id %s --acceptance \"1) …; 2) …; 3) …\"\n\n"+
+			"Numbered and checkable, as the person who asked would judge them — not as a "+
+			"restatement of the title. They are what you are measured against, what you re-read "+
+			"between rounds of work to decide whether you are finished, and what a peer reads "+
+			"this against at the end. You can only write them once, so write the bar you would "+
+			"be willing to be held to.\n", t.ID)
 	}
 	if t.Body != "" {
 		b.WriteString("\n")

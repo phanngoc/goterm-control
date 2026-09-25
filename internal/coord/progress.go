@@ -125,16 +125,87 @@ func (db *DB) RunsPerGoal() int {
 	return db.runsPerGoal
 }
 
+// DefaultGoalExtensions is how many further budgets a goal may grant itself
+// while it is still producing something. Three, so a tree that keeps working
+// can reach four times the base before anyone is asked — and no further.
+const DefaultGoalExtensions = 3
+
+// SetGoalExtensions overrides how many times a working goal may extend itself.
+// Zero means it never does: the base budget is the whole budget.
+func (db *DB) SetGoalExtensions(n int) { db.goalExtensions, db.goalExtensionsSet = n, true }
+
+// GoalExtensions is the allowance in force.
+func (db *DB) GoalExtensions() int {
+	if db.goalExtensions == 0 && !db.goalExtensionsSet {
+		return DefaultGoalExtensions
+	}
+	return db.goalExtensions
+}
+
 // GoalBudgetSpent reports whether a tree has used up its run budget, and what
 // it has spent. A tree with no ceiling never has.
+//
+// A goal that is still producing extends itself rather than stopping. The
+// budget exists because three agents share one quota and a tree that splits
+// forever is a real way to lose it — but the thing worth stopping is a goal
+// going in circles, not a goal that is working and happens to be long. Stopping
+// a healthy tree at two in the morning costs a night for nothing, and the whole
+// point of the system is that it runs while nobody is watching.
+//
+// So the extension is conditional on evidence, not on optimism: the last wave
+// must have completed at least one child. That is the same signal the stall
+// rule reads, from the other side — fruitless_waves is zero exactly when the
+// most recent round produced something. A goal that stops producing falls back
+// to the base budget immediately and stops for a person, which is the case the
+// gate was built for.
+//
+// Only trees extend. A goal that never split is bounded by MaxContinuations
+// long before the run budget reaches it, and "it is still writing checkpoints"
+// is not evidence of progress the way a completed child is.
 func (db *DB) GoalBudgetSpent(contextID string) (bool, int, error) {
-	cap := db.RunsPerGoal()
-	if cap <= 0 {
+	base := db.RunsPerGoal()
+	if base <= 0 {
 		return false, 0, nil
 	}
 	runs, err := db.ContextRuns(contextID)
 	if err != nil {
 		return false, 0, err
 	}
-	return runs >= cap, runs, nil
+	if runs < base {
+		return false, runs, nil
+	}
+	limit, err := db.goalLimit(contextID, base)
+	if err != nil {
+		return false, runs, err
+	}
+	return runs >= limit, runs, nil
+}
+
+// GoalLimit is the ceiling in force for one tree, base budget or extended.
+func (db *DB) GoalLimit(contextID string) (int, error) {
+	base := db.RunsPerGoal()
+	if base <= 0 {
+		return 0, nil
+	}
+	return db.goalLimit(contextID, base)
+}
+
+func (db *DB) goalLimit(contextID string, base int) (int, error) {
+	ext := db.GoalExtensions()
+	if ext <= 0 {
+		return base, nil
+	}
+	var fruitless, total int
+	err := db.conn.QueryRow(`SELECT
+			coalesce(max(CASE WHEN parent_id = '' THEN fruitless_waves END), 0),
+			count(*)
+		FROM tasks WHERE context_id = ?`, contextID).Scan(&fruitless, &total)
+	if err != nil {
+		return base, fmt.Errorf("goal limit for %s: %w", contextID, err)
+	}
+	// Still producing, and actually a tree. Anything else keeps the base.
+	if fruitless == 0 && total > 1 {
+		return base * (1 + ext), nil
+	}
+	return base, nil
 }

@@ -368,6 +368,7 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 	fmt.Fprintf(&b, "## %s said\n\n%s\n\n", m.AuthorID, strings.TrimSpace(m.Body))
 	b.WriteString(w.project(m.ChannelID))
 	b.WriteString(w.threadArtifacts(m))
+	b.WriteString(w.blockedTask(m))
 	b.WriteString(w.schedulesFor(m.ChannelID))
 	b.WriteString(w.roster())
 
@@ -438,6 +439,51 @@ func (w *MentionWatcher) project(channelID string) string {
 // the work product of the thread is addressable by id: the same id the
 // producer wrote it under, readable with one command, and stable even after
 // somebody moves the file.
+// blockedTask is the line that lets a person answer from a phone.
+//
+// A goal that stops waits for `bomclaw task unblock`, which is a terminal
+// command. The notification reaches the owner wherever they are; the answer
+// could only be given at a keyboard. But the owner's natural move is to reply
+// in the thread — the round trip through Telegram already carries that back —
+// and the agent woken by that reply had no idea a task was sitting there
+// waiting for exactly those words.
+//
+// So when the thread has a blocked task behind it, the prompt says so, and
+// says what to do with the answer it just received.
+func (w *MentionWatcher) blockedTask(m coord.ChannelMessage) string {
+	root := m.ThreadRoot
+	if root == "" {
+		root = m.ID
+	}
+	rootMsg, err := w.deps.Coord.GetMessage(root)
+	if err != nil || rootMsg.TaskID == "" {
+		return ""
+	}
+	task, err := w.deps.Coord.GetTask(rootMsg.TaskID)
+	if err != nil || task.State != coord.TaskBlocked || task.BlockedOn != coord.BlockedOnHuman {
+		return ""
+	}
+	return fmt.Sprintf("\n## The task behind this thread is waiting on a person\n\n"+
+		"`%s` (%s) stopped and is waiting for a decision. What it said it needed:\n\n%s\n\n"+
+		"If the message you are answering gives that decision — even loosely — pass it on and "+
+		"let the work continue:\n\n"+
+		"    bomclaw task unblock --id %s --note \"<their answer, in their words>\"\n\n"+
+		"The note becomes the next run's starting point, so carry what they actually said rather "+
+		"than your reading of it. If it does not answer the question, say what is still needed "+
+		"and leave the task alone.\n",
+		task.Title, task.ID, strings.TrimSpace(lastParagraph(task.Checkpoint)), task.ID)
+}
+
+// lastParagraph is the most recent thing written into a checkpoint — why it
+// stopped, not the whole history of getting there.
+func lastParagraph(checkpoint string) string {
+	parts := strings.Split(strings.TrimSpace(checkpoint), "\n\n")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
 func (w *MentionWatcher) threadArtifacts(m coord.ChannelMessage) string {
 	root := m.ThreadRoot
 	if root == "" {

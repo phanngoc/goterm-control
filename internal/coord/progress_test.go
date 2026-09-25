@@ -3,6 +3,7 @@ package coord
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func progressDB(t *testing.T) *DB {
@@ -239,5 +240,86 @@ func TestAGoalOverBudgetCannotSplitAgain(t *testing.T) {
 		Title: "mảnh", Body: "Một mô tả đủ dài để qua ràng buộc brief tự đứng được của con.",
 	}); err != nil {
 		t.Fatalf("a negative ceiling should remove the budget entirely: %v", err)
+	}
+}
+
+// A goal that is still producing extends itself rather than stopping. The gate
+// exists to stop a tree going in circles, not a tree that is working and
+// happens to be long — stopping a healthy one at two in the morning costs a
+// night for nothing.
+func TestAProducingGoalExtendsItselfInsteadOfStopping(t *testing.T) {
+	db := progressDB(t)
+	db.SetRunsPerGoal(2)
+	db.SetGoalExtensions(3)
+
+	goal, err := db.CreateTask(NewTask{Title: "việc lớn", CreatedBy: "bomclaw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ClaimTask("bomclaw"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateSubTask(goal.ID, "bomclaw", NewTask{
+		Title: "mảnh", Body: "Một mô tả đủ dài để qua ràng buộc brief tự đứng được của con.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Three runs against a base budget of two, with the last round productive.
+	for i := 0; i < 3; i++ {
+		if _, err := db.conn.Exec(`INSERT INTO task_runs (id, task_id, agent_id, attempt, liveness, started_at)
+			VALUES (?, ?, 'bomclaw', 1, ?, ?)`,
+			"tr_ext"+string(rune('a'+i)), goal.ID, RunAdvanced, ts(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	spent, runs, err := db.GoalBudgetSpent(goal.ContextID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spent {
+		t.Fatalf("a producing goal stopped at %d runs — it would sit idle overnight while it\n"+
+			"was still getting somewhere", runs)
+	}
+	if limit, _ := db.GoalLimit(goal.ContextID); limit != 8 {
+		t.Errorf("extended limit = %d, want base 2 × (1+3)", limit)
+	}
+
+	// The moment it stops producing, the extension is gone and so is the goal.
+	if _, err := db.conn.Exec(`UPDATE tasks SET fruitless_waves = 2 WHERE id = ?`, goal.ID); err != nil {
+		t.Fatal(err)
+	}
+	spent, _, err = db.GoalBudgetSpent(goal.ContextID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spent {
+		t.Fatal("a goal that stopped producing kept its extension — it can now burn four times\n" +
+			"the budget going in circles, which is the case the gate was built for")
+	}
+}
+
+// A goal that never split is bounded by MaxContinuations long before the run
+// budget reaches it, and "still writing checkpoints" is not the evidence a
+// completed child is.
+func TestALinearGoalDoesNotExtendItself(t *testing.T) {
+	db := progressDB(t)
+	db.SetRunsPerGoal(1)
+	db.SetGoalExtensions(3)
+
+	goal, err := db.CreateTask(NewTask{Title: "việc lẻ", CreatedBy: "bomclaw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(`INSERT INTO task_runs (id, task_id, agent_id, attempt, liveness, started_at)
+		VALUES ('tr_lin', ?, 'bomclaw', 1, ?, ?)`, goal.ID, RunAdvanced, ts(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	spent, _, err := db.GoalBudgetSpent(goal.ContextID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spent {
+		t.Fatal("a single task extended itself on the strength of writing checkpoints")
 	}
 }
