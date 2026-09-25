@@ -33,6 +33,12 @@ import (
 
 // verificationsPerSweep bounds how many goals one tick may open readings for.
 // A gateway coming back after a night off should not spawn forty at once.
+// maxCriteriaAsks is how many times a goal is called back for a definition of
+// done before it stops for a person. Two: one repeat is a fair second chance,
+// and every further one is a model turn spent learning what the second already
+// showed.
+const maxCriteriaAsks = 2
+
 const verificationsPerSweep = 5
 
 // renewEvery must be comfortably shorter than coord.DefaultLease so a task
@@ -531,7 +537,8 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	// themselves as a plain cancellation on the context, and they are not the
 	// same event. Cause still yields DeadlineExceeded for the timeout, so the
 	// existing branches keep working.
-	outcome := classify(task, after, sendErr, context.Cause(runCtx), reply.String(), todoPending)
+	outcome := classify(task, after, sendErr, context.Cause(runCtx), reply.String(), todoPending,
+		isGoal(task, workspace, shared))
 	outcome.SessionRef = coord.SessionRef{
 		Provider: r.llm.Name(), SessionID: sess.GetSessionID(), Account: sess.GetAccount(),
 	}
@@ -591,7 +598,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 // classify turns how the run ended into a RunOutcome. Order matters: the
 // agent's own explicit commands win over anything inferred; then the reasons
 // the runtime stopped it; then what the reply looks like.
-func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, todoPending bool) coord.RunOutcome {
+func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, todoPending, goal bool) coord.RunOutcome {
 	if after != nil {
 		switch after.State {
 		case coord.TaskCompleted:
@@ -638,6 +645,29 @@ func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, to
 		// work instead of doing it. Call it back rather than accept the plan
 		// as the deliverable.
 		return coord.RunOutcome{Liveness: coord.RunPlanOnly, Result: reply, Note: "TodoWrite left items pending"}
+	case goal && before.Acceptance == "" && before.Continuations >= maxCriteriaAsks:
+		// Asked and asked and not answered. Every callback is a model turn, and
+		// an agent that will not write a definition of done after this many is
+		// not going to — the continuation ceiling would spend twenty of them
+		// finding that out. Stopping for a person is the honest end: the owner
+		// can write the criteria themselves in the unblock note, which is
+		// exactly what the note is for.
+		return coord.RunOutcome{Liveness: coord.RunBlocked, BlockedOn: coord.BlockedOnHuman,
+			Result: reply,
+			Note: fmt.Sprintf("asked %d times for a definition of done and got none; "+
+				"unblock with the criteria in the note and it will carry on", before.Continuations)}
+	case goal && before.Acceptance == "":
+		// It was asked, in this same prompt, to write what done means before
+		// starting — and it did neither that nor any of the commands that
+		// finish a task. Letting the reply stand as the deliverable is how a
+		// goal gets marked complete by an agent saying "starting now", which
+		// is exactly what happened the first time this ran on real work.
+		//
+		// So it is called back with the ask repeated. The continuation ceiling
+		// bounds it: an agent that will not write criteria fails loudly rather
+		// than succeeding silently.
+		return coord.RunOutcome{Liveness: coord.RunPlanOnly, Result: reply, Checkpoint: checkpoint,
+			Note: "no acceptance criteria written; a goal does not finish on a reply alone"}
 	case before.Acceptance != "":
 		// A task with a bar written on it does not get to finish by talking.
 		// Everywhere else this system already refuses to read completion out of
@@ -811,7 +841,7 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		b.WriteString("\n**Accepted when:**\n")
 		b.WriteString(t.Acceptance)
 		b.WriteString("\n")
-	case t.ParentID == "" && t.Kind != coord.KindVerify:
+	case isGoal(t, workspace, shared):
 		// A goal that arrived without a bar. Asking whoever opened it helped,
 		// but it cannot be relied on, and a goal with no definition of done
 		// finishes when somebody says it is finished. So the first thing the
@@ -1000,4 +1030,21 @@ func (r *Runner) sweepVerifications() {
 			log.Printf("taskrunner: %s rejected → %s for %s", v.ID, f.ID, f.AssignedTo)
 		}
 	}
+}
+
+// isGoal reports whether this task is the kind of work that needs a definition
+// of done: a root task filed under a project.
+//
+// Not every root task is a goal. "Summarise this log" answers in a sentence and
+// should keep doing so — asking it for numbered criteria, and then refusing its
+// answer, would be machinery charging rent on the simplest thing the system
+// does. A task filed under a project is work somebody organised, which is where
+// the criteria earn their cost.
+//
+// Read from the workspace decision rather than re-derived: TaskWorkspace
+// returns the project folder and shared=false for exactly this case, so the two
+// cannot drift apart into disagreeing about what a goal is.
+func isGoal(t *coord.Task, workspace string, shared bool) bool {
+	return t != nil && t.ParentID == "" && t.Kind != coord.KindVerify &&
+		workspace != "" && !shared
 }

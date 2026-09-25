@@ -702,7 +702,7 @@ func TestLosingTheLeaseStopsTheRun(t *testing.T) {
 // something".
 func TestATaskWithAcceptanceDoesNotFinishOnProseAlone(t *testing.T) {
 	withBar := &coord.Task{ID: "t_1", Acceptance: "phải có test"}
-	got := classify(withBar, withBar, nil, nil, "tôi nghĩ là xong rồi", false)
+	got := classify(withBar, withBar, nil, nil, "tôi nghĩ là xong rồi", false, false)
 	if got.Liveness == coord.RunCompleted {
 		t.Fatal("a goal with criteria completed itself by talking — nobody checked anything")
 	}
@@ -712,13 +712,13 @@ func TestATaskWithAcceptanceDoesNotFinishOnProseAlone(t *testing.T) {
 
 	// Typing the command still finishes it, as it always did.
 	done := &coord.Task{ID: "t_1", Acceptance: "phải có test", State: coord.TaskCompleted, Result: "xong"}
-	if got := classify(withBar, done, nil, nil, "", false); got.Liveness != coord.RunCompleted {
+	if got := classify(withBar, done, nil, nil, "", false, false); got.Liveness != coord.RunCompleted {
 		t.Fatalf("`task done` no longer finishes a task with criteria: %q", got.Liveness)
 	}
 
 	// And a task with no criteria keeps the old, convenient behaviour.
 	plain := &coord.Task{ID: "t_2"}
-	if got := classify(plain, plain, nil, nil, "đây là câu trả lời", false); got.Liveness != coord.RunCompleted {
+	if got := classify(plain, plain, nil, nil, "đây là câu trả lời", false, false); got.Liveness != coord.RunCompleted {
 		t.Fatalf("a short task without criteria stopped completing on its reply: %q", got.Liveness)
 	}
 }
@@ -773,4 +773,80 @@ func taskIDOf(t *testing.T, db *coord.DB) string {
 		t.Fatalf("tasks: %+v %v", list, err)
 	}
 	return list[0].ID
+}
+
+// The first time this ran on real work, an agent answered a goal with
+// "Bắt đầu nhận diện scope và chia việc" — one sentence announcing it was
+// about to start — and the default branch marked the goal completed. It had
+// even fetched real market data two commands earlier; it was cut off by being
+// declared finished.
+//
+// A goal asked for criteria and given neither those nor a finishing command
+// has not finished.
+func TestAGoalDoesNotFinishByAnnouncingItHasStarted(t *testing.T) {
+	goal := &coord.Task{ID: "t_goal", Title: "radar chứng khoán"}
+
+	got := classify(goal, goal, nil, nil, "Bắt đầu nhận diện scope và chia việc.", false, true)
+	if got.Liveness == coord.RunCompleted {
+		t.Fatal("a goal completed itself by saying it was about to start")
+	}
+	if got.Liveness != coord.RunPlanOnly {
+		t.Fatalf("liveness = %q, want plan_only so it is called back with the ask repeated", got.Liveness)
+	}
+
+	// Writing the criteria is what changes the answer: the rule is about the
+	// ask being ignored, not about the wording of the reply.
+	withBar := &coord.Task{ID: "t_goal", Acceptance: "1) có board; 2) dữ liệu thật"}
+	if got := classify(withBar, withBar, nil, nil, "vẫn đang làm", false, true); got.Liveness != coord.RunAdvanced {
+		t.Errorf("a goal with criteria took the wrong path: %q", got.Liveness)
+	}
+
+	// And a task that is not a goal keeps answering in a sentence, which is
+	// most of what this system does.
+	plain := &coord.Task{ID: "t_small", Title: "tóm tắt log"}
+	if got := classify(plain, plain, nil, nil, "log sạch, không có lỗi nào.", false, false); got.Liveness != coord.RunCompleted {
+		t.Fatalf("a small task stopped completing on its answer: %q", got.Liveness)
+	}
+}
+
+// isGoal must agree with the workspace decision rather than re-deriving one,
+// or the two drift into disagreeing about what a goal is.
+func TestOnlyARootTaskInAProjectIsAGoal(t *testing.T) {
+	root := &coord.Task{ID: "t_1"}
+	child := &coord.Task{ID: "t_2", ParentID: "t_1"}
+	verify := &coord.Task{ID: "t_3", Kind: coord.KindVerify}
+
+	if !isGoal(root, "/projects/p", false) {
+		t.Error("a root task standing in a project folder is not treated as a goal")
+	}
+	if isGoal(root, "/scratch/ctx_1", true) {
+		t.Error("a root task with no project was asked for criteria it does not need")
+	}
+	if isGoal(child, "/scratch/ctx_1", true) || isGoal(verify, "/projects/p", false) {
+		t.Error("a child or a verification was treated as a goal")
+	}
+}
+
+// Every callback is a model turn. An agent that will not write a definition of
+// done after two is not going to, and the continuation ceiling would spend
+// twenty more finding that out — the free model in the first live run ignored
+// the ask three times running.
+func TestAGoalStopsAskingForCriteriaAndStopsForAPerson(t *testing.T) {
+	first := &coord.Task{ID: "t_goal", Title: "radar"}
+	if got := classify(first, first, nil, nil, "bắt đầu đây", false, true); got.Liveness != coord.RunPlanOnly {
+		t.Fatalf("the first miss should be a second chance, got %q", got.Liveness)
+	}
+
+	asked := &coord.Task{ID: "t_goal", Title: "radar", Continuations: maxCriteriaAsks}
+	got := classify(asked, asked, nil, nil, "vẫn bắt đầu đây", false, true)
+	if got.Liveness != coord.RunBlocked {
+		t.Fatalf("after %d asks the goal is %q — it will burn the whole continuation ceiling\n"+
+			"learning what the second ask already showed", maxCriteriaAsks, got.Liveness)
+	}
+	if got.BlockedOn != coord.BlockedOnHuman {
+		t.Errorf("blocked on %q, want a person — only they can write the bar now", got.BlockedOn)
+	}
+	if !strings.Contains(got.Note, "unblock with the criteria") {
+		t.Errorf("the note does not say how to fix it: %q", got.Note)
+	}
 }
