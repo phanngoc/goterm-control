@@ -223,3 +223,35 @@ func (db *DB) FollowUpRejection(v Task, now time.Time) (*Task, error) {
 		Acceptance: goal.Acceptance,
 	})
 }
+
+// SetAcceptance writes the bar a task is judged against, once.
+//
+// Criteria were meant to be written by whoever scoped the work, and for the
+// first eighty-nine tasks nobody did — a field nobody is asked for is a field
+// nobody fills. Asking at the entry point helped; this is the other half, for
+// the goal that arrives without any: the agent about to do it writes what
+// "done" means before it starts.
+//
+// Write-once on purpose. An agent that can rewrite the bar it is judged against
+// while being judged is not being judged, and the rejection path exists exactly
+// so that falling short is answered with more work rather than a lower bar.
+func (db *DB) SetAcceptance(taskID, acceptance string) error {
+	acceptance = strings.TrimSpace(acceptance)
+	if acceptance == "" {
+		return fmt.Errorf("coord: acceptance criteria are required")
+	}
+	res, err := db.conn.Exec(`UPDATE tasks SET acceptance = ?, updated_at = ?
+		WHERE id = ? AND acceptance = ''`, acceptance, ts(time.Now()), taskID)
+	if err != nil {
+		return fmt.Errorf("set acceptance on %s: %w", taskID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		t, err := db.GetTask(taskID)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("coord: %s already has criteria, and they are not yours to rewrite "+
+			"while you are being judged against them:\n%s", taskID, t.Acceptance)
+	}
+	return nil
+}

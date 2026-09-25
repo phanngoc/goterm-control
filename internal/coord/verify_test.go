@@ -267,3 +267,62 @@ func TestAVerificationIsNotItselfVerified(t *testing.T) {
 		}
 	}
 }
+
+// Criteria were meant to be written by whoever scoped the work, and for the
+// first eighty-nine tasks nobody did. Asking at the entry point helped; this is
+// the other half — the agent about to do a goal writes what done means.
+func TestAGoalWithoutABarCanBeGivenOne(t *testing.T) {
+	db := verifyDB(t)
+	goal, err := db.CreateTask(NewTask{Title: "việc lớn", CreatedBy: "bomclaw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAcceptance(goal.ID, "1) chạy được; 2) có test"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.GetTask(goal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Acceptance == "" {
+		t.Fatal("the bar was not written")
+	}
+	// And it is now in the verification queue, which it was not before.
+	if _, err := db.conn.Exec(`UPDATE tasks SET state = ? WHERE id = ?`, TaskCompleted, goal.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.NeedsVerification(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("a goal that gained criteria is still not checked: %+v", pending)
+	}
+}
+
+// Write-once. An agent that can rewrite the bar it is judged against while
+// being judged is not being judged — and the rejection path exists precisely so
+// that falling short is answered with more work, not a lower bar.
+func TestTheBarCannotBeLoweredOnceItIsSet(t *testing.T) {
+	db := verifyDB(t)
+	goal, err := db.CreateTask(NewTask{
+		Title: "việc lớn", CreatedBy: "bomclaw", Acceptance: "1) chạy được; 2) có test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.SetAcceptance(goal.ID, "1) chạy được")
+	if err == nil {
+		t.Fatal("an agent lowered the bar it was about to be judged against")
+	}
+	if !strings.Contains(err.Error(), "already has criteria") {
+		t.Errorf("the refusal does not say why: %v", err)
+	}
+	after, _ := db.GetTask(goal.ID)
+	if !strings.Contains(after.Acceptance, "có test") {
+		t.Fatal("the original criteria were overwritten anyway")
+	}
+	if err := db.SetAcceptance(goal.ID, "   "); err == nil {
+		t.Error("empty criteria were accepted as a definition of done")
+	}
+}

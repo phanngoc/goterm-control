@@ -172,3 +172,30 @@ func TestAcceptanceReachesTheAgentRunningTheTask(t *testing.T) {
 		t.Errorf("a task with no bar was lectured about one:\n%s", plain)
 	}
 }
+
+// A goal that arrived without a bar: the first thing the agent doing it is
+// asked for is what done means — in the same run, before the work.
+func TestAGoalWithNoCriteriaIsAskedToWriteThem(t *testing.T) {
+	goal := &coord.Task{ID: "t_goal", Title: "việc lớn", ContextID: "ctx_1"}
+	p := taskPrompt(goal, time.Minute, false, nil, nil, nil, "/w", "/w", true)
+	if !strings.Contains(p, "task accept") {
+		t.Fatalf("a goal with no definition of done was not asked for one:\n%s", p)
+	}
+
+	// A child is not a goal: its bar is its parent's problem.
+	child := &coord.Task{ID: "t_child", ParentID: "t_goal", Title: "mảnh"}
+	if p := taskPrompt(child, time.Minute, false, nil, nil, nil, "/w", "/w", true); strings.Contains(p, "task accept") {
+		t.Error("a sub-task was asked to invent its own bar")
+	}
+	// Neither is a verification: it is measuring, not being measured.
+	v := &coord.Task{ID: "t_v", Kind: coord.KindVerify, Title: "Verify: x"}
+	if p := taskPrompt(v, time.Minute, false, nil, nil, nil, "/w", "/w", true); strings.Contains(p, "task accept") {
+		t.Error("a verification was asked to write criteria for itself")
+	}
+	// And one that already has a bar is shown it, not asked for another.
+	with := &coord.Task{ID: "t_g2", Title: "việc", Acceptance: "1) chạy được"}
+	p = taskPrompt(with, time.Minute, false, nil, nil, nil, "/w", "/w", true)
+	if strings.Contains(p, "task accept") || !strings.Contains(p, "chạy được") {
+		t.Error("a goal that already has criteria was asked for them again")
+	}
+}
