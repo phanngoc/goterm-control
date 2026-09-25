@@ -191,33 +191,32 @@ type WokenParent struct {
 // sweeps seeing the same parent wake it once. The parent is pinned to whoever
 // held it last (soft affinity, §5.4) so that agent's --resume finds the
 // conversation that created the children.
-func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
+func (db *DB) WakeParents(now time.Time) (woken []WokenParent, stalled []Task, err error) {
 	rows, err := db.conn.Query(`SELECT `+taskCols+` FROM tasks p
 		WHERE p.state = ? AND p.blocked_on = ?
 		  AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = p.id AND c.state NOT IN (?, ?, ?, ?))`,
 		TaskBlocked, BlockedOnChildren, TaskCompleted, TaskFailed, TaskCanceled, TaskRejected)
 	if err != nil {
-		return nil, fmt.Errorf("wake parents: %w", err)
+		return nil, nil, fmt.Errorf("wake parents: %w", err)
 	}
 	var parents []Task
 	for rows.Next() {
 		t, err := scanTask(rows)
 		if err != nil {
 			rows.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		parents = append(parents, *t)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var woken []WokenParent
 	for _, p := range parents {
 		children, err := db.Children(p.ID)
 		if err != nil {
-			return woken, err
+			return woken, stalled, err
 		}
 		checkpoint := strings.TrimSpace(p.Checkpoint)
 		if checkpoint != "" {
@@ -255,13 +254,18 @@ func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
 				TaskBlocked, BlockedOnHuman, checkpoint, fruitless, ts(now), ts(now),
 				p.ID, TaskBlocked, BlockedOnChildren)
 			if err != nil {
-				return woken, fmt.Errorf("stall parent %s: %w", p.ID, err)
+				return woken, stalled, fmt.Errorf("stall parent %s: %w", p.ID, err)
 			}
 			if n, _ := res.RowsAffected(); n == 0 {
 				continue
 			}
 			_ = db.appendEvent(p.ID, "system", TaskBlocked, TaskBlocked,
 				fmt.Sprintf("%d waves produced nothing; waiting on a person", fruitless))
+			// Returned, not just logged: a goal that has stopped and told
+			// nobody is a goal that waits until somebody happens to look at a
+			// board. The guarded UPDATE above is what makes this fire once.
+			p.Checkpoint = checkpoint
+			stalled = append(stalled, p)
 			continue
 		}
 		// Pin to the last holder so its --resume picks the conversation up;
@@ -275,7 +279,7 @@ func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
 			WHERE id = ? AND state = ? AND blocked_on = ?`,
 			TaskSubmitted, checkpoint, assigned, fruitless, ts(now), ts(now), p.ID, TaskBlocked, BlockedOnChildren)
 		if err != nil {
-			return woken, fmt.Errorf("wake parent %s: %w", p.ID, err)
+			return woken, stalled, fmt.Errorf("wake parent %s: %w", p.ID, err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			continue // another sweep got there first
@@ -284,7 +288,7 @@ func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
 			fmt.Sprintf("%s: %d child task(s) finished", ChildrenDoneEvent, len(children)))
 		woken = append(woken, WokenParent{TaskID: p.ID, AssignedTo: assigned})
 	}
-	return woken, nil
+	return woken, stalled, nil
 }
 
 // remainingLine says what is left in the tree, for the parent that has just

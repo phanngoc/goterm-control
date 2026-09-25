@@ -105,6 +105,7 @@ type Runner struct {
 
 	onEvent func(Event)
 	onWake  func(coord.WokenParent)
+	onStuck func(coord.Task)
 
 	// renewEvery is how often the lease is pushed out, as a field so a test can
 	// watch a lease being lost without waiting two minutes for it.
@@ -136,6 +137,20 @@ func New(db *coord.DB, llm chat.Client, rec *trace.Recorder, cfg Config) *Runner
 // SetWakeListener registers the listener told when a parent task, blocked on
 // its children, is put back in the queue by this runner's sweep. The gateway
 // uses it to ring the agent the parent is pinned to; this runner pokes itself.
+// SetStuckListener registers who to tell when a goal stops and waits for a
+// person: it spent its run budget, two waves produced nothing, or the agent
+// asked for a decision it cannot make.
+//
+// Nothing told anyone before. PendingReports only covers terminal states and
+// `blocked` is not one, so a goal that stopped at two in the morning waited
+// until somebody happened to open a board — which is the difference between
+// "runs overnight" and "runs until it needs you, silently".
+func (r *Runner) SetStuckListener(fn func(coord.Task)) {
+	if r != nil {
+		r.onStuck = fn
+	}
+}
+
 func (r *Runner) SetWakeListener(fn func(coord.WokenParent)) {
 	if r != nil {
 		r.onWake = fn
@@ -253,7 +268,7 @@ func (r *Runner) sweep() {
 // after each run this agent finishes, so a child completing here wakes its
 // parent now rather than at the next tick.
 func (r *Runner) wakeParents() {
-	woken, err := r.db.WakeParents(time.Now())
+	woken, stalled, err := r.db.WakeParents(time.Now())
 	if err != nil {
 		log.Printf("taskrunner: wake parents: %v", err)
 		return
@@ -267,6 +282,18 @@ func (r *Runner) wakeParents() {
 			go r.onWake(w)
 		}
 	}
+	for _, sgoal := range stalled {
+		log.Printf("taskrunner: %s stopped and is waiting on a person", sgoal.ID)
+		r.stuck(sgoal)
+	}
+}
+
+// stuck tells whoever is listening that a goal has stopped for a person.
+func (r *Runner) stuck(t coord.Task) {
+	if r == nil || r.onStuck == nil {
+		return
+	}
+	go r.onStuck(t)
 }
 
 // claimAndStart takes one task if a slot is free and runs it in the
@@ -545,6 +572,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	case finishErr != nil:
 		log.Printf("taskrunner: finish run %s: %v", run.ID, finishErr)
 	default:
+		// The other door a goal stops at: it spent its budget, or the agent
+		// asked for a decision only a person can make. One caller, so no race.
+		if final.State == coord.TaskBlocked && final.BlockedOn == coord.BlockedOnHuman {
+			r.stuck(*final)
+		}
 		msg := fmt.Sprintf("taskrunner: %s run %s → task %s", task.ID, outcome.Liveness, final.State)
 		if final.State == coord.TaskSubmitted {
 			msg += fmt.Sprintf(" (continuation %d/%d, pinned to %s)", final.Continuations, final.MaxContinuations, final.AssignedTo)

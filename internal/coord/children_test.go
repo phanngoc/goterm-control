@@ -105,7 +105,7 @@ func TestWakeParentsWhenEveryChildIsTerminal(t *testing.T) {
 		}
 		db.FinishRun(run.ID, RunOutcome{Liveness: RunCompleted, Result: "summary of " + task.Title})
 	}
-	woken, err := db.WakeParents(now)
+	woken, _, err := db.WakeParents(now)
 	if err != nil || len(woken) != 0 {
 		t.Fatalf("parent woke with a child still open: %v %v", woken, err)
 	}
@@ -117,7 +117,7 @@ func TestWakeParentsWhenEveryChildIsTerminal(t *testing.T) {
 	if err := db.CancelTask(c3.ID, "human"); err != nil {
 		t.Fatal(err)
 	}
-	woken, err = db.WakeParents(now)
+	woken, _, err = db.WakeParents(now)
 	if err != nil || len(woken) != 1 || woken[0].TaskID != parent.ID || woken[0].AssignedTo != "a1" {
 		t.Fatalf("woken: %+v err=%v", woken, err)
 	}
@@ -136,7 +136,7 @@ func TestWakeParentsWhenEveryChildIsTerminal(t *testing.T) {
 	}
 
 	// A second sweep (the other gateway) finds nothing to wake.
-	if woken, _ := db.WakeParents(now); len(woken) != 0 {
+	if woken, _, _ := db.WakeParents(now); len(woken) != 0 {
 		t.Error("parent woken twice")
 	}
 	// It is claimable again by the pinned agent, and not by another.
@@ -155,7 +155,7 @@ func TestWakeParentsBlockedWithoutChildren(t *testing.T) {
 	parent, prun := claimStart(t, db, "a1")
 	db.BlockTask(parent.ID, "a1", parent.Attempts, BlockedOnChildren, "")
 	db.FinishRun(prun.ID, RunOutcome{Liveness: RunBlocked, BlockedOn: BlockedOnChildren})
-	woken, err := db.WakeParents(time.Now())
+	woken, _, err := db.WakeParents(time.Now())
 	if err != nil || len(woken) != 1 {
 		t.Fatalf("a parent blocked on children it never created must not wait forever: %v %v", woken, err)
 	}
@@ -171,7 +171,7 @@ func TestWakeParentsLeavesHumanBlocksAlone(t *testing.T) {
 	parent, prun := claimStart(t, db, "a1")
 	db.BlockTask(parent.ID, "a1", parent.Attempts, BlockedOnHuman, "which budget?")
 	db.FinishRun(prun.ID, RunOutcome{Liveness: RunBlocked, BlockedOn: BlockedOnHuman})
-	if woken, _ := db.WakeParents(time.Now()); len(woken) != 0 {
+	if woken, _, _ := db.WakeParents(time.Now()); len(woken) != 0 {
 		t.Error("a task waiting on a person is not a parent waiting on children")
 	}
 }
@@ -211,7 +211,7 @@ func TestParentWakesWithAnArtifactIndexNotTheContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := db.WakeParents(time.Now()); err != nil {
+	if _, _, err := db.WakeParents(time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	woken, err := db.GetTask(parent.ID)
@@ -354,7 +354,7 @@ func TestTwoWavesThatProduceNothingStopAndAsk(t *testing.T) {
 		if _, err := db.conn.Exec(`UPDATE tasks SET state = ? WHERE id = ?`, childState, child.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.WakeParents(time.Now()); err != nil {
+		if _, _, err := db.WakeParents(time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		after, err := db.GetTask(goal.ID)

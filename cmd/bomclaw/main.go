@@ -474,6 +474,25 @@ func runGateway(args []string) {
 		runner.SetWakeListener(func(w coord.WokenParent) {
 			gateway.NotifyAgents(coordDB, w.AssignedTo, cfg.Agent.ID, "about parent "+w.TaskID)
 		})
+		// A goal that stops for a person has to say so. Nothing did: the
+		// reporter only delivers terminal states, and `blocked` is not one, so
+		// work that stopped overnight waited until somebody opened a board.
+		// The whole point of running unattended is that the one moment it
+		// needs you, it reaches you.
+		runner.SetStuckListener(func(t coord.Task) {
+			if tgBot != nil {
+				_ = tgBot.Notify(stuckMessage(&t))
+			}
+			// And in the room it came from, for whoever reads there instead.
+			if root, _, err := coordDB.TaskThread(t.ID); err == nil && root != "" {
+				if ch, err := coordDB.MessageChannel(root); err == nil && ch != "" {
+					_, _, _ = coordDB.PostMessage(coord.NewChannelMessage{
+						ChannelID: ch, ThreadRoot: root, AuthorID: cfg.Agent.ID,
+						Body: stuckMessage(&t),
+					})
+				}
+			}
+		})
 		runner.Start(ctx)
 	} else if coordDB != nil {
 		log.Printf("taskrunner: disabled (tasks.auto_claim=false) — queued work waits for `bomclaw task claim`")
@@ -1652,4 +1671,28 @@ func ownerChat(cfg *config.Config) int64 {
 		return 0
 	}
 	return cfg.Security.AllowedUserIDs[0]
+}
+
+// stuckMessage is what the owner reads when a goal stops for them. It has to
+// carry the decision, not just the fact: the reason it stopped, what it had
+// done by then, and the one command that starts it again — typed on a phone,
+// at whatever hour it stopped.
+func stuckMessage(t *coord.Task) string {
+	why := "it is waiting on a decision"
+	if note := strings.TrimSpace(lastLine(t.Checkpoint)); note != "" {
+		why = note
+	}
+	return fmt.Sprintf("⏸ *%s* stopped and needs you\n\n%s\n\nStart it again:\n"+
+		"`bomclaw task unblock --id %s --note \"<your answer>\"`\n"+
+		"Or look first: `bomclaw task tree --id %s`", t.Title, why, t.ID, t.ID)
+}
+
+// lastLine is the most recent thing written into a checkpoint — the reason the
+// task stopped, rather than the whole history of how it got there.
+func lastLine(checkpoint string) string {
+	parts := strings.Split(strings.TrimSpace(checkpoint), "\n\n")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }

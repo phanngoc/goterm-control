@@ -722,3 +722,55 @@ func TestATaskWithAcceptanceDoesNotFinishOnProseAlone(t *testing.T) {
 		t.Fatalf("a short task without criteria stopped completing on its reply: %q", got.Liveness)
 	}
 }
+
+// A goal that stops for a person has to say so. Nothing did: the reporter only
+// delivers terminal states and `blocked` is not one, so work that stopped at
+// two in the morning waited until somebody opened a board. That is the
+// difference between running overnight and stopping silently overnight.
+func TestAGoalThatStopsForAPersonSaysSo(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "việc lớn"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stuck := make(chan coord.Task, 4)
+	llm := &stubLLM{reply: "", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		// The agent asks for a decision it cannot make, the way the prompt
+		// tells it to.
+		cur, err := db.GetTask(taskIDOf(t, db))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if err := db.BlockTask(cur.ID, "a2", cur.Attempts, coord.BlockedOnHuman,
+			"cần biết dùng domain nào"); err != nil {
+			t.Error(err)
+		}
+	}}
+	r := newRunner(db, llm)
+	r.SetStuckListener(func(task coord.Task) { stuck <- task })
+	r.claimAndRun(context.Background())
+
+	select {
+	case got := <-stuck:
+		if got.BlockedOn != coord.BlockedOnHuman {
+			t.Fatalf("told about a task blocked on %q", got.BlockedOn)
+		}
+		if !strings.Contains(got.Checkpoint, "domain nào") {
+			t.Errorf("the message does not carry what it needs to know: %q", got.Checkpoint)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a goal stopped and waiting on a person told nobody — it waits until somebody\n" +
+			"happens to open a board, which overnight means until morning")
+	}
+}
+
+// taskIDOf returns the id of the only task in the database.
+func taskIDOf(t *testing.T, db *coord.DB) string {
+	t.Helper()
+	list, err := db.ListTasks(coord.TaskFilter{Limit: 2})
+	if err != nil || len(list) == 0 {
+		t.Fatalf("tasks: %+v %v", list, err)
+	}
+	return list[0].ID
+}
