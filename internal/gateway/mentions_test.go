@@ -988,3 +988,27 @@ func TestAChannelTurnIsTaggedWithItsRoomAndLine(t *testing.T) {
 		}
 	}
 }
+
+// The natural entry point is a person asking an agent in a room. If that turn
+// opens a task with no criteria, none of the goal machinery ever fires: the bar
+// is what the agent re-reads between waves and what a peer checks at the end.
+func TestAChannelTurnAsksForCriteriaWhenItOpensWork(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{reply: "ừ"})
+	w := NewMentionWatcher(deps)
+	m, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser,
+		AuthorID: coord.OwnerUserID, Body: "@bomclaw2 dựng cho tôi cái viewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := w.prompt(*m, &coord.ThreadSession{}, m.ID)
+
+	if !strings.Contains(p, "--acceptance") {
+		t.Fatal("a request in a room opens a task with no bar on it, so it finishes when\n" +
+			"somebody says it is finished and nothing else in the goal loop ever runs")
+	}
+	if !strings.Contains(p, "--thread") {
+		t.Error("the task would be detached from the conversation that asked for it")
+	}
+}
