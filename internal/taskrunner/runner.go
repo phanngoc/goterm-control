@@ -33,6 +33,12 @@ import (
 
 // verificationsPerSweep bounds how many goals one tick may open readings for.
 // A gateway coming back after a night off should not spawn forty at once.
+// maxCriteriaAsks is how many times a goal is called back for a definition of
+// done before it stops for a person. Two: one repeat is a fair second chance,
+// and every further one is a model turn spent learning what the second already
+// showed.
+const maxCriteriaAsks = 2
+
 const verificationsPerSweep = 5
 
 // renewEvery must be comfortably shorter than coord.DefaultLease so a task
@@ -639,6 +645,17 @@ func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, to
 		// work instead of doing it. Call it back rather than accept the plan
 		// as the deliverable.
 		return coord.RunOutcome{Liveness: coord.RunPlanOnly, Result: reply, Note: "TodoWrite left items pending"}
+	case goal && before.Acceptance == "" && before.Continuations >= maxCriteriaAsks:
+		// Asked and asked and not answered. Every callback is a model turn, and
+		// an agent that will not write a definition of done after this many is
+		// not going to — the continuation ceiling would spend twenty of them
+		// finding that out. Stopping for a person is the honest end: the owner
+		// can write the criteria themselves in the unblock note, which is
+		// exactly what the note is for.
+		return coord.RunOutcome{Liveness: coord.RunBlocked, BlockedOn: coord.BlockedOnHuman,
+			Result: reply,
+			Note: fmt.Sprintf("asked %d times for a definition of done and got none; "+
+				"unblock with the criteria in the note and it will carry on", before.Continuations)}
 	case goal && before.Acceptance == "":
 		// It was asked, in this same prompt, to write what done means before
 		// starting — and it did neither that nor any of the commands that

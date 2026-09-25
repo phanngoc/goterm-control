@@ -826,3 +826,27 @@ func TestOnlyARootTaskInAProjectIsAGoal(t *testing.T) {
 		t.Error("a child or a verification was treated as a goal")
 	}
 }
+
+// Every callback is a model turn. An agent that will not write a definition of
+// done after two is not going to, and the continuation ceiling would spend
+// twenty more finding that out — the free model in the first live run ignored
+// the ask three times running.
+func TestAGoalStopsAskingForCriteriaAndStopsForAPerson(t *testing.T) {
+	first := &coord.Task{ID: "t_goal", Title: "radar"}
+	if got := classify(first, first, nil, nil, "bắt đầu đây", false, true); got.Liveness != coord.RunPlanOnly {
+		t.Fatalf("the first miss should be a second chance, got %q", got.Liveness)
+	}
+
+	asked := &coord.Task{ID: "t_goal", Title: "radar", Continuations: maxCriteriaAsks}
+	got := classify(asked, asked, nil, nil, "vẫn bắt đầu đây", false, true)
+	if got.Liveness != coord.RunBlocked {
+		t.Fatalf("after %d asks the goal is %q — it will burn the whole continuation ceiling\n"+
+			"learning what the second ask already showed", maxCriteriaAsks, got.Liveness)
+	}
+	if got.BlockedOn != coord.BlockedOnHuman {
+		t.Errorf("blocked on %q, want a person — only they can write the bar now", got.BlockedOn)
+	}
+	if !strings.Contains(got.Note, "unblock with the criteria") {
+		t.Errorf("the note does not say how to fix it: %q", got.Note)
+	}
+}
