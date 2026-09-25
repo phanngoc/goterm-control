@@ -212,7 +212,7 @@ func runTask(args []string) {
 		fmt.Printf("%s\nattempts: %d (pass this to `task done --attempts`)\n\n%s\n\n%s\n",
 			task.ID, task.Attempts, task.Title, task.Body)
 
-	case "done", "fail":
+	case "done", "fail", "reject":
 		fs := flag.NewFlagSet("task "+sub, flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		id := fs.String("id", "", "Task id (required)")
@@ -224,8 +224,15 @@ func runTask(args []string) {
 		defer db.Close()
 
 		state := coord.TaskCompleted
-		if sub == "fail" {
+		switch sub {
+		case "fail":
+			// The work broke.
 			state = coord.TaskFailed
+		case "reject":
+			// The work ran and the answer is no. A different fact from `fail`,
+			// and the state for it has existed unused since the table was
+			// written — this is where it belongs.
+			state = coord.TaskRejected
 		}
 		// Without an explicit fencing token, fall back to whatever the row
 		// says now: still correct for the common single-claim case.

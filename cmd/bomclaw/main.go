@@ -463,6 +463,7 @@ func runGateway(args []string) {
 			// P3: how many tasks this agent runs side by side. Chat keeps its
 			// own lane; this only stops a long task from blocking a short one.
 			Concurrency: cfg.Tasks.Concurrency,
+			VerifyGoals: cfg.Tasks.VerifyGoals,
 			// The same MEMORY.md the chat lane uses. Until this, a task run
 			// neither read what the agent knew nor wrote anything down — and
 			// tasks are where most of the real work happens.

@@ -141,6 +141,14 @@ type TasksConfig struct {
 	// here share one quota, so fanning out divides capacity rather than
 	// multiplying it.
 	RunsPerGoal int `yaml:"runs_per_goal"`
+
+	// VerifyGoals asks a peer that did not do the work to read a finished goal
+	// against its criteria, and opens follow-up work when it falls short.
+	// Default false: it costs one model turn per goal.
+	//
+	// It only ever applies to goals that HAVE criteria, so on a machine where
+	// nobody writes any it costs nothing and does nothing.
+	VerifyGoals bool `yaml:"verify_goals"`
 }
 
 // SchedulesConfig tunes the scheduler (docs/design/scheduling-and-long-tasks.md

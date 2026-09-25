@@ -31,6 +31,10 @@ import (
 	"github.com/ngocp/goterm-control/internal/trace"
 )
 
+// verificationsPerSweep bounds how many goals one tick may open readings for.
+// A gateway coming back after a night off should not spawn forty at once.
+const verificationsPerSweep = 5
+
 // renewEvery must be comfortably shorter than coord.DefaultLease so a task
 // that is genuinely still running is never handed to another agent.
 const renewEvery = 2 * time.Minute
@@ -48,6 +52,12 @@ type Config struct {
 	// keeps its own lane regardless; this only widens the task lane, so a long
 	// task no longer holds up a short one queued behind it (design P3).
 	Concurrency int
+
+	// VerifyGoals turns on the reading of a finished goal by a peer that did
+	// not do the work. Off by default: it costs one model turn per goal, the
+	// same reason the skill-review turn is off. Turning it on is choosing that
+	// "done" should mean checked rather than declared.
+	VerifyGoals bool
 
 	// Memory is the agent's own MEMORY.md and daily notes. Nil-safe.
 	//
@@ -235,6 +245,7 @@ func (r *Runner) sweep() {
 		log.Printf("taskrunner: closed %d orphan run(s) as lost: %v", len(ids), ids)
 	}
 	r.wakeParents()
+	r.sweepVerifications()
 }
 
 // wakeParents returns parents whose children have all finished to the queue
@@ -886,4 +897,61 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// sweepVerifications opens the reading of a finished goal, and turns a negative
+// reading into the work it asks for.
+//
+// Off unless configured: it costs one model turn per goal, which is the same
+// reason the skill-review turn is off by default. Turning it on is choosing
+// that "done" should mean checked rather than declared.
+//
+// Every gateway runs this. Opening a verification is guarded by NOT EXISTS plus
+// a parent link, and the follow-up by a compare-and-set, so three sweeps
+// produce one of each.
+func (r *Runner) sweepVerifications() {
+	if !r.cfg.VerifyGoals || r.db == nil {
+		return
+	}
+	goals, err := r.db.NeedsVerification(verificationsPerSweep)
+	if err != nil {
+		log.Printf("taskrunner: goals awaiting verification: %v", err)
+	}
+	if len(goals) > 0 {
+		peers, err := r.db.ListAgents()
+		if err != nil {
+			log.Printf("taskrunner: peers for verification: %v", err)
+			peers = nil
+		}
+		for _, g := range goals {
+			v, err := r.db.OpenVerification(g, peers)
+			if err != nil {
+				log.Printf("taskrunner: verify %s: %v", g.ID, err)
+				continue
+			}
+			if v == nil {
+				// Nobody else to ask. Said once per goal rather than every
+				// sweep would need a marker; this is rare enough to repeat.
+				log.Printf("taskrunner: %s finished with criteria but there is no peer to check it", g.ID)
+				continue
+			}
+			log.Printf("taskrunner: %s → %s reads it against its criteria", g.ID, v.AssignedTo)
+		}
+	}
+
+	rejected, err := r.db.RejectedVerifications(verificationsPerSweep)
+	if err != nil {
+		log.Printf("taskrunner: rejected verifications: %v", err)
+		return
+	}
+	for _, v := range rejected {
+		f, err := r.db.FollowUpRejection(v, time.Now())
+		if err != nil {
+			log.Printf("taskrunner: follow up %s: %v", v.ID, err)
+			continue
+		}
+		if f != nil {
+			log.Printf("taskrunner: %s rejected → %s for %s", v.ID, f.ID, f.AssignedTo)
+		}
+	}
 }
