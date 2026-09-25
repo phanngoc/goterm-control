@@ -46,6 +46,11 @@ type DB struct {
 	// runsPerGoal caps how many runs one tree may cost; 0 means the default,
 	// negative means no ceiling.
 	runsPerGoal int
+	// goalExtensions is how many further budgets a producing goal may grant
+	// itself; goalExtensionsSet distinguishes "configured to zero" (never
+	// extend) from "not configured" (the default).
+	goalExtensions    int
+	goalExtensionsSet bool
 	// maxTasksPerContext caps the size of one task tree; 0 means the default.
 	maxTasksPerContext int
 }

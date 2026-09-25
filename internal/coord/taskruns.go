@@ -199,8 +199,9 @@ func (db *DB) FinishRun(runID string, o RunOutcome) (*Task, error) {
 		if spent, runs, err := db.GoalBudgetSpent(t.ContextID); err == nil && spent {
 			t.State, t.BlockedOn = TaskBlocked, BlockedOnHuman
 			t.Checkpoint = appendNote(t.Checkpoint, fmt.Sprintf(
-				"Stopped on budget: this goal has cost %d runs (max %d). "+
-					"Unblock it to keep going, or cancel the tree.", runs, db.RunsPerGoal()))
+				"Stopped on budget: this goal has cost %d runs (max %d) and its last round "+
+					"produced nothing, so it did not extend itself again. Unblock it to keep "+
+					"going, or cancel the tree.", runs, goalLimitOf(db, t.ContextID)))
 			t.LeaseUntil = now
 			event(TaskWorking, TaskBlocked, fmt.Sprintf("goal budget spent after %d runs", runs))
 			return nil
@@ -419,4 +420,13 @@ func appendNote(checkpoint, note string) string {
 		return note
 	}
 	return checkpoint + "\n\n" + note
+}
+
+// goalLimitOf is the ceiling to quote in a message: the extended one when the
+// goal earned it, so the number a person reads is the number that stopped it.
+func goalLimitOf(db *DB, contextID string) int {
+	if n, err := db.GoalLimit(contextID); err == nil && n > 0 {
+		return n
+	}
+	return db.RunsPerGoal()
 }

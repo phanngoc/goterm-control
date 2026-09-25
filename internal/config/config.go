@@ -149,6 +149,16 @@ type TasksConfig struct {
 	// It only ever applies to goals that HAVE criteria, so on a machine where
 	// nobody writes any it costs nothing and does nothing.
 	VerifyGoals bool `yaml:"verify_goals"`
+
+	// GoalExtensions is how many further budgets a goal may grant itself while
+	// its last round still produced something (default 3; set it to -1 to turn
+	// extending off and make the base budget the whole budget).
+	//
+	// The budget exists because three agents share one quota. What is worth
+	// stopping is a goal going in circles, not a goal that is working and
+	// happens to be long — stopping a healthy tree overnight costs a night for
+	// nothing, and running while nobody is watching is the point.
+	GoalExtensions int `yaml:"goal_extensions"`
 }
 
 // SchedulesConfig tunes the scheduler (docs/design/scheduling-and-long-tasks.md
@@ -387,6 +397,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tasks.RunsPerGoal == 0 {
 		cfg.Tasks.RunsPerGoal = 40
+	}
+	if cfg.Tasks.GoalExtensions == 0 {
+		cfg.Tasks.GoalExtensions = 3
 	}
 	if cfg.Tasks.PollIntervalSeconds == 0 {
 		cfg.Tasks.PollIntervalSeconds = 60
