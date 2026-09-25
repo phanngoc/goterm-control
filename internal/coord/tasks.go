@@ -109,6 +109,9 @@ type Task struct {
 	// v5: set once this task's outcome has been delivered to whoever asked for
 	// it. Empty on a terminal task means a report is still owed.
 	ReportedAt string `json:"reported_at,omitempty"`
+	// FruitlessWaves is how many consecutive fan-outs finished without a
+	// single child completing. Any wave that produces one resets it.
+	FruitlessWaves int `json:"fruitless_waves,omitempty"`
 
 	// v6: the bar this task is judged against, written by whoever scoped it.
 	// Paperclip's rule — a piece of work a reviewer could call "half done" was
@@ -157,7 +160,8 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	priority, title, body, result, trace_id, lease_until, attempts,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id`
+	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id,
+	fruitless_waves`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -422,6 +426,11 @@ type TaskFilter struct {
 	// opposite: work that belongs to no project, which would otherwise have
 	// nowhere to be seen once the board defaults to a project.
 	ChannelID string
+	// ContextID scopes the listing to one task tree — one goal and everything
+	// split out of it. Without it a tree could only be read by walking
+	// parent_id by hand, which is why nobody could answer "how far along is
+	// this goal".
+	ContextID string
 	Limit     int
 }
 
@@ -452,6 +461,10 @@ func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
 	default:
 		where = append(where, "channel_id = ?")
 		args = append(args, f.ChannelID)
+	}
+	if f.ContextID != "" {
+		where = append(where, "context_id = ?")
+		args = append(args, f.ContextID)
 	}
 	args = append(args, limit)
 
@@ -798,7 +811,7 @@ func scanTask(s scanner) (*Task, error) {
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
 		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance,
-		&t.ChannelID); err != nil {
+		&t.ChannelID, &t.FruitlessWaves); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)
@@ -888,4 +901,25 @@ func (db *DB) MarkReported(taskID string, now time.Time) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// UnmarkReported gives a claimed delivery back, for a report that was won and
+// then could not be sent.
+//
+// Winning before sending is what stops three gateways delivering the same
+// result three times, so the claim has to come first. The cost of that order is
+// that a failed send leaves a task marked delivered and never delivered — the
+// marker makes the silence permanent. This is the compensation: put it back and
+// let the next tick, on this gateway or another, try again.
+//
+// Guarded on the timestamp we wrote, so a release can never clear a claim that
+// somebody else has since made.
+func (db *DB) UnmarkReported(taskID string, claimedAt time.Time) error {
+	_, err := db.conn.Exec(
+		`UPDATE tasks SET reported_at = '' WHERE id = ? AND reported_at = ?`,
+		taskID, ts(claimedAt))
+	if err != nil {
+		return fmt.Errorf("release report claim %s: %w", taskID, err)
+	}
+	return nil
 }

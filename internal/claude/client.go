@@ -202,6 +202,10 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// then let the chosen account override that: an API-key account puts one
 	// back, an OAuth account points CLAUDE_CONFIG_DIR at its own login.
 	cmd.Env = credentials.ApplyEnv(filteredEnv(envVarsToRemove), acct)
+	// Whatever this particular run needs the CLI to know — the task it is
+	// inside, and the project that task belongs to. Appended last so a
+	// session's own value wins over the gateway's.
+	cmd.Env = append(cmd.Env, sess.GetEnv()...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

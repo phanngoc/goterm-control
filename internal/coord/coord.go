@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 11
+const schemaVersion = 12
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -43,6 +43,9 @@ type DB struct {
 	// runsDir is the root shared run folders are created under; empty means
 	// DefaultRunsDir. Same rules as artifactsDir.
 	runsDir string
+	// runsPerGoal caps how many runs one tree may cost; 0 means the default,
+	// negative means no ceiling.
+	runsPerGoal int
 	// maxTasksPerContext caps the size of one task tree; 0 means the default.
 	maxTasksPerContext int
 }
@@ -571,6 +574,21 @@ var v6Columns = []struct{ name, decl string }{
 // different chat per agent — and the dashboard had no way to name which. Read
 // from the bot itself once it logs in rather than from config: config holds a
 // token, and the username is what a person clicks.
+// v12TaskColumns: how many waves in a row produced nothing.
+//
+// A goal that fans out, gathers, and fans out again is the loop this system
+// wants. A goal that does that forever is the loop it fears, and the run budget
+// only catches it once the quota is nearly gone. This is the cheaper signal: a
+// wave where not one child reached `completed` produced nothing, and two of
+// those in a row is a goal going in circles rather than closing.
+//
+// A column rather than a derived query because the comparison is between
+// consecutive wakes, and the tree at the second wake cannot tell you what the
+// first one looked like.
+var v12TaskColumns = []struct{ name, decl string }{
+	{"fruitless_waves", "INTEGER NOT NULL DEFAULT 0"},
+}
+
 var v10AgentColumns = []struct{ name, decl string }{
 	{"telegram_bot", "TEXT NOT NULL DEFAULT ''"},
 }
@@ -671,6 +689,11 @@ func (db *DB) migrate() error {
 	}
 	for _, c := range v10AgentColumns {
 		if err := db.ensureColumn("agents", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v12TaskColumns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
 			return err
 		}
 	}

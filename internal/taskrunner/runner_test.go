@@ -580,3 +580,197 @@ func TestMissingSessionRetriesFreshWithCheckpointAndAccount(t *testing.T) {
 		t.Fatalf("bad recovery prompt: %s", prompts[2])
 	}
 }
+
+// A piece handed to a peer stays in the project the work already belongs to.
+//
+// `bomclaw task sub` inherits the project from the parent row, but
+// `bomclaw task new --to <peer>` opens a ROOT task with nothing to inherit
+// from — so the CLI has to be told, and the only honest place to tell it is the
+// run it is spawned inside. Five real pieces of work left a project this way
+// before anybody noticed.
+func TestARunTellsItsCLIWhichProjectTheWorkIsIn(t *testing.T) {
+	db := testDB(t)
+	p, err := db.CreateProject("bất động sản", "", "owner", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateTask(coord.NewTask{
+		CreatedBy: "a1", Title: "viewer 3D", ChannelID: p.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var env []string
+	llm := &stubLLM{reply: "ok", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		env = sess.GetEnv()
+	}}
+	newRunner(db, llm).claimAndRun(context.Background())
+
+	var channel string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BOMCLAW_TASK_CHANNEL=") {
+			channel = strings.TrimPrefix(kv, "BOMCLAW_TASK_CHANNEL=")
+		}
+	}
+	if channel != p.ID {
+		t.Fatalf("the CLI was spawned with BOMCLAW_TASK_CHANNEL=%q, want %q.\n"+
+			"Work this agent hands to a peer will silently leave the project.", channel, p.ID)
+	}
+}
+
+// And a task belonging to no project says nothing, rather than naming one.
+func TestARunWithNoProjectNamesNone(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "việc lẻ"}); err != nil {
+		t.Fatal(err)
+	}
+	var env []string
+	llm := &stubLLM{reply: "ok", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		env = sess.GetEnv()
+	}}
+	newRunner(db, llm).claimAndRun(context.Background())
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BOMCLAW_TASK_CHANNEL=") {
+			t.Fatalf("a task in no project handed its CLI %q", kv)
+		}
+	}
+	// The task id is always there: it is what `bomclaw artifact put` and
+	// `task progress` need, and it does not depend on a project.
+	found := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BOMCLAW_TASK_ID=") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the run did not tell its CLI which task it is: %v", env)
+	}
+}
+
+// Losing the lease has to stop the work, not just stop renewing it.
+//
+// Until this, the renewal goroutine logged and returned while the run carried
+// on: a peer claimed the task and started running it, and the first agent kept
+// calling tools against the same files. The database rejected the loser's
+// RESULT — FinishRun is fenced on claimed_by and attempts — but nothing
+// rejected its WRITES, and since the shared run folder shipped, both agents
+// stand in the same directory. It had happened 8 times in 170 real runs.
+func TestLosingTheLeaseStopsTheRun(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "long job"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stopped := make(chan error, 1)
+	llm := &stubLLM{reply: "ok", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		// Stand in for a peer taking the task over: the lease no longer
+		// belongs to this agent, so the next renewal fails.
+		if _, err := db.Conn().Exec(`UPDATE tasks SET claimed_by = 'a9'`); err != nil {
+			t.Error(err)
+		}
+		select {
+		case <-ctx.Done():
+			stopped <- context.Cause(ctx)
+		case <-time.After(3 * time.Second):
+			stopped <- nil // never cancelled
+		}
+	}}
+
+	r := newRunner(db, llm)
+	r.renewEvery = 5 * time.Millisecond
+	r.claimAndRun(context.Background())
+
+	select {
+	case cause := <-stopped:
+		if cause == nil {
+			t.Fatal("the run kept going after the lease was lost — it is writing into the same\n" +
+				"folder as the agent that now owns the task")
+		}
+		if !errors.Is(cause, ErrLeaseLost) {
+			t.Fatalf("run stopped for the wrong reason: %v", cause)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run never returned")
+	}
+}
+
+// Everywhere else this system refuses to read completion out of prose:
+// classify believes what the agent TYPED. The default branch was the one hole
+// left — any non-empty reply became `completed`. For a short task that is
+// convenient; for a goal with criteria it means "done because it said
+// something".
+func TestATaskWithAcceptanceDoesNotFinishOnProseAlone(t *testing.T) {
+	withBar := &coord.Task{ID: "t_1", Acceptance: "phải có test"}
+	got := classify(withBar, withBar, nil, nil, "tôi nghĩ là xong rồi", false)
+	if got.Liveness == coord.RunCompleted {
+		t.Fatal("a goal with criteria completed itself by talking — nobody checked anything")
+	}
+	if got.Liveness != coord.RunAdvanced {
+		t.Fatalf("liveness = %q, want advanced (call it back with the criteria in front of it)", got.Liveness)
+	}
+
+	// Typing the command still finishes it, as it always did.
+	done := &coord.Task{ID: "t_1", Acceptance: "phải có test", State: coord.TaskCompleted, Result: "xong"}
+	if got := classify(withBar, done, nil, nil, "", false); got.Liveness != coord.RunCompleted {
+		t.Fatalf("`task done` no longer finishes a task with criteria: %q", got.Liveness)
+	}
+
+	// And a task with no criteria keeps the old, convenient behaviour.
+	plain := &coord.Task{ID: "t_2"}
+	if got := classify(plain, plain, nil, nil, "đây là câu trả lời", false); got.Liveness != coord.RunCompleted {
+		t.Fatalf("a short task without criteria stopped completing on its reply: %q", got.Liveness)
+	}
+}
+
+// A goal that stops for a person has to say so. Nothing did: the reporter only
+// delivers terminal states and `blocked` is not one, so work that stopped at
+// two in the morning waited until somebody opened a board. That is the
+// difference between running overnight and stopping silently overnight.
+func TestAGoalThatStopsForAPersonSaysSo(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "việc lớn"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stuck := make(chan coord.Task, 4)
+	llm := &stubLLM{reply: "", hook: func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		// The agent asks for a decision it cannot make, the way the prompt
+		// tells it to.
+		cur, err := db.GetTask(taskIDOf(t, db))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if err := db.BlockTask(cur.ID, "a2", cur.Attempts, coord.BlockedOnHuman,
+			"cần biết dùng domain nào"); err != nil {
+			t.Error(err)
+		}
+	}}
+	r := newRunner(db, llm)
+	r.SetStuckListener(func(task coord.Task) { stuck <- task })
+	r.claimAndRun(context.Background())
+
+	select {
+	case got := <-stuck:
+		if got.BlockedOn != coord.BlockedOnHuman {
+			t.Fatalf("told about a task blocked on %q", got.BlockedOn)
+		}
+		if !strings.Contains(got.Checkpoint, "domain nào") {
+			t.Errorf("the message does not carry what it needs to know: %q", got.Checkpoint)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a goal stopped and waiting on a person told nobody — it waits until somebody\n" +
+			"happens to open a board, which overnight means until morning")
+	}
+}
+
+// taskIDOf returns the id of the only task in the database.
+func taskIDOf(t *testing.T, db *coord.DB) string {
+	t.Helper()
+	list, err := db.ListTasks(coord.TaskFilter{Limit: 2})
+	if err != nil || len(list) == 0 {
+		t.Fatalf("tasks: %+v %v", list, err)
+	}
+	return list[0].ID
+}

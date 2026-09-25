@@ -58,8 +58,8 @@ type Reporter struct {
 	db  *coord.DB
 	cfg Config
 
-	notify func(text string) // deliver a line to the owner; nil = log only
-	now    func() time.Time  // test seam
+	notify func(text string) error // deliver a line to the owner; nil = log only
+	now    func() time.Time        // test seam
 	poke   chan struct{}
 	work   sync.WaitGroup
 }
@@ -76,7 +76,7 @@ func New(db *coord.DB, cfg Config) *Reporter {
 }
 
 // SetNotify installs the delivery path — in the gateway, the owner's Telegram.
-func (r *Reporter) SetNotify(fn func(text string)) {
+func (r *Reporter) SetNotify(fn func(text string) error) {
 	if r == nil {
 		return
 	}
@@ -160,7 +160,8 @@ func (r *Reporter) Tick() {
 
 		// Win the delivery before sending, never after. The other order would
 		// send twice from two gateways and mark once.
-		won, err := r.db.MarkReported(task.ID, r.now())
+		claimedAt := r.now()
+		won, err := r.db.MarkReported(task.ID, claimedAt)
 		if err != nil {
 			log.Printf("reporter: %v", err)
 			continue
@@ -169,7 +170,17 @@ func (r *Reporter) Tick() {
 			continue // a peer got there first
 		}
 
-		r.notify(Format(&task))
+		// And give the claim back if the send fails. Claiming first is what
+		// prevents three gateways reporting the same result three times, but
+		// on its own it turns one failed send into permanent silence: the task
+		// is marked delivered and nothing will ever look at it again.
+		if err := r.notify(Format(&task)); err != nil {
+			log.Printf("reporter: deliver %s: %v — releasing it for the next tick", task.ID, err)
+			if err := r.db.UnmarkReported(task.ID, claimedAt); err != nil {
+				log.Printf("reporter: %v", err)
+			}
+			continue
+		}
 		r.reportToThread(&task)
 		log.Printf("reporter: delivered %s (%s) for task %s", task.State, task.ClaimedBy, task.ID)
 	}

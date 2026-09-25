@@ -91,19 +91,22 @@ func TestAProjectsFolderWinsOverTheRunFolder(t *testing.T) {
 	}
 }
 
-// A child belongs to the same project as its parent (children.go), so a whole
-// delegated tree meets in the project folder and the run folder never enters
-// into it. Pinned because it is the interaction between two mechanisms that
-// were written apart: nothing in runspace.go mentions children, and nothing in
-// children.go mentions workspaces.
-func TestADelegatedTreeInAProjectStaysInTheProjectFolder(t *testing.T) {
+// A goal assembles in its project; its children experiment somewhere else.
+//
+// This replaces TestADelegatedTreeInAProjectStaysInTheProjectFolder, which
+// pinned the first version of the rule: the whole tree ran in the project
+// folder. That was right while decomposition was rare and stops being right the
+// moment a goal fans out, because MaxOpenChildren allows eight agents at once
+// and a project folder is a plain directory — two of them overwriting each
+// other there is a silent loss with nothing to undo.
+func TestAGoalAssemblesInItsProjectWhileChildrenWorkInScratch(t *testing.T) {
 	db := runsDB(t)
 	projects := t.TempDir()
 	p, err := db.CreateProject("trading", "bot giao dịch", "owner", projects, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := db.CreateTask(NewTask{
+	goal, err := db.CreateTask(NewTask{
 		Title: "backtest chiến lược", Body: "toàn bộ", CreatedBy: "bomclaw2", ChannelID: p.ID,
 	})
 	if err != nil {
@@ -112,14 +115,14 @@ func TestADelegatedTreeInAProjectStaysInTheProjectFolder(t *testing.T) {
 	if _, err := db.ClaimTask("bomclaw2"); err != nil {
 		t.Fatal(err)
 	}
-	one, err := db.CreateSubTask(parent.ID, "bomclaw2", NewTask{
+	one, err := db.CreateSubTask(goal.ID, "bomclaw2", NewTask{
 		Title: "tải dữ liệu", Body: "Tải nến 1h của BTC/ETH hai năm, lưu parquet, kiểm tra nến thiếu.",
 		AssignedTo: "bomclaw",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	three, err := db.CreateSubTask(parent.ID, "bomclaw2", NewTask{
+	three, err := db.CreateSubTask(goal.ID, "bomclaw2", NewTask{
 		Title: "vẽ báo cáo", Body: "Vẽ equity curve và drawdown, xuất PNG kèm bảng số liệu tóm tắt.",
 		AssignedTo: "bomclaw3",
 	})
@@ -127,31 +130,60 @@ func TestADelegatedTreeInAProjectStaysInTheProjectFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, task := range []*Task{parent, one, three} {
-		dir, shared := db.TaskWorkspace(task)
-		if dir != p.Workspace {
-			t.Errorf("%s (%s) works in %q, want the project folder %q",
-				task.Title, orDefault(task.AssignedTo, task.CreatedBy), dir, p.Workspace)
-		}
-		if shared {
-			t.Errorf("%s was handed context scratch although its tree has a project", task.Title)
-		}
+	// The goal is the only thing that writes where the product lives.
+	dir, shared := db.TaskWorkspace(goal)
+	if dir != p.Workspace || shared {
+		t.Fatalf("the goal works in %q (shared=%v), want the project folder %q", dir, shared, p.Workspace)
 	}
-	// And nothing was created under the runs root for a tree that never needed
-	// one.
-	if _, err := os.Stat(db.RunsDir()); !os.IsNotExist(err) {
-		entries, _ := os.ReadDir(db.RunsDir())
-		if len(entries) > 0 {
-			t.Errorf("a project's tree left %d folders in the runs root", len(entries))
+
+	// The children meet each other in scratch, and not in the project.
+	scratch := db.RunspacePath(goal.ContextID)
+	for _, child := range []*Task{one, three} {
+		dir, shared := db.TaskWorkspace(child)
+		if dir != scratch || !shared {
+			t.Errorf("%s works in %q (shared=%v), want the shared scratch %q",
+				child.Title, dir, shared, scratch)
+		}
+		if dir == p.Workspace {
+			t.Errorf("%s writes straight into the project folder alongside its siblings", child.Title)
 		}
 	}
 }
 
-func orDefault(s, fallback string) string {
-	if s == "" {
-		return fallback
+// A task's directory must never move under it. Keying on ParentID is what
+// guarantees that: ParentID never changes, whereas "has this tree been split
+// yet" flips the first time the task fans out — and the files it wrote in the
+// previous run would then be somewhere it is no longer standing.
+func TestATasksWorkspaceNeverMovesWhenItFansOut(t *testing.T) {
+	db := runsDB(t)
+	projects := t.TempDir()
+	p, err := db.CreateProject("trading", "", "owner", projects, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return s
+	goal, err := db.CreateTask(NewTask{Title: "việc lớn", CreatedBy: "bomclaw2", ChannelID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := db.TaskWorkspace(goal)
+
+	if _, err := db.ClaimTask("bomclaw2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateSubTask(goal.ID, "bomclaw2", NewTask{
+		Title: "một mảnh", Body: "Một mô tả đủ dài để qua được ràng buộc brief tự đứng được của con.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reread, err := db.GetTask(goal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := db.TaskWorkspace(reread); after != before {
+		t.Fatalf("the goal's working directory moved when it fanned out: %q → %q\n"+
+			"whatever it wrote in the previous run is no longer where it is standing", before, after)
+	}
 }
 
 // #general is a room, not a project, so a task filed there still needs

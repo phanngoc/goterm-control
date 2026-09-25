@@ -74,19 +74,29 @@ func (b *Bot) Memory() *memory.Manager {
 // security.allowed_user_ids (a private Telegram chat id equals the user id),
 // not whoever wrote last. With no allow-list there is nobody to tell; the line
 // goes to the log instead of to every stranger who ever messaged the bot.
-func (b *Bot) Notify(text string) {
+// Notify pushes an unsolicited line to the owner, and reports whether it got
+// there.
+//
+// The error matters to exactly one caller: the reporter claims a delivery
+// before sending it, so a send that fails silently becomes a result nobody ever
+// sees. Everything else may ignore it.
+func (b *Bot) Notify(text string) error {
 	if b == nil || b.handler == nil {
 		log.Printf("notify (no bot): %s", text)
-		return
+		return fmt.Errorf("bot: no telegram bot to deliver through")
 	}
 	ids := b.cfg.Security.AllowedUserIDs
 	if len(ids) == 0 {
 		log.Printf("notify (no allowed_user_ids to deliver to): %s", text)
-		return
+		return fmt.Errorf("bot: no allowed_user_ids to deliver to")
 	}
+	var firstErr error
 	for _, id := range ids {
-		b.handler.sendText(id, text)
+		if _, err := b.handler.sendTextErr(id, text); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
 // New creates and initialises the bot. db and sessions are shared with the

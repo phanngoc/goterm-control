@@ -66,9 +66,28 @@ func (db *DB) RunspacePath(contextID string) string {
 // nothing else — no directory is created — so a read-only caller like
 // `bomclaw task show` can ask without leaving a folder behind.
 //
-// A project wins: work filed under a project belongs in the project, and the
-// people looking for it later look there. Everything else gets its context's
-// shared run folder.
+// The rule is one line: a ROOT task with a project runs in the project folder;
+// everything else runs in its context's shared scratch.
+//
+// The first version of this said simply "a project wins", for the whole tree.
+// That was right while decomposition was rare — the system had produced six
+// sub-tasks in its life — and it stops being right the moment a goal fans out,
+// because MaxOpenChildren allows eight agents at once and they would all be
+// writing into the project folder together. Those folders are plain
+// directories, not repositories: two agents overwriting each other there is a
+// silent loss, with no conflict to see and nothing to undo.
+//
+// So the product and the scratch are separated. The root assembles what the
+// work produced, in the project, where a person goes looking for it; the
+// children experiment and hand each other files in the shared run folder, which
+// is swept on the artifact clock. Only one task ever writes to the project, so
+// there is nothing to collide with. A lost scratch file is not a lost
+// deliverable.
+//
+// Keyed on ParentID rather than on "has this tree been split yet" deliberately:
+// ParentID never changes, so a task's directory never moves under it. The other
+// rule would move a running task's working directory between two runs, and the
+// files it wrote in the first one would be somewhere it is no longer standing.
 //
 // An empty return means "the agent's own workspace", which is what a task with
 // no context (there is none in practice) gets.
@@ -76,7 +95,7 @@ func (db *DB) TaskWorkspace(t *Task) (dir string, shared bool) {
 	if t == nil {
 		return "", false
 	}
-	if t.ChannelID != "" {
+	if t.ParentID == "" && t.ChannelID != "" {
 		if c, err := db.GetChannel(t.ChannelID); err == nil && c.Workspace != "" {
 			return c.Workspace, false
 		}

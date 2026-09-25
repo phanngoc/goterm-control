@@ -19,7 +19,7 @@ func TestTaskPromptCarriesTheRightIDInEveryCommand(t *testing.T) {
 		ID: "t_real", Title: "visualize 3D", Body: "làm viewer",
 		Depth: 1, ContextID: "ctx_1",
 	}
-	p := taskPrompt(task, 8*time.Minute, false, nil, nil, nil, "", false)
+	p := taskPrompt(task, 8*time.Minute, false, nil, nil, nil, "", "", false)
 
 	if strings.Contains(p, "%!") || strings.Contains(p, "MISSING") || strings.Contains(p, "EXTRA") {
 		t.Fatalf("the prompt has a formatting error in it:\n%s", p)
@@ -45,7 +45,7 @@ func TestTaskPromptCarriesTheRightIDInEveryCommand(t *testing.T) {
 // command existing was not enough: a whole 3D viewer was handed over as a
 // localhost URL in prose, and the task's own output panel was empty.
 func TestTaskPromptAsksForTheOutputToBeFiled(t *testing.T) {
-	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, nil, "", false)
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, nil, "", "", false)
 	if !strings.Contains(p, "artifact put") {
 		t.Fatal("nothing tells the agent to file what it produced")
 	}
@@ -59,7 +59,7 @@ func TestTaskPromptAsksForTheOutputToBeFiled(t *testing.T) {
 // about this work has to be filed against it or the exchange is lost.
 func TestTaskPromptAsksForMessagesToBeFiledUnderTheTask(t *testing.T) {
 	peers := []coord.Agent{{ID: "bomclaw3", Provider: "opencode", Online: true}}
-	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers, "", false)
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers, "", "", false)
 	if !strings.Contains(p, "bomclaw msg --to <agent> --task t_real") {
 		t.Fatalf("the agent is told who its peers are and not how to write to them about this task:\n%s", p)
 	}
@@ -78,7 +78,7 @@ func TestTaskPromptSaysWhatEachPeerIsGoodAt(t *testing.T) {
 	peers := []coord.Agent{{
 		ID: "bomclaw3", Provider: "opencode", Model: "muse", Online: true, Workspace: ws,
 	}}
-	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers, "", false)
+	p := taskPrompt(&coord.Task{ID: "t_real", Title: "x"}, time.Minute, false, nil, nil, peers, "", "", false)
 
 	if !strings.Contains(p, "bomclaw3") {
 		t.Fatal("the peer is not named at all")
@@ -97,7 +97,7 @@ func TestTaskPromptSaysWhatEachPeerIsGoodAt(t *testing.T) {
 func TestTaskPromptSaysTheFolderIsSharedWhenItIs(t *testing.T) {
 	task := &coord.Task{ID: "t_real", Title: "dựng landing page", ContextID: "ctx_1"}
 
-	p := taskPrompt(task, time.Minute, false, nil, nil, nil, "/shared/runs/ctx_1", true)
+	p := taskPrompt(task, time.Minute, false, nil, nil, nil, "/shared/runs/ctx_1", "/shared/runs/ctx_1", true)
 	if !strings.Contains(p, "/shared/runs/ctx_1") {
 		t.Fatalf("the agent is never told where it is standing:\n%s", p)
 	}
@@ -107,7 +107,7 @@ func TestTaskPromptSaysTheFolderIsSharedWhenItIs(t *testing.T) {
 
 	// A project folder is not the context's scratch and must not be described
 	// as something that ages out.
-	p = taskPrompt(task, time.Minute, false, nil, nil, nil, "/projects/trading", false)
+	p = taskPrompt(task, time.Minute, false, nil, nil, nil, "/projects/trading", "/shared/runs/ctx_1", false)
 	if !strings.Contains(p, "this project's folder") {
 		t.Errorf("a project run does not name its project folder:\n%s", p)
 	}
@@ -116,8 +116,59 @@ func TestTaskPromptSaysTheFolderIsSharedWhenItIs(t *testing.T) {
 	}
 
 	// No workspace at all (the agent's own) must not invent a line about one.
-	p = taskPrompt(task, time.Minute, false, nil, nil, nil, "", false)
+	p = taskPrompt(task, time.Minute, false, nil, nil, nil, "", "", false)
 	if strings.Contains(p, "Working directory:") {
 		t.Errorf("claimed a working directory there is none of:\n%s", p)
+	}
+}
+
+// A goal stands in its project while its children stand in scratch, so it has
+// to be told where they are. Without this line it looks around the project
+// folder, sees none of their work, and concludes they did nothing.
+func TestAGoalIsToldWhereItsChildrenWork(t *testing.T) {
+	task := &coord.Task{ID: "t_goal", Title: "backtest", ContextID: "ctx_1"}
+	p := taskPrompt(task, time.Minute, false, nil, nil, nil,
+		"/projects/trading", "/shared/runs/ctx_1", false)
+
+	if !strings.Contains(p, "/projects/trading") {
+		t.Fatalf("the goal is not told where to assemble:\n%s", p)
+	}
+	if !strings.Contains(p, "/shared/runs/ctx_1") {
+		t.Fatalf("the goal is not told where its children work, so it will find nothing:\n%s", p)
+	}
+
+	// A child is in that scratch itself and must not be sent looking elsewhere.
+	p = taskPrompt(task, time.Minute, false, nil, nil, nil,
+		"/shared/runs/ctx_1", "/shared/runs/ctx_1", true)
+	if strings.Contains(p, "assemble the deliverable here") {
+		t.Errorf("a child was told to assemble the deliverable in scratch:\n%s", p)
+	}
+	if !strings.Contains(p, "shared by every task in this context") {
+		t.Errorf("a child was not told the folder is shared:\n%s", p)
+	}
+}
+
+// The bar was stored, printed in two places, and never shown to the one agent
+// whose work is measured against it — only to its parent, about its children.
+// Nobody was asked for criteria, so nobody wrote any: not one task in the first
+// eighty-nine had them.
+func TestAcceptanceReachesTheAgentRunningTheTask(t *testing.T) {
+	task := &coord.Task{
+		ID: "t_goal", Title: "viewer v2", ContextID: "ctx_1",
+		Acceptance: "1) tải dưới 2s; 2) lọc theo quận; 3) có test",
+	}
+	p := taskPrompt(task, time.Minute, false, nil, nil, nil, "/w", "/w", true)
+
+	if !strings.Contains(p, "lọc theo quận") {
+		t.Fatalf("the agent cannot see the bar its work is judged against:\n%s", p)
+	}
+	if !strings.Contains(p, "answer each of them in turn") {
+		t.Errorf("the criteria are shown but never asked for back:\n%s", p)
+	}
+
+	// A task with no criteria must not grow a paragraph about criteria.
+	plain := taskPrompt(&coord.Task{ID: "t_x", Title: "việc nhỏ"}, time.Minute, false, nil, nil, nil, "", "", false)
+	if strings.Contains(plain, "acceptance criteria") {
+		t.Errorf("a task with no bar was lectured about one:\n%s", plain)
 	}
 }

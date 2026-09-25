@@ -337,6 +337,9 @@ func runGateway(args []string) {
 		if err == nil && cfg.Tasks.MaxPerContext > 0 {
 			coordDB.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
 		}
+		if err == nil && cfg.Tasks.RunsPerGoal != 0 {
+			coordDB.SetRunsPerGoal(cfg.Tasks.RunsPerGoal)
+		}
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
 			coordDB = nil
@@ -460,6 +463,7 @@ func runGateway(args []string) {
 			// P3: how many tasks this agent runs side by side. Chat keeps its
 			// own lane; this only stops a long task from blocking a short one.
 			Concurrency: cfg.Tasks.Concurrency,
+			VerifyGoals: cfg.Tasks.VerifyGoals,
 			// The same MEMORY.md the chat lane uses. Until this, a task run
 			// neither read what the agent knew nor wrote anything down — and
 			// tasks are where most of the real work happens.
@@ -469,6 +473,25 @@ func runGateway(args []string) {
 		// to whoever held it; ring that agent so it resumes at once.
 		runner.SetWakeListener(func(w coord.WokenParent) {
 			gateway.NotifyAgents(coordDB, w.AssignedTo, cfg.Agent.ID, "about parent "+w.TaskID)
+		})
+		// A goal that stops for a person has to say so. Nothing did: the
+		// reporter only delivers terminal states, and `blocked` is not one, so
+		// work that stopped overnight waited until somebody opened a board.
+		// The whole point of running unattended is that the one moment it
+		// needs you, it reaches you.
+		runner.SetStuckListener(func(t coord.Task) {
+			if tgBot != nil {
+				_ = tgBot.Notify(stuckMessage(&t))
+			}
+			// And in the room it came from, for whoever reads there instead.
+			if root, _, err := coordDB.TaskThread(t.ID); err == nil && root != "" {
+				if ch, err := coordDB.MessageChannel(root); err == nil && ch != "" {
+					_, _, _ = coordDB.PostMessage(coord.NewChannelMessage{
+						ChannelID: ch, ThreadRoot: root, AuthorID: cfg.Agent.ID,
+						Body: stuckMessage(&t),
+					})
+				}
+			}
 		})
 		runner.Start(ctx)
 	} else if coordDB != nil {
@@ -485,7 +508,7 @@ func runGateway(args []string) {
 	if coordDB != nil {
 		report = reporter.New(coordDB, reporter.Config{AgentID: cfg.Agent.ID})
 		if tgBot != nil {
-			report.SetNotify(func(text string) { tgBot.Notify(text) })
+			report.SetNotify(tgBot.Notify)
 		}
 		report.Start(ctx)
 	}
@@ -507,7 +530,9 @@ func runGateway(args []string) {
 		// an `agent` schedule produces a task, and that task's run already
 		// opens a trace of its own.
 		sched.SetRecorder(gwTrace)
-		sched.SetNotify(func(text string) { tgBot.Notify(text) })
+		// The scheduler has nowhere to put a delivery failure: its result is
+		// already recorded and there is no claim to give back.
+		sched.SetNotify(func(text string) { _ = tgBot.Notify(text) })
 		sched.SetWake(func(t *coord.Task) {
 			if runner != nil {
 				runner.Poke()
@@ -1646,4 +1671,28 @@ func ownerChat(cfg *config.Config) int64 {
 		return 0
 	}
 	return cfg.Security.AllowedUserIDs[0]
+}
+
+// stuckMessage is what the owner reads when a goal stops for them. It has to
+// carry the decision, not just the fact: the reason it stopped, what it had
+// done by then, and the one command that starts it again — typed on a phone,
+// at whatever hour it stopped.
+func stuckMessage(t *coord.Task) string {
+	why := "it is waiting on a decision"
+	if note := strings.TrimSpace(lastLine(t.Checkpoint)); note != "" {
+		why = note
+	}
+	return fmt.Sprintf("⏸ *%s* stopped and needs you\n\n%s\n\nStart it again:\n"+
+		"`bomclaw task unblock --id %s --note \"<your answer>\"`\n"+
+		"Or look first: `bomclaw task tree --id %s`", t.Title, why, t.ID, t.ID)
+}
+
+// lastLine is the most recent thing written into a checkpoint — the reason the
+// task stopped, rather than the whole history of how it got there.
+func lastLine(checkpoint string) string {
+	parts := strings.Split(strings.TrimSpace(checkpoint), "\n\n")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }

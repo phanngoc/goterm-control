@@ -382,11 +382,20 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 		"A path in prose is findable for about a day; an artifact is findable by id, survives the file "+
 		"moving, and is what the next agent asked to review it will open.\n")
 	fmt.Fprintf(&b, "If this asks for real work — something with steps, or longer than a few "+
-		"minutes — say so briefly and open a task for it with `bomclaw task new --thread %s`. "+
+		"minutes — say so briefly and open a task for it with "+
+		"`bomclaw task new --thread %s --acceptance \"<what makes this done>\"`. "+
 		"The --thread is what keeps the work attached to this conversation: the thread shows "+
 		"the task it produced, and the result is posted back here when it finishes, so nobody "+
 		"has to watch the board for an answer they asked for in a room. The board is for work; "+
-		"this room is for talking about it.\n", key)
+		"this room is for talking about it.\n\n", key)
+	b.WriteString("The --acceptance is what turns a task into a goal, and it is worth the thirty " +
+		"seconds. Write the criteria as the person would judge them — numbered, checkable, in " +
+		"their words rather than yours. They are what the agent doing the work is measured " +
+		"against, what it re-reads each time it gathers a round of results and decides whether " +
+		"to split the remainder or finish, and what a peer reads it against at the end. A task " +
+		"without them finishes when somebody says it is finished.\n\n" +
+		"You are not agreeing to do it yourself by opening it: any agent may claim it, and the " +
+		"one that does will split what it cannot do alone.\n")
 	return b.String()
 }
 

@@ -131,6 +131,9 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// codex has always inherited the ambient environment; the account layers
 	// CODEX_HOME on top so each login keeps its own threads.
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
+	// See claude/client.go: per-run variables, appended last so a session's
+	// own value wins over the gateway's.
+	cmd.Env = append(cmd.Env, sess.GetEnv()...)
 	// The session's directory wins when it has one: a turn answering a
 	// project works in that project's folder, which is where the other
 	// agents and the person will look for what it produced.

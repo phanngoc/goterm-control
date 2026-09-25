@@ -42,12 +42,18 @@ func delegate(t *testing.T, db *coord.DB, title, state, result string) *coord.Ta
 type collector struct {
 	mu    sync.Mutex
 	lines []string
+	// err, when set, makes every delivery fail — the outage case.
+	err error
 }
 
-func (c *collector) add(s string) {
+func (c *collector) add(s string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
 	c.lines = append(c.lines, s)
+	return nil
 }
 
 func (c *collector) all() []string {
@@ -174,7 +180,7 @@ func TestStartDeliversAndStopsWithTheContext(t *testing.T) {
 // exported method has to tolerate it, because main.go calls them unconditionally.
 func TestNilReporterIsInert(t *testing.T) {
 	var r *Reporter
-	r.SetNotify(func(string) { t.Error("nil reporter must not deliver") })
+	r.SetNotify(func(string) error { t.Error("nil reporter must not deliver"); return nil })
 	r.Poke()
 	r.Start(context.Background())
 	r.Wait()
@@ -358,3 +364,72 @@ func TestTheReportNamesWhatItProduced(t *testing.T) {
 		t.Errorf("the report does not name the file:\n%s", report)
 	}
 }
+
+// Claiming a delivery before sending it is what stops three gateways reporting
+// the same result three times. The cost of that order is that a failed send
+// leaves the task marked delivered and never delivered — the marker makes the
+// silence permanent. So a failure has to give the claim back.
+func TestAFailedDeliveryIsReleasedForTheNextTick(t *testing.T) {
+	db := openDB(t)
+	task := delegate(t, db, "crawl listings", coord.TaskCompleted, "62 jobs")
+
+	got := &collector{err: errFakeOutage}
+	r := New(db, Config{AgentID: "a2"})
+	r.SetNotify(got.add)
+	r.Tick()
+
+	if lines := got.all(); len(lines) != 0 {
+		t.Fatalf("a failing delivery reported success: %q", lines)
+	}
+	after, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ReportedAt != "" {
+		t.Fatal("a report that never left was marked delivered — the owner will never see it,\n" +
+			"and nothing will ever look at it again")
+	}
+
+	// And it goes out once Telegram is back.
+	got.err = nil
+	r.Tick()
+	if lines := got.all(); len(lines) != 1 {
+		t.Fatalf("the released report never went: %q", lines)
+	}
+}
+
+// The release must never clear a claim somebody else has since made, or two
+// gateways would deliver the same result.
+func TestReleasingDoesNotTakeAPeersClaim(t *testing.T) {
+	db := openDB(t)
+	task := delegate(t, db, "crawl listings", coord.TaskCompleted, "62 jobs")
+
+	mine := time.Now().Add(-time.Minute)
+	if won, err := db.MarkReported(task.ID, mine); err != nil || !won {
+		t.Fatalf("claim: %v %v", won, err)
+	}
+	if err := db.UnmarkReported(task.ID, mine); err != nil {
+		t.Fatal(err)
+	}
+	theirs := time.Now()
+	if won, err := db.MarkReported(task.ID, theirs); err != nil || !won {
+		t.Fatalf("peer claim: %v %v", won, err)
+	}
+	// Releasing with the OLD timestamp must do nothing.
+	if err := db.UnmarkReported(task.ID, mine); err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ReportedAt == "" {
+		t.Fatal("a stale release cleared a peer's claim; both gateways would now report it")
+	}
+}
+
+type fakeOutage struct{}
+
+func (fakeOutage) Error() string { return "telegram: bad gateway" }
+
+var errFakeOutage = fakeOutage{}

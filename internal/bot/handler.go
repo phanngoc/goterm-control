@@ -1226,6 +1226,19 @@ func (h *Handler) channelReply(msg *tgbotapi.Message) bool {
 }
 
 func (h *Handler) sendText(chatID int64, text string) int {
+	id, err := h.sendTextErr(chatID, text)
+	if err != nil {
+		log.Printf("sendText: %v", err)
+		return 0
+	}
+	return id
+}
+
+// sendTextErr is sendText for the callers that have to know it failed. Most do
+// not: a line that could not be delivered is a line in a log. The reporter is
+// the exception — it claims a delivery before making it, so a silent failure
+// there is a result the owner never sees and nothing ever retries.
+func (h *Handler) sendTextErr(chatID int64, text string) (int, error) {
 	html := markdownToTelegramHTML(text)
 	msg := tgbotapi.NewMessage(chatID, html)
 	msg.ParseMode = "HTML"
@@ -1234,11 +1247,10 @@ func (h *Handler) sendText(chatID int64, text string) int {
 		msg2 := tgbotapi.NewMessage(chatID, stripHTML(html))
 		sent, err = h.bot.Send(msg2)
 		if err != nil {
-			log.Printf("sendText: %v", err)
-			return 0
+			return 0, err
 		}
 	}
-	return sent.MessageID
+	return sent.MessageID, nil
 }
 
 // buildHistoryContext loads recent messages from the store and formats them
