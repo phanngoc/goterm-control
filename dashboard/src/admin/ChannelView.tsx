@@ -280,6 +280,21 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
             </button>
           )}
           {current?.workspace && (
+            // Browsing the files shows the source; this shows the result. A
+            // page the work produced is served from its own folder, so its
+            // relative requests for data and images resolve — which a single
+            // file opened on its own cannot do.
+            <a
+              href={`/project/${current.id}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Mở thư mục dự án trong tab mới — trang nào có sẽ chạy thật"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
+            >
+              Mở ↗
+            </a>
+          )}
+          {current?.workspace && (
             <button
               onClick={() => setBriefFor(current.id)}
               title={current.workspace}

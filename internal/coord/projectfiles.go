@@ -69,6 +69,22 @@ func (db *DB) projectPath(channelID, rel string) (string, error) {
 	return full, nil
 }
 
+// ProjectFilePath resolves one path inside a project to somewhere on disk, or
+// refuses it.
+//
+// Exported so the gateway can serve a project's own files back — a board, a
+// report, a page an agent built. Reading the bytes through ReadProjectFile
+// would not do: that one truncates, flags binaries and returns a string,
+// because it exists to show a file to a person in a text pane. Serving needs
+// the file itself, with its own type and length, so the page's own relative
+// requests for its JSON and its images resolve the way they do on disk.
+//
+// The refusal is the same one every other caller gets: absolute paths, and
+// anything that escapes the folder after symlinks are resolved.
+func (db *DB) ProjectFilePath(channelID, rel string) (string, error) {
+	return db.projectPath(channelID, rel)
+}
+
 // ProjectFiles lists one directory inside a project, directories first.
 func (db *DB) ProjectFiles(channelID, rel string) ([]ProjectEntry, error) {
 	full, err := db.projectPath(channelID, rel)

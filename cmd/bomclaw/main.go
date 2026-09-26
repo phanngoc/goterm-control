@@ -745,6 +745,10 @@ func runGateway(args []string) {
 		// Peers read and change each other's backend over this, which is why it
 		// sits behind the same rule as the doorbell: a login, or a local
 		// caller. Two agents on one machine are local to each other.
+		// A project's own files, served so the thing the work produced can be
+		// looked at: /project/<channel>/board/ opens the board with its data
+		// beside it, which a single file opened from a blob cannot do.
+		srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
 		srv.Handle("/api/settings", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/settings/model", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(func() {
