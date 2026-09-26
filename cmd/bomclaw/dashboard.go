@@ -134,6 +134,9 @@ func runDashboard(args []string) {
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), nil, resolveDashboardDir(), authMgr)
 	srv.SetRelay(&gateway.Relay{Local: gateway.NewMethodHandler(deps), Upstream: upstream})
 	srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
+	// The editor's terminal. Its own auth check (a login, never the loopback
+	// exemption) lives in the handler: it hands out a shell.
+	srv.Handle(gateway.TerminalPath, gateway.TerminalHandler(coordDB, authMgr))
 
 	if err := daemon.KillStaleListeners(*port); err != nil {
 		log.Printf("warning: stale PID cleanup: %v", err)

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { monaco } from './monacoSetup'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { QuickOpen, SearchPanel, type Reveal } from './EditorFinders'
 import { filesPath } from '../lib/route'
+
+// xterm loads only when a terminal is first opened.
+const TerminalPanel = lazy(() => import('./TerminalPanel'))
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -68,6 +71,12 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const [view, setView] = useState<'explorer' | 'search'>('explorer')
   const [quickOpen, setQuickOpen] = useState(false)
   const [searchFocus, setSearchFocus] = useState(0)
+  // The terminal panel: mounted on first open and kept mounted after, so
+  // hiding it does not end the shells in it.
+  const [termOpen, setTermOpen] = useState(false)
+  const [termMounted, setTermMounted] = useState(false)
+  const [termMax, setTermMax] = useState(false)
+  const [termHeight, setTermHeight] = useState(() => Math.round(window.innerHeight * 0.35))
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   // A search hit waits here until its file's model is in the editor.
   const pendingReveal = useRef<{ path: string; at: Reveal } | null>(null)
@@ -245,7 +254,15 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   // Monaco. Capture phase, so the browser's own Cmd+P (print) never opens.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+` toggles the terminal, as in VS Code.
+      if (e.ctrlKey && !e.metaKey && (e.code === 'Backquote' || e.key === '`')) {
+        e.preventDefault(); e.stopPropagation(); toggleTermRef.current()
+        return
+      }
       if (!(e.metaKey || e.ctrlKey)) return
+      // Inside a terminal, Ctrl+P, Ctrl+S and friends belong to the shell
+      // (history, flow control…); only the Cmd variants are the editor's.
+      if (!e.metaKey && (e.target as HTMLElement)?.closest?.('.xterm')) return
       const k = e.key.toLowerCase()
       if (k === 's' && !e.shiftKey) { e.preventDefault(); saveRef.current() }
       else if (k === 'p' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); findFileRef.current() }
@@ -254,6 +271,33 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
+
+  const toggleTerm = () => {
+    setTermMounted(true)
+    setTermOpen(o => {
+      if (o) editorRef.current?.focus()
+      return !o
+    })
+  }
+  const toggleTermRef = useRef(toggleTerm)
+  toggleTermRef.current = toggleTerm
+
+  // Dragging the bar above the terminal resizes it, within reason.
+  const startDrag = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = termHeight
+    const move = (ev: PointerEvent) => {
+      const h = startH + (startY - ev.clientY)
+      setTermHeight(Math.max(120, Math.min(window.innerHeight - 160, h)))
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   const onMount: OnMount = (editor, m) => {
     editorRef.current = editor
@@ -466,6 +510,10 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
         ) : (
           <a href={here} target="_blank" rel="noopener noreferrer" title="Mở editor ở tab riêng, tại file và dòng đang mở" className="text-xs text-gray-400 hover:text-sky-300">Tab riêng ↗</a>
         )}
+        <button
+          onClick={toggleTerm} title="Terminal trong thư mục dự án (Ctrl+`)"
+          className={`text-xs ${termOpen ? 'text-sky-300' : 'text-gray-400 hover:text-white'}`}
+        >Terminal</button>
         <button onClick={close} className="text-xs text-gray-400 hover:text-white">{standalone ? 'về phòng chat' : 'đóng'}</button>
       </header>
 
@@ -552,7 +600,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
             </div>
           )}
 
-          <div className="flex-1 min-h-0 flex">
+          <div className="flex-1 min-h-0 flex" hidden={termOpen && termMax}>
             {!activeTab ? (
               <div className="flex-1 flex items-center justify-center text-sm text-gray-500">
                 ⌘P mở file theo tên · ⌘⇧F tìm trong mọi file · ⌘S lưu
@@ -593,6 +641,29 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
               </>
             )}
           </div>
+
+          {termMounted && (
+            <div
+              hidden={!termOpen}
+              className={termMax ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0 flex flex-col'}
+              style={termMax ? undefined : { height: termHeight }}
+            >
+              {!termMax && (
+                <div onPointerDown={startDrag} className="h-1 shrink-0 cursor-row-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
+              )}
+              <div className="flex-1 min-h-0">
+                <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở terminal…</div>}>
+                  <TerminalPanel
+                    channelID={channelID}
+                    visible={termOpen}
+                    onHide={() => { setTermOpen(false); editorRef.current?.focus() }}
+                    maximized={termMax}
+                    onToggleMax={() => setTermMax(m => !m)}
+                  />
+                </Suspense>
+              </div>
+            </div>
+          )}
 
           {/* Status bar */}
           <footer className="flex items-center gap-4 h-6 px-3 text-[11px] bg-[#007acc] text-white shrink-0">
