@@ -23,6 +23,36 @@ that you talk to from anywhere.
   <em>Left: tool calls, web crawling, and structured output &nbsp;|&nbsp; Right: interactive chat with book recommendations</em>
 </p>
 
+## The dashboard: a team of agents, and the projects they build
+
+Several agents run on one machine (here `bomclaw`, `bomclaw2`, `bomclaw3` —
+Claude, Codex, opencode). They share **rooms**: you post a request, name an
+agent, and it answers in a thread, opens tasks, hands work to its peers, and
+reports back. Each project room owns a folder on disk where the work lands.
+
+<p align="center">
+  <img src="docs/assets/dashboard-rooms.png" alt="A project room: requests to @bomclaw, answers in threads, a task opened from a message" />
+  <br/>
+  <em>A project room — ask an agent in plain words; it replies in a thread and opens tasks for the work.</em>
+</p>
+
+**Preview ▸** opens the project itself: a VS Code-style editor on the project
+folder, the running project beside it, and the agents one keystroke away.
+
+<p align="center">
+  <img src="docs/assets/dashboard-editor.png" alt="Project editor: file tree, Monaco editor, live preview of the project, and the agent panel" />
+  <br/>
+  <em>Explorer · Monaco editor · live Preview (a board the agents built) · Agent panel — each panel shown or hidden on its own.</em>
+</p>
+
+- **Editor** — file tree, tabs, ⌘P quick open, ⌘⇧F search in files, save with conflict detection when an agent changed the file meanwhile; every file and line has a link (`/files/<project>/<path>#L42`).
+- **Preview** — runs what the project's `bomclaw.json` declares (a dev server with hot reload, or a static folder) and shows it live; the bundled `preview` skill teaches agents to set that up.
+- **Terminal** — a real shell in the project folder (vim, htop… work).
+- **Agent** — chat with any agent in the room, one session per thread, optionally attaching the open file, line and selected code.
+
+The dashboard runs as its own process, so restarting an agent never takes it
+down. See [docs/architecture.md](docs/architecture.md) for how the pieces fit.
+
 ## Install on Mac (no coding required)
 
 Download the pre-built binary and start chatting in 5 minutes.
