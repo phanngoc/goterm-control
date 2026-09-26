@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -360,5 +361,25 @@ func TestAccountsRotateByDefault(t *testing.T) {
 	}
 	if !seen["a"] || !seen["b"] {
 		t.Fatalf("a pool built without the field stopped rotating: %v", seen)
+	}
+}
+
+func TestTheDefaultClaudeDirIsLeftUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	for _, dir := range []string{"~/.claude", filepath.Join(home, ".claude"), filepath.Join(home, ".claude") + "/"} {
+		set, unset := Account{Name: "default", Provider: ProviderClaude, ConfigDir: dir}.Env()
+		if _, ok := set["CLAUDE_CONFIG_DIR"]; ok {
+			t.Errorf("ConfigDir %q set CLAUDE_CONFIG_DIR — the CLI then looks for a different Keychain login", dir)
+		}
+		if !slices.Contains(unset, "CLAUDE_CONFIG_DIR") {
+			t.Errorf("ConfigDir %q did not unset an ambient CLAUDE_CONFIG_DIR", dir)
+		}
+	}
+
+	set, _ := Account{Name: "tam", Provider: ProviderClaude, ConfigDir: filepath.Join(home, ".claude-tam")}.Env()
+	if set["CLAUDE_CONFIG_DIR"] != filepath.Join(home, ".claude-tam") {
+		t.Errorf("a second account lost its own config dir: %v", set)
 	}
 }

@@ -77,7 +77,18 @@ func (a Account) Env() (set map[string]string, unset []string) {
 			set["CODEX_HOME"] = a.ConfigDir
 		}
 	default: // claude
-		if a.ConfigDir != "" {
+		switch {
+		case a.ConfigDir == "":
+		case isDefaultClaudeDir(a.ConfigDir):
+			// The CLI keys its Keychain login by config dir, and it keys the
+			// default dir differently when CLAUDE_CONFIG_DIR names it than when
+			// it is left unset. So naming ~/.claude reaches a second, separate
+			// login — one nothing refreshes, which answers "Not logged in"
+			// once its token lapses (agent 1, 2026-09-26) while `claude` in a
+			// terminal keeps working. Leaving it unset reaches the login the
+			// person actually maintains.
+			unset = append(unset, "CLAUDE_CONFIG_DIR")
+		default:
 			set["CLAUDE_CONFIG_DIR"] = a.ConfigDir
 		}
 		if key := a.resolvedKey(); key != "" {
@@ -361,6 +372,16 @@ func truncateErr(s string) string {
 		return string(r[:159]) + "…"
 	}
 	return s
+}
+
+// isDefaultClaudeDir is whether dir is the claude CLI's own default,
+// ~/.claude.
+func isDefaultClaudeDir(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(expandHome(dir)) == filepath.Join(home, ".claude")
 }
 
 func expandHome(p string) string {
