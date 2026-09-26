@@ -16,8 +16,13 @@ type Call = (method: string, params?: any) => Promise<any>
 
 const PAGE = 30
 
-export default function ChannelView({ call, agents, selfID, bots, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
+export default function ChannelView({ call, agents, selfID, bots, channelID, onChannel, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
   call: Call; agents: string[]; selfID: string
+  /** channelID is the room on screen, and onChannel is how it changes. The
+   *  selection lives in the address bar rather than in this component, so a
+   *  room can be linked, bookmarked and reloaded — every room in the sidebar
+   *  used to share the one address /admin/messages. */
+  channelID: string; onChannel: (id: string) => void
   /** bots maps an agent id to its own Telegram bot name, so a direct room can
    *  offer the private chat that agent actually answers on. */
   bots?: Record<string, string>
@@ -27,7 +32,8 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
   openFilesFor?: string; onOpenedFiles?: () => void
 }) {
   const [channels, setChannels] = useState<Channel[]>([])
-  const [active, setActive] = useState<string>('')
+  const active = channelID
+  const setActive = onChannel
   const [msgs, setMsgs] = useState<ChannelMessage[]>([])
   const [thread, setThread] = useState<ChannelMessage[] | null>(null)
   const [threadRoot, setThreadRoot] = useState<string>('')
@@ -129,15 +135,23 @@ export default function ChannelView({ call, agents, selfID, bots, openThreadID, 
     }
   }, [call])
 
-  // First load picks the busiest room so the tab opens on something to read.
+  // First load picks the busiest room so the tab opens on something to read —
+  // but only when the address named no room. A link to one has to survive the
+  // first load, which is the whole point of putting it in the address.
+  //
+  // Read through a ref, not the captured prop: the check happens after an
+  // await, and whether the address had been applied by then depends on mount
+  // order in another file. The ref is right whenever it is read.
+  const wanted = useRef(channelID)
+  wanted.current = channelID
   useEffect(() => {
     let cancelled = false
     loadChannels().then(list => {
-      if (cancelled || !list.length) return
-      setActive(prev => prev || (list.find(c => c.mentions > 0) ?? list[0]).id)
+      if (cancelled || !list.length || wanted.current) return
+      setActive((list.find(c => c.mentions > 0) ?? list[0]).id)
     })
     return () => { cancelled = true }
-  }, [loadChannels])
+  }, [loadChannels, setActive])
 
   useEffect(() => { loadMessages(active) }, [active, loadMessages])
 
