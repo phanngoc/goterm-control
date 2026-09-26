@@ -7,7 +7,7 @@ import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
 import AdminView from './admin/AdminView'
 import type { Me } from './Root'
-import { parseRoute, pathFor, type AdminPane } from './lib/route'
+import { parseRoute, pathFor, isRefinement, type AdminPane } from './lib/route'
 
 export default function App({ me, onLogout }: { me: Me; onLogout?: () => void }) {
   const { call } = useGateway()
@@ -30,6 +30,9 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // lives only in component state cannot be sent to anybody — "look at this
   // task" meant "open the board and find it".
   const [adminTask, setAdminTask] = useState<string>('')
+  // Which room the Messages pane is showing, for the same reason as the task
+  // above: one address per room, so a room can be linked and reloaded.
+  const [adminChannel, setAdminChannel] = useState<string>('')
 
   // Another channel wrote to a session — Telegram, or an agent that claimed a
   // task. Refresh the list (labels, counts), and if that session is the one on
@@ -62,6 +65,9 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       if (r.sessionId) setActiveSessionId(r.sessionId)
       if (r.adminPane) setAdminPane(r.adminPane)
       setAdminTask(r.taskId ?? '')
+      // Only when the address names one. A bare /admin/messages leaves the
+      // pane's own pick alone rather than blanking the room it just chose.
+      if (r.channelId) setAdminChannel(r.channelId)
     }
     apply()
     window.addEventListener('popstate', apply)
@@ -81,15 +87,12 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
     const path = pathFor({
       tab, sessionId: activeSessionId ?? undefined, adminPane,
       taskId: adminTask || undefined,
+      channelId: adminChannel || undefined,
     })
     const here = location.pathname
     if (path === here) return
-    // Opening a task is a deliberate act, not an auto-selection, so it gets a
-    // history entry of its own — Back closes the drawer instead of leaving the
-    // admin tab. The refinement rule stays for /chat, which it was written for.
-    const refines = here !== '/' && path.startsWith(here + '/') && !here.startsWith('/admin')
-    history[refines ? 'replaceState' : 'pushState'](null, '', path)
-  }, [tab, activeSessionId, adminPane, adminTask])
+    history[isRefinement(here, path) ? 'replaceState' : 'pushState'](null, '', path)
+  }, [tab, activeSessionId, adminPane, adminTask, adminChannel])
 
   // Load sessions + status on connect
   useEffect(() => {
@@ -186,6 +189,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
           <AdminView
             call={call} pane={adminPane} onPane={setAdminPane}
             taskId={adminTask} onTaskId={setAdminTask}
+            channelId={adminChannel} onChannelId={setAdminChannel}
           />
         )}
       </main>

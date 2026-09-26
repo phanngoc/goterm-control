@@ -27,10 +27,13 @@ const LABELS: Record<Pane, string> = {
 
 const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
 
-export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
+export default function AdminView({ call, pane, onPane, taskId, onTaskId, channelId, onChannelId }: {
   call: Call; pane: Pane; onPane: (p: Pane) => void
   /** taskId is the task whose detail is open, owned by the address bar. */
   taskId: string; onTaskId: (id: string) => void
+  /** channelId is the room the Messages pane is showing, owned by the address
+   *  bar the same way. */
+  channelId: string; onChannelId: (id: string) => void
 }) {
   const [data, setData] = useState<OverviewData | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -129,6 +132,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId }: {
         {pane === 'messages' && (
           <ChannelView
             call={call} agents={agentIDs} selfID={selfID} bots={bots}
+            channelID={channelId} onChannel={onChannelId}
             openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
             openFilesFor={openFiles} onOpenedFiles={() => setOpenFiles('')}
             onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
