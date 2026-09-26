@@ -6,6 +6,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/ngocp/goterm-control/internal/coord"
 )
 
 // Serving a project's own files back, so the thing the work produced can be
@@ -60,6 +62,23 @@ func ProjectHandler(deps Deps) http.HandlerFunc {
 		info, err := os.Stat(full)
 		if err != nil {
 			http.NotFound(w, r)
+			return
+		}
+		// The folder's own root is the project's front page: what it built,
+		// how to run it, and a button to run it. A listing answers "what files
+		// are here", which is not the question anyone arrives with.
+		if landingRel(rel) {
+			var started *coord.Task
+			if isRunRequest(r) {
+				t, err := runProject(deps, channelID)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				started = t
+				NotifyTaskCreated(deps.Coord, t)
+			}
+			serveLanding(w, deps, channelID, started)
 			return
 		}
 		if info.IsDir() {

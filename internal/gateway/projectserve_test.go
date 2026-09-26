@@ -117,3 +117,92 @@ func TestServingSaysWhichKindOfNoItIs(t *testing.T) {
 		t.Errorf("a request naming no project answered %d", w.Code)
 	}
 }
+
+// Opening a project has to answer "show me the thing", not "what files are
+// here". The result is one folder deep and named differently in every project;
+// finding it by guessing is what the landing page removes.
+func TestOpeningAProjectLeadsToItsResult(t *testing.T) {
+	deps, p := projectServeDeps(t)
+	if err := os.WriteFile(filepath.Join(p.Workspace, "README.md"),
+		[]byte("# radar\n\n## Chạy\n\n    python3 scripts/fetch.py\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := get(t, deps, ProjectPrefix+p.ID+"/")
+	if w.Code != http.StatusOK {
+		t.Fatalf("landing: %d", w.Code)
+	}
+	body := w.Body.String()
+
+	// Where the result is — board/index.html, found by convention rather than
+	// by the person guessing.
+	if !strings.Contains(body, ProjectPrefix+p.ID+"/board/index.html") {
+		t.Fatalf("the page does not lead to the result:\n%s", body)
+	}
+	// How it is run.
+	if !strings.Contains(body, "python3 scripts/fetch.py") {
+		t.Errorf("the running instructions are not shown")
+	}
+	// And a way to run it.
+	if !strings.Contains(body, `name=run`) {
+		t.Errorf("no way to run it from here")
+	}
+	// The files are still reachable, underneath.
+	if !strings.Contains(body, ProjectPrefix+p.ID+"/data/") {
+		t.Errorf("the file list is gone")
+	}
+}
+
+// A project that produced a report and no page is ordinary. It must say so
+// rather than link to nothing.
+func TestAProjectWithNoPageSaysSo(t *testing.T) {
+	deps, p := projectServeDeps(t)
+	if err := os.RemoveAll(filepath.Join(p.Workspace, "board")); err != nil {
+		t.Fatal(err)
+	}
+	body := get(t, deps, ProjectPrefix+p.ID+"/").Body.String()
+	if strings.Contains(body, "Mở kết quả") {
+		t.Fatal("offered to open a result that does not exist")
+	}
+	if !strings.Contains(body, "chưa có trang kết quả") {
+		t.Errorf("did not say why there is nothing to open:\n%s", body)
+	}
+}
+
+// "Run it" opens a task rather than executing anything here. The gateway has no
+// workspace, no credentials and nowhere to put the output; an agent has all
+// three, and asking an agent is the move the whole system is built on.
+func TestRunningAProjectAsksAnAgentRatherThanExecuting(t *testing.T) {
+	deps, p := projectServeDeps(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, ProjectPrefix+p.ID+"/?run=1", nil)
+	ProjectHandler(deps)(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("run: %d %s", w.Code, w.Body.String())
+	}
+
+	tasks, err := deps.Coord.ListTasks(coord.TaskFilter{ChannelID: p.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("opened %d tasks, want 1", len(tasks))
+	}
+	got := tasks[0]
+	if got.ChannelID != p.ID {
+		t.Error("the task landed outside the project it is meant to refresh")
+	}
+	if got.Acceptance == "" {
+		t.Error("the task has no bar, so none of the goal loop applies to it")
+	}
+	if !strings.Contains(w.Body.String(), got.ID) {
+		t.Error("the page does not say which task was opened, so there is nothing to follow")
+	}
+
+	// A plain GET must not open one: a reload is not a request to run again.
+	get(t, deps, ProjectPrefix+p.ID+"/")
+	if again, _ := deps.Coord.ListTasks(coord.TaskFilter{ChannelID: p.ID, Limit: 10}); len(again) != 1 {
+		t.Fatalf("reloading the page opened another task (%d total)", len(again))
+	}
+}
