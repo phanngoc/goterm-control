@@ -3,6 +3,7 @@ import Editor, { type OnMount } from '@monaco-editor/react'
 import { monaco } from './monacoSetup'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { QuickOpen, SearchPanel, type Reveal } from './EditorFinders'
+import { filesPath } from '../lib/route'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -44,8 +45,14 @@ const narrow = () => window.innerWidth < 768
 // Agents write in this folder while it is open. A save therefore carries the
 // mtime the file was opened at and is refused if the file moved on since; the
 // person then picks between the version on disk and their own.
-export default function ProjectEditor({ call, channelID, root, onClose }: {
+export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine }: {
   call: Call; channelID: string; root: string; onClose: () => void
+  /** standalone is the editor as its own page, /files/<channel>/<path>: it
+   *  keeps the address bar pointing at the open file and line. */
+  standalone?: boolean
+  /** initialFile (and initialLine) open on arrival — a link to a spot. */
+  initialFile?: string
+  initialLine?: number
 }) {
   const [dirs, setDirs] = useState<Record<string, Entry[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
@@ -85,6 +92,20 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
   }, [call, channelID])
 
   useEffect(() => { loadDir('') }, [loadDir])
+
+  // A link to a file opens it, with the tree unfolded down to it so you can see
+  // where it sits. Once only: the link is where you arrived, not where you are.
+  const arrived = useRef(false)
+  useEffect(() => {
+    if (arrived.current || !initialFile) return
+    arrived.current = true
+    const parents: string[] = []
+    for (let d = parentOf(initialFile); d; d = parentOf(d)) parents.unshift(d)
+    setExpanded(s => new Set([...s, ...parents]))
+    parents.forEach(d => loadDir(d))
+    openFile(initialFile, initialLine ? { line: initialLine, col: 1, len: 0 } : undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFile])
 
   // Models outlive the component unless disposed; a second open of the same
   // project would otherwise start from stale buffers.
@@ -249,6 +270,9 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
       const model = editor.getModel()
       setLang(model?.getLanguageId() ?? '')
       setLive(model?.getValue() ?? '')
+      // Or the status bar and the address keep the last file's line.
+      const pos = editor.getPosition()
+      setCursor({ line: pos?.lineNumber ?? 1, col: pos?.column ?? 1 })
       editor.focus()
       const pending = pendingReveal.current
       if (pending && model && model.uri.toString() === uriFor(pending.path).toString()) {
@@ -397,6 +421,27 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
 
   const showPreview = !!activeTab?.preview && isMarkdown(active)
 
+  // The address of exactly this spot: file and the line the cursor is on.
+  const here = filesPath(channelID, active || undefined, active ? cursor.line : undefined)
+
+  // As its own page, the address bar follows the editor, so copying it is
+  // sharing where you are. replaceState: moving the cursor is not navigating,
+  // and Back should leave the editor, not walk through every line visited.
+  useEffect(() => {
+    if (!standalone) return
+    const t = setTimeout(() => {
+      if (location.pathname + location.hash !== here) history.replaceState(null, '', here)
+    }, 250)
+    return () => clearTimeout(t)
+  }, [standalone, here])
+
+  useEffect(() => {
+    if (!standalone) return
+    const before = document.title
+    document.title = `${active ? baseOf(active) + ' — ' : ''}${project}`
+    return () => { document.title = before }
+  }, [standalone, active, project])
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#1e1e1e] text-gray-200">
       {quickOpen && (
@@ -411,8 +456,17 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
         <button onClick={() => setSidebar(s => !s)} title="Ẩn/hiện cây thư mục" className="text-gray-400 hover:text-white">☰</button>
         <span className="font-medium text-gray-100">{project}</span>
         <span className="hidden md:inline text-[11px] text-gray-500 font-mono truncate">{root}</span>
-        <a href={projectURL('')} target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-gray-400 hover:text-sky-300">Mở ↗</a>
-        <button onClick={close} className="text-xs text-gray-400 hover:text-white">đóng</button>
+        <a href={projectURL('')} target="_blank" rel="noopener noreferrer" title="Mở trang của dự án (board, báo cáo…)" className="ml-auto text-xs text-gray-400 hover:text-sky-300">Mở ↗</a>
+        {standalone ? (
+          <button
+            onClick={() => navigator.clipboard?.writeText(location.origin + here)}
+            title="Chép link tới file và dòng đang mở"
+            className="text-xs text-gray-400 hover:text-sky-300"
+          >chép link</button>
+        ) : (
+          <a href={here} target="_blank" rel="noopener noreferrer" title="Mở editor ở tab riêng, tại file và dòng đang mở" className="text-xs text-gray-400 hover:text-sky-300">Tab riêng ↗</a>
+        )}
+        <button onClick={close} className="text-xs text-gray-400 hover:text-white">{standalone ? 'về phòng chat' : 'đóng'}</button>
       </header>
 
       {err && (

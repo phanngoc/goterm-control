@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useStore } from './stores/store'
 import { useGateway } from './hooks/useGateway'
 import { eventsToMessages } from './lib/transcript'
@@ -7,7 +7,10 @@ import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
 import AdminView from './admin/AdminView'
 import type { Me } from './Root'
-import { parseRoute, pathFor, isRefinement, type AdminPane } from './lib/route'
+import { parseRoute, pathFor, isRefinement, lineFromHash, type AdminPane } from './lib/route'
+
+// Monaco is several MB; only the editor's own page and dialog load it.
+const ProjectEditor = lazy(() => import('./admin/ProjectEditor'))
 
 export default function App({ me, onLogout }: { me: Me; onLogout?: () => void }) {
   const { call } = useGateway()
@@ -33,6 +36,9 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // Which room the Messages pane is showing, for the same reason as the task
   // above: one address per room, so a room can be linked and reloaded.
   const [adminChannel, setAdminChannel] = useState<string>('')
+  // The editor on a page of its own: /files/<channel>/<path>#L<line>.
+  const [filesRoute, setFilesRoute] = useState<{ channelId: string; filePath?: string; line?: number } | null>(null)
+  const [filesRoot, setFilesRoot] = useState('')
 
   // Another channel wrote to a session — Telegram, or an agent that claimed a
   // task. Refresh the list (labels, counts), and if that session is the one on
@@ -65,6 +71,10 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       if (r.sessionId) setActiveSessionId(r.sessionId)
       if (r.adminPane) setAdminPane(r.adminPane)
       setAdminTask(r.taskId ?? '')
+      if (r.tab === 'files') {
+        setFilesRoute({ channelId: r.channelId!, filePath: r.filePath, line: lineFromHash(location.hash) })
+        return
+      }
       // Only when the address names one. A bare /admin/messages leaves the
       // pane's own pick alone rather than blanking the room it just chose.
       if (r.channelId) setAdminChannel(r.channelId)
@@ -84,6 +94,11 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // same navigation, not a second one: pushing it would leave a /chat entry
   // that Back returns to and the auto-select immediately leaves again.
   useEffect(() => {
+    // The editor page keeps its own address current (file and line); this
+    // effect knowing nothing of either would only undo that.
+    // The store, not only `tab`: on first load this effect runs in the same
+    // commit as the read above, with `tab` still the default.
+    if (tab === 'files' || useStore.getState().tab === 'files') return
     const path = pathFor({
       tab, sessionId: activeSessionId ?? undefined, adminPane,
       taskId: adminTask || undefined,
@@ -128,8 +143,16 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
 
   // Auto-switch to chat when session selected
   useEffect(() => {
-    if (activeSessionId) setTab('chat')
+    if (activeSessionId && useStore.getState().tab !== 'files') setTab('chat')
   }, [activeSessionId, setTab])
+
+  // The editor page needs the project's folder, for its title bar.
+  useEffect(() => {
+    if (tab !== 'files' || !filesRoute || !connected) return
+    call('channels.list')
+      .then((cs: any) => setFilesRoot((cs || []).find((c: any) => c.id === filesRoute.channelId)?.workspace ?? ''))
+      .catch(() => {})
+  }, [tab, filesRoute, connected, call])
 
   // Opening Chat with nothing selected used to show an empty conversation even
   // when one was in progress — the history was only reachable by going through
@@ -145,6 +168,23 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       })
       .catch(() => {})
   }, [tab, activeSessionId, sessions, setActiveSessionId, setMessages, call])
+
+  if (tab === 'files' && filesRoute) {
+    return (
+      <Suspense fallback={<div className="h-full flex items-center justify-center bg-[#1e1e1e] text-sm text-gray-500">Đang mở editor…</div>}>
+        <ProjectEditor
+          key={filesRoute.channelId}
+          call={call} channelID={filesRoute.channelId} root={filesRoot}
+          standalone initialFile={filesRoute.filePath} initialLine={filesRoute.line}
+          onClose={() => {
+            setAdminChannel(filesRoute.channelId)
+            setAdminPane('messages')
+            setTab('admin')
+          }}
+        />
+      </Suspense>
+    )
+  }
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">

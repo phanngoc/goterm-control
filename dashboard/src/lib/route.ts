@@ -9,7 +9,7 @@
 // Kept as pure functions on purpose — routing is the kind of thing that is
 // easier to test than to debug through a browser.
 
-export type Tab = 'sessions' | 'chat' | 'status' | 'admin'
+export type Tab = 'sessions' | 'chat' | 'status' | 'admin' | 'files'
 export type AdminPane = 'overview' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'skills' | 'settings'
 
 export const ADMIN_PANES: AdminPane[] = ['overview', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'skills', 'settings']
@@ -27,6 +27,11 @@ export interface Route {
    *  the sidebar shared one address, so "read what they said in #Trading"
    *  meant "open Messages and click around until you find it". */
   channelId?: string
+  /** filePath, with tab 'files', is a file inside project channelId's folder:
+   *  /files/<channel>/<path/in/project>, the editor on a page of its own. A
+   *  line rides in the fragment (#L42), which the editor reads and keeps
+   *  current — so the address bar is always a link to exactly where you are. */
+  filePath?: string
 }
 
 /** parseRoute reads a pathname into the view it names. */
@@ -40,6 +45,16 @@ export function parseRoute(pathname: string): Route {
 
     case 'status':
       return { tab: 'status' }
+
+    case 'files':
+      // /files/<channel>[/<path…>]. Without a channel there is nothing to
+      // open, which is the sessions page's job to say, not a blank editor's.
+      if (!parts[1]) return { tab: 'sessions' }
+      return {
+        tab: 'files',
+        channelId: decodeURIComponent(parts[1]),
+        filePath: parts.slice(2).map(decodeURIComponent).join('/') || undefined,
+      }
 
     case 'admin': {
       // An unknown or missing pane lands on Overview rather than a blank panel,
@@ -67,6 +82,8 @@ export function pathFor(r: Route): string {
       return r.sessionId && r.sessionId !== 'new' ? `/chat/${encodeURIComponent(r.sessionId)}` : '/chat'
     case 'status':
       return '/status'
+    case 'files':
+      return filesPath(r.channelId ?? '', r.filePath)
     case 'admin':
       if (r.adminPane === 'tasks' && r.taskId) return `/admin/tasks/${encodeURIComponent(r.taskId)}`
       if (r.adminPane === 'messages' && r.channelId) return `/admin/messages/${encodeURIComponent(r.channelId)}`
@@ -74,6 +91,22 @@ export function pathFor(r: Route): string {
     case 'sessions':
       return '/'
   }
+}
+
+/** filesPath is the editor's address for a file in a project, and optionally a
+ *  line: /files/<channel>/<path>#L<line>. Each path segment is encoded on its
+ *  own so the slashes stay slashes. */
+export function filesPath(channelId: string, filePath?: string, line?: number): string {
+  let p = `/files/${encodeURIComponent(channelId)}`
+  if (filePath) p += '/' + filePath.split('/').map(encodeURIComponent).join('/')
+  if (line && line > 1) p += `#L${line}`
+  return p
+}
+
+/** lineFromHash reads #L42 into 42; anything else is no line. */
+export function lineFromHash(hash: string): number | undefined {
+  const m = /^#L(\d+)/.exec(hash)
+  return m ? Number(m[1]) : undefined
 }
 
 /** isRefinement says whether moving from `here` to `path` is the same
