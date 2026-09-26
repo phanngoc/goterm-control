@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Looking inside a project's folder.
@@ -58,15 +60,36 @@ func (db *DB) projectPath(channelID, rel string) (string, error) {
 	}
 	full := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
 
-	// Compare after resolving symlinks where the target exists: a link inside
-	// the folder pointing at /etc would otherwise pass a string check.
-	if resolved, err := filepath.EvalSymlinks(full); err == nil {
-		full = resolved
-	}
+	// Compare after resolving symlinks: a link inside the folder pointing at
+	// /etc would otherwise pass a string check. A path that does not exist yet
+	// — a file about to be created, a rename's target — is resolved through
+	// its nearest existing ancestor, or "link-to-etc/new.txt" would slip by.
+	full = resolveExisting(full)
 	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
 		return "", fmt.Errorf("coord: %q is outside the project folder", rel)
 	}
 	return full, nil
+}
+
+// resolveExisting resolves symlinks in the longest existing prefix of p and
+// re-attaches the rest.
+func resolveExisting(p string) string {
+	rest := ""
+	cur := p
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			if rest == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // ProjectFilePath resolves one path inside a project to somewhere on disk, or
@@ -147,6 +170,9 @@ func (db *DB) WriteProjectFile(channelID, rel, body string) error {
 			return fmt.Errorf("coord: %s is a directory", rel)
 		}
 		mode = info.Mode()
+		if err := db.checkEditable(channelID, rel, full); err != nil {
+			return err
+		}
 		if _, _, binary, err := db.ReadProjectFile(channelID, rel); err == nil && binary {
 			return fmt.Errorf("coord: %s is a binary file — editing it here would destroy it", rel)
 		}
@@ -206,4 +232,118 @@ func (db *DB) ReadProjectFile(channelID, rel string) (body string, truncated, bi
 		return "", false, true, nil
 	}
 	return string(data), info.Size() > int64(n), false, nil
+}
+
+// ProjectFileMtime is a file's modification time, precise enough to tell two
+// saves in the same second apart. The editor sends back the one it opened, so
+// a save can refuse to overwrite what an agent wrote in the meantime.
+func (db *DB) ProjectFileMtime(channelID, rel string) (string, error) {
+	full, err := db.projectPath(channelID, rel)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", err
+	}
+	return info.ModTime().UTC().Format(time.RFC3339Nano), nil
+}
+
+// A file bigger than what reaches the browser was shown cut, so a save of it
+// would drop everything past the cut. Refused here and not only in the page,
+// because a page is one client and this is every client.
+func (db *DB) checkEditable(channelID, rel, full string) error {
+	info, err := os.Stat(full)
+	if err != nil {
+		return nil // new file
+	}
+	if !info.IsDir() && info.Size() > MaxProjectFileBytes {
+		return fmt.Errorf("coord: %s is larger than %d KB — too large to edit here", rel, MaxProjectFileBytes>>10)
+	}
+	return nil
+}
+
+// entryPath resolves rel to the directory entry itself, without following a
+// symlink in its last component. Delete and rename act on names: deleting a
+// link called "current" that points at "v2/" must remove the link, not v2.
+func (db *DB) entryPath(channelID, rel string) (string, error) {
+	clean := path.Clean(filepath.ToSlash(rel))
+	base := path.Base(clean)
+	if clean == "." || clean == "/" || base == ".." {
+		return "", fmt.Errorf("coord: %q names no file", rel)
+	}
+	dir := path.Dir(clean)
+	if dir == "." {
+		dir = ""
+	}
+	parent, err := db.projectPath(channelID, dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, base), nil
+}
+
+// MakeProjectDir creates a folder (and its parents) inside a project.
+func (db *DB) MakeProjectDir(channelID, rel string) error {
+	if strings.TrimSpace(rel) == "" {
+		return fmt.Errorf("coord: which folder?")
+	}
+	full, err := db.projectPath(channelID, rel)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(full); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("coord: %s already exists", rel)
+		}
+		return fmt.Errorf("coord: %s is a file", rel)
+	}
+	return os.MkdirAll(full, 0o755)
+}
+
+// RenameProjectPath moves a file or folder within one project. It will not
+// overwrite: a rename that lands on an existing name destroys that file, and
+// nothing about a rename says the person meant to.
+func (db *DB) RenameProjectPath(channelID, from, to string) error {
+	if strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" {
+		return fmt.Errorf("coord: rename needs a source and a target")
+	}
+	src, err := db.entryPath(channelID, from)
+	if err != nil {
+		return err
+	}
+	dst, err := db.entryPath(channelID, to)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(src); err != nil {
+		return fmt.Errorf("rename %s: %w", from, err)
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("coord: %s already exists", to)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("rename %s: %w", from, err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return fmt.Errorf("rename %s: %w", from, err)
+	}
+	return nil
+}
+
+// DeleteProjectPath removes a file, or a folder with everything in it. The
+// project folder itself is refused: that is deleting the project, which is
+// not something a file tree's delete button should be able to do.
+func (db *DB) DeleteProjectPath(channelID, rel string) error {
+	if strings.TrimSpace(rel) == "" {
+		return fmt.Errorf("coord: which file?")
+	}
+	full, err := db.entryPath(channelID, rel)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(full); err != nil {
+		return fmt.Errorf("delete %s: %w", rel, err)
+	}
+	return os.RemoveAll(full)
 }

@@ -214,6 +214,14 @@ type projectFilesParams struct {
 	// a thing you can save: "" is a legitimate document, and a bare string
 	// field could not tell it from "not writing".
 	Body *string `json:"body,omitempty"`
+	// BaseMtime, with Body, is the mtime the editor opened the file at. The
+	// save is refused if the file changed since — an agent works in this
+	// folder too, and a blind overwrite loses what it wrote. Empty skips the
+	// check (a new file, or the person chose to overwrite).
+	BaseMtime string `json:"base_mtime,omitempty"`
+	// Op is one of "mkdir", "rename" (Path → To) or "delete".
+	Op string `json:"op,omitempty"`
+	To string `json:"to,omitempty"`
 }
 
 // handleProjectFiles browses a project's folder — the place the work actually
@@ -229,7 +237,32 @@ func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, err
 	if p.ChannelID == "" {
 		return nil, fmt.Errorf("channel_id is required")
 	}
+	switch p.Op {
+	case "":
+	case "mkdir":
+		if err := deps.Coord.MakeProjectDir(p.ChannelID, p.Path); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"path": p.Path, "done": true})
+	case "rename":
+		if err := deps.Coord.RenameProjectPath(p.ChannelID, p.Path, p.To); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"path": p.To, "done": true})
+	case "delete":
+		if err := deps.Coord.DeleteProjectPath(p.ChannelID, p.Path); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"path": p.Path, "done": true})
+	default:
+		return nil, fmt.Errorf("unknown op %q", p.Op)
+	}
 	if p.Body != nil {
+		if p.BaseMtime != "" {
+			if now, err := deps.Coord.ProjectFileMtime(p.ChannelID, p.Path); err == nil && now != p.BaseMtime {
+				return nil, fmt.Errorf("conflict: %s changed on disk since it was opened", p.Path)
+			}
+		}
 		if err := deps.Coord.WriteProjectFile(p.ChannelID, p.Path, *p.Body); err != nil {
 			return nil, err
 		}
@@ -237,8 +270,9 @@ func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, err
 		if err != nil {
 			return nil, err
 		}
+		mtime, _ := deps.Coord.ProjectFileMtime(p.ChannelID, p.Path)
 		return json.Marshal(map[string]any{
-			"path": p.Path, "body": body, "truncated": truncated, "binary": binary, "saved": true,
+			"path": p.Path, "body": body, "truncated": truncated, "binary": binary, "saved": true, "mtime": mtime,
 		})
 	}
 	if !p.Read {
@@ -252,8 +286,9 @@ func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
+	mtime, _ := deps.Coord.ProjectFileMtime(p.ChannelID, p.Path)
 	return json.Marshal(map[string]any{
-		"path": p.Path, "body": body, "truncated": truncated, "binary": binary,
+		"path": p.Path, "body": body, "truncated": truncated, "binary": binary, "mtime": mtime,
 	})
 }
 

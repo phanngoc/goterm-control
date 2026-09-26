@@ -209,3 +209,80 @@ func TestAnEmptyFileCanBeSaved(t *testing.T) {
 		t.Fatalf("clearing the file left %q", body)
 	}
 }
+
+func TestAFileCreatedThroughASymlinkOutIsRefused(t *testing.T) {
+	db, c := projectWith(t, nil)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(c.Workspace, "out")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WriteProjectFile(c.ID, "out/new.txt", "x"); err == nil {
+		t.Fatal("a new file under a link pointing out of the project was written")
+	}
+	if err := db.MakeProjectDir(c.ID, "out/sub"); err == nil {
+		t.Fatal("a folder under a link pointing out of the project was created")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new.txt")); err == nil {
+		t.Fatal("the file landed outside the project")
+	}
+}
+
+func TestMakeRenameDeleteInsideAProject(t *testing.T) {
+	db, c := projectWith(t, map[string]string{"a.md": "A", "keep/x.txt": "X"})
+
+	if err := db.MakeProjectDir(c.ID, "docs/deep"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MakeProjectDir(c.ID, "docs/deep"); err == nil {
+		t.Fatal("making an existing folder was not refused")
+	}
+	if err := db.RenameProjectPath(c.ID, "a.md", "docs/a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if body, _, _, _ := db.ReadProjectFile(c.ID, "docs/a.md"); body != "A" {
+		t.Fatalf("renamed file reads %q", body)
+	}
+	if err := db.RenameProjectPath(c.ID, "docs/a.md", "keep/x.txt"); err == nil {
+		t.Fatal("a rename onto an existing file was not refused")
+	}
+	if err := db.RenameProjectPath(c.ID, "keep/x.txt", "../x.txt"); err == nil {
+		t.Fatal("a rename out of the project was not refused")
+	}
+	if err := db.DeleteProjectPath(c.ID, "docs"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Workspace, "docs")); !os.IsNotExist(err) {
+		t.Fatal("deleted folder is still there")
+	}
+	for _, bad := range []string{"", ".", "..", "../keep", "/etc"} {
+		if err := db.DeleteProjectPath(c.ID, bad); err == nil {
+			t.Fatalf("delete %q was not refused", bad)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.Workspace, "keep", "x.txt")); err != nil {
+		t.Fatal("a refused delete removed something")
+	}
+}
+
+func TestDeletingASymlinkRemovesTheLinkNotItsTarget(t *testing.T) {
+	db, c := projectWith(t, map[string]string{"v2/data.json": "{}"})
+	if err := os.Symlink(filepath.Join(c.Workspace, "v2"), filepath.Join(c.Workspace, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeleteProjectPath(c.ID, "current"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Workspace, "v2", "data.json")); err != nil {
+		t.Fatal("deleting the link deleted what it pointed at")
+	}
+	if _, err := os.Lstat(filepath.Join(c.Workspace, "current")); !os.IsNotExist(err) {
+		t.Fatal("the link is still there")
+	}
+}
+
+func TestAFileTooLargeToShowWholeCannotBeSavedOver(t *testing.T) {
+	db, c := projectWith(t, map[string]string{"big.log": strings.Repeat("x", MaxProjectFileBytes+1)})
+	if err := db.WriteProjectFile(c.ID, "big.log", "cut"); err == nil {
+		t.Fatal("a save over a file larger than what the editor received was not refused")
+	}
+}
