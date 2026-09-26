@@ -249,7 +249,15 @@ func (db *DB) UpdateChannelGateway(id, mode, label, target, secret string) (Chan
 	// destination in one sweep. That is the same flood Since exists to prevent
 	// on a fresh bind.
 	if old.Mode == ForwardOff && mode != ForwardOff {
-		since = ts(now)
+		// Past the newest line in the room, not merely "now". A room's lines
+		// carry the instant they were written, and on a coarse clock several
+		// written in the same tick are pushed a nanosecond apart to keep their
+		// order — which puts them AHEAD of what time.Now() reads back. A
+		// cut-off taken from the clock then sits behind lines that already
+		// exist, and `created_at > since` lets the whole pause through: the
+		// exact flood this branch is here to stop. AddChannelGateway was fixed
+		// the same way; this is the other half of it.
+		since = ts(db.nextMessageTime(old.ChannelID))
 	}
 	_, err = db.conn.Exec(`UPDATE channel_gateways
 		SET mode = ?, label = ?, target = ?, secret = ?, since = ?, updated_at = ?
