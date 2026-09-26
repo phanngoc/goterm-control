@@ -305,7 +305,7 @@ function Project({ call, detail, projects, onChanged, onOpenFiles }: {
               onClick={() => onOpenFiles(detail.project!.id)}
               className="shrink-0 text-[11px] text-sky-300 hover:underline"
             >
-              mở folder
+              Preview ▸
             </button>
           )}
         </div>

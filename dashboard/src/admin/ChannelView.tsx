@@ -1,11 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { ArtifactModal, isPage } from './ArtifactView'
 import GatewayEditor from './GatewayEditor'
 
-// Monaco is several MB; nobody pays for it until they open a project's files.
-const ProjectEditor = lazy(() => import('./ProjectEditor'))
 import { ago, clock } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -19,7 +17,7 @@ type Call = (method: string, params?: any) => Promise<any>
 
 const PAGE = 30
 
-export default function ChannelView({ call, agents, selfID, bots, channelID, onChannel, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
+export default function ChannelView({ call, agents, selfID, bots, channelID, onChannel, openThreadID, onOpenedThread, onOpenTask }: {
   call: Call; agents: string[]; selfID: string
   /** channelID is the room on screen, and onChannel is how it changes. The
    *  selection lives in the address bar rather than in this component, so a
@@ -30,9 +28,6 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
    *  offer the private chat that agent actually answers on. */
   bots?: Record<string, string>
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
-  /** openFilesFor is a project whose folder should open on arrival — the board
-   *  sends a task here when someone asks where its work landed. */
-  openFilesFor?: string; onOpenedFiles?: () => void
 }) {
   const [channels, setChannels] = useState<Channel[]>([])
   const active = channelID
@@ -55,8 +50,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   const [files, setFiles] = useState<Artifact[]>([])
   const [more, setMore] = useState(false)
   const [briefFor, setBriefFor] = useState('')
-  const [filesFor, setFilesFor] = useState('')
-  // Where each room speaks outside the dashboard. Loaded for every room at
+    // Where each room speaks outside the dashboard. Loaded for every room at
   // once — it is a short list — so the header can show a count without a call
   // per room.
   const [gateways, setGateways] = useState<ChannelGateway[]>([])
@@ -185,12 +179,6 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // Arriving from the board: open the project's folder, which is where a
   // task's work actually lands. Selecting the room too, so closing the browser
   // leaves you somewhere that makes sense rather than on whatever was open.
-  useEffect(() => {
-    if (!openFilesFor) return
-    setActive(openFilesFor)
-    setFilesFor(openFilesFor)
-    onOpenedFiles?.()
-  }, [openFilesFor, onOpenedFiles])
 
   // Poll: an agent posting from its own shell has no way to push to this page.
   //
@@ -288,30 +276,6 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           <span className="text-sm text-gray-200 font-medium">{current?.name ?? '—'}</span>
           {current?.purpose && <span className="text-xs text-gray-500 truncate">{current.purpose}</span>}
           {current?.workspace && (
-            <button
-              onClick={() => setFilesFor(current.id)}
-              title={current.workspace}
-              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
-            >
-              Files
-            </button>
-          )}
-          {current?.workspace && (
-            // Browsing the files shows the source; this shows the result. A
-            // page the work produced is served from its own folder, so its
-            // relative requests for data and images resolve — which a single
-            // file opened on its own cannot do.
-            <a
-              href={`/project/${current.id}/`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Mở thư mục dự án trong tab mới — trang nào có sẽ chạy thật"
-              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
-            >
-              Mở ↗
-            </a>
-          )}
-          {current?.workspace && (
             // The running project — its dev server, from bomclaw.json — beside
             // its code, on the editor's own page.
             <a
@@ -398,17 +362,6 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           onChanged={loadChannels}
           onClose={() => setGatewaysFor('')}
         />
-      )}
-      {filesFor && (
-        <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 text-sm text-gray-400">Đang mở editor…</div>}>
-          <ProjectEditor
-            call={call} channelID={filesFor}
-            // By id rather than from `current`: arriving from the board sets both
-            // at once, and `current` is whatever the list has resolved so far.
-            root={channels.find(c => c.id === filesFor)?.workspace ?? ''}
-            onClose={() => setFilesFor('')}
-          />
-        </Suspense>
       )}
 
       {/* Thread */}

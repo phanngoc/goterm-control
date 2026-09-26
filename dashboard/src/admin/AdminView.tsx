@@ -44,7 +44,6 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
   const [openThread, setOpenThread] = useState<string>('')
   // And a project whose folder the board wants opened: "where did this task's
   // work land" is one click from the task, not a hunt through the rooms.
-  const [openFiles, setOpenFiles] = useState<string>('')
 
   // The overview drives the agent list every other pane filters by, so it is
   // refreshed regardless of which pane is showing.
@@ -122,7 +121,8 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
             call={call} agents={agentIDs}
             openTaskID={taskId} onOpenTask={onTaskId}
             onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
-            onOpenFiles={channelID => { setOpenFiles(channelID); onPane('messages') }}
+            // The project's editor page, with the running project beside it.
+            onOpenFiles={channelID => window.open(`/files/${encodeURIComponent(channelID)}?preview=1`, '_blank', 'noopener')}
           />
         )}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
@@ -134,7 +134,6 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
             call={call} agents={agentIDs} selfID={selfID} bots={bots}
             channelID={channelId} onChannel={onChannelId}
             openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
-            openFilesFor={openFiles} onOpenedFiles={() => setOpenFiles('')}
             onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
           />
         )}
