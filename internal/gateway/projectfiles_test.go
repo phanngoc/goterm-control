@@ -82,3 +82,21 @@ func TestFileTreeOperations(t *testing.T) {
 		t.Fatal("an unknown op was not refused")
 	}
 }
+
+func TestIndexAndSearchThroughTheMethod(t *testing.T) {
+	deps, p := projectServeDeps(t)
+	idx, err := filesCall(t, deps, map[string]any{"channel_id": p.ID, "op": "index"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, _ := idx["paths"].([]any); len(paths) == 0 {
+		t.Fatalf("index = %v", idx)
+	}
+	res, err := filesCall(t, deps, map[string]any{"channel_id": p.ID, "op": "search", "query": "zzz-nowhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := res["matches"].([]any); !ok || len(m) != 0 {
+		t.Fatalf("no matches should be an empty list, got %v", res["matches"])
+	}
+}

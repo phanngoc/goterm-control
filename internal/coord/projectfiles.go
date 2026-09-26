@@ -2,13 +2,17 @@ package coord
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Looking inside a project's folder.
@@ -346,4 +350,172 @@ func (db *DB) DeleteProjectPath(channelID, rel string) error {
 		return fmt.Errorf("delete %s: %w", rel, err)
 	}
 	return os.RemoveAll(full)
+}
+
+// Finding things in a project: every file by name (the editor's Cmd+P) and
+// every line that matches (Cmd+Shift+F).
+//
+// Both walk the folder on each call rather than keeping an index: agents write
+// here constantly, and a stale index answers "no such file" about the file an
+// agent created a minute ago. A project is hundreds of files, not millions,
+// and the caps below keep an unusual one from holding the page.
+
+// skipDirs are folders nobody means when they search their project: tool
+// caches and dependency trees, often larger than the project itself.
+var skipDirs = map[string]bool{
+	".git": true, "node_modules": true, "__pycache__": true, ".venv": true, "venv": true,
+	".mypy_cache": true, ".pytest_cache": true, ".next": true, ".cache": true, "target": true,
+}
+
+const (
+	// MaxIndexedFiles caps the name index.
+	MaxIndexedFiles = 20000
+	// MaxSearchMatches caps one content search.
+	MaxSearchMatches = 1000
+	// maxSearchFileBytes skips big files — generated JSON, logs, dumps — which
+	// would dominate both the time and the results.
+	maxSearchFileBytes = 1 << 20
+)
+
+// walkProject calls fn for each regular file under the project, skipping
+// skipDirs and never following a symlink out (WalkDir does not follow them).
+// fn returns false to stop.
+func (db *DB) walkProject(channelID string, fn func(rel, full string, size int64) bool) error {
+	root, err := db.projectPath(channelID, "")
+	if err != nil {
+		return err
+	}
+	stop := errors.New("stop")
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entry: skip it, keep the rest
+		}
+		if d.IsDir() {
+			if p != root && skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		if !fn(filepath.ToSlash(rel), p, info.Size()) {
+			return stop
+		}
+		return nil
+	})
+	if errors.Is(err, stop) {
+		return nil
+	}
+	return err
+}
+
+// ProjectFileIndex lists every file in a project by path, and whether the
+// list was cut at MaxIndexedFiles.
+func (db *DB) ProjectFileIndex(channelID string) (paths []string, truncated bool, err error) {
+	err = db.walkProject(channelID, func(rel, _ string, _ int64) bool {
+		if len(paths) >= MaxIndexedFiles {
+			truncated = true
+			return false
+		}
+		paths = append(paths, rel)
+		return true
+	})
+	return paths, truncated, err
+}
+
+// SearchMatch is one line that matched.
+type SearchMatch struct {
+	Path string `json:"path"`
+	Line int    `json:"line"` // 1-based
+	Col  int    `json:"col"`  // 1-based, in characters
+	Len  int    `json:"len"`  // match length in characters
+	Text string `json:"text"` // the line, cut to a readable length
+	At   int    `json:"at"`   // where the match starts in Text, in characters
+}
+
+// SearchOptions shapes a content search.
+type SearchOptions struct {
+	CaseSensitive bool
+	Regex         bool
+	WholeWord     bool
+}
+
+// SearchProject finds lines matching query in the project's text files.
+// Binary files and files over 1 MB are skipped; the result says how many.
+func (db *DB) SearchProject(channelID, query string, opt SearchOptions) (matches []SearchMatch, skipped int, truncated bool, err error) {
+	if query == "" {
+		return nil, 0, false, fmt.Errorf("coord: search for what?")
+	}
+	pattern := query
+	if !opt.Regex {
+		pattern = regexp.QuoteMeta(query)
+	}
+	if opt.WholeWord {
+		pattern = `\b(?:` + pattern + `)\b`
+	}
+	if !opt.CaseSensitive {
+		pattern = "(?i)" + pattern
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("coord: bad pattern: %w", err)
+	}
+
+	err = db.walkProject(channelID, func(rel, full string, size int64) bool {
+		if size > maxSearchFileBytes {
+			skipped++
+			return true
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return true
+		}
+		if bytes.IndexByte(data[:min(len(data), 8000)], 0) >= 0 {
+			return true // binary
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			loc := re.FindStringIndex(line)
+			if loc == nil || loc[0] == loc[1] {
+				continue
+			}
+			if len(matches) >= MaxSearchMatches {
+				truncated = true
+				return false
+			}
+			matches = append(matches, searchMatch(rel, i+1, strings.TrimRight(line, "\r"), loc))
+		}
+		return true
+	})
+	return matches, skipped, truncated, err
+}
+
+// searchMatch cuts a long line around its match — a minified file is one line
+// of a megabyte — and reports positions in characters, which is what an
+// editor counts.
+func searchMatch(rel string, line int, text string, loc []int) SearchMatch {
+	const before, maxRunes = 40, 240
+	col := utf8.RuneCountInString(text[:loc[0]]) + 1
+	n := utf8.RuneCountInString(text[loc[0]:loc[1]])
+	runes := []rune(text)
+	start := 0
+	if col-1 > before {
+		start = col - 1 - before
+	}
+	end := min(len(runes), start+maxRunes)
+	shown := string(runes[start:end])
+	at := col - 1 - start
+	if start > 0 {
+		shown = "…" + shown
+		at++
+	}
+	if end < len(runes) {
+		shown += "…"
+	}
+	return SearchMatch{Path: rel, Line: line, Col: col, Len: n, Text: shown, At: at}
 }

@@ -219,9 +219,15 @@ type projectFilesParams struct {
 	// folder too, and a blind overwrite loses what it wrote. Empty skips the
 	// check (a new file, or the person chose to overwrite).
 	BaseMtime string `json:"base_mtime,omitempty"`
-	// Op is one of "mkdir", "rename" (Path → To) or "delete".
+	// Op is one of "mkdir", "rename" (Path → To), "delete", "index" (every
+	// file by path) or "search" (Query, with the three flags below).
 	Op string `json:"op,omitempty"`
 	To string `json:"to,omitempty"`
+
+	Query         string `json:"query,omitempty"`
+	CaseSensitive bool   `json:"case_sensitive,omitempty"`
+	Regex         bool   `json:"regex,omitempty"`
+	WholeWord     bool   `json:"whole_word,omitempty"`
 }
 
 // handleProjectFiles browses a project's folder — the place the work actually
@@ -254,6 +260,23 @@ func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, err
 			return nil, err
 		}
 		return json.Marshal(map[string]any{"path": p.Path, "done": true})
+	case "index":
+		paths, truncated, err := deps.Coord.ProjectFileIndex(p.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"paths": paths, "truncated": truncated})
+	case "search":
+		matches, skipped, truncated, err := deps.Coord.SearchProject(p.ChannelID, p.Query, coord.SearchOptions{
+			CaseSensitive: p.CaseSensitive, Regex: p.Regex, WholeWord: p.WholeWord,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if matches == nil {
+			matches = []coord.SearchMatch{}
+		}
+		return json.Marshal(map[string]any{"matches": matches, "skipped": skipped, "truncated": truncated})
 	default:
 		return nil, fmt.Errorf("unknown op %q", p.Op)
 	}

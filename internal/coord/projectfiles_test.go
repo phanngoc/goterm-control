@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,5 +285,73 @@ func TestAFileTooLargeToShowWholeCannotBeSavedOver(t *testing.T) {
 	db, c := projectWith(t, map[string]string{"big.log": strings.Repeat("x", MaxProjectFileBytes+1)})
 	if err := db.WriteProjectFile(c.ID, "big.log", "cut"); err == nil {
 		t.Fatal("a save over a file larger than what the editor received was not refused")
+	}
+}
+
+func TestTheFileIndexSkipsToolCaches(t *testing.T) {
+	db, c := projectWith(t, map[string]string{
+		"a.py": "", "src/b.go": "", "node_modules/x/index.js": "", ".git/HEAD": "", "src/__pycache__/b.pyc": "",
+	})
+	paths, truncated, err := db.ProjectFileIndex(c.ID)
+	if err != nil || truncated {
+		t.Fatal(err, truncated)
+	}
+	if strings.Join(paths, ",") != "AGENTS.md,a.py,src/b.go" {
+		t.Fatalf("index = %v", paths)
+	}
+}
+
+func TestSearchProjectFindsLinesWithPositions(t *testing.T) {
+	db, c := projectWith(t, map[string]string{
+		"main.go":    "package main\n\nfunc Fetch() {}\n// fetch again\n",
+		"notes.md":   "Việt Nam fetch dữ liệu\n",
+		"blob.bin":   "fetch\x00\x00",
+		"big.json":   strings.Repeat("fetch ", maxSearchFileBytes/6+10),
+		"vendor.txt": "prefetcher\n",
+	})
+	m, skipped, _, err := db.SearchProject(c.ID, "fetch", SearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want the one big file", skipped)
+	}
+	got := map[string]SearchMatch{}
+	for _, x := range m {
+		got[fmt.Sprintf("%s:%d", x.Path, x.Line)] = x
+	}
+	if len(m) != 4 {
+		t.Fatalf("case-insensitive matches = %v", m)
+	}
+	if x := got["notes.md:1"]; x.Col != 10 || x.Len != 5 || []rune(x.Text)[x.At] != 'f' {
+		t.Errorf("column counted in bytes, not characters: %+v", x)
+	}
+	if _, ok := got["blob.bin:1"]; ok {
+		t.Error("a binary file was searched")
+	}
+
+	m, _, _, _ = db.SearchProject(c.ID, "Fetch", SearchOptions{CaseSensitive: true})
+	if len(m) != 1 || m[0].Line != 3 {
+		t.Errorf("case-sensitive = %v", m)
+	}
+	m, _, _, _ = db.SearchProject(c.ID, "fetch", SearchOptions{WholeWord: true})
+	for _, x := range m {
+		if x.Path == "vendor.txt" {
+			t.Error("whole word matched inside prefetcher")
+		}
+	}
+	m, _, _, _ = db.SearchProject(c.ID, `func \w+\(`, SearchOptions{Regex: true})
+	if len(m) != 1 {
+		t.Errorf("regex = %v", m)
+	}
+	if _, _, _, err := db.SearchProject(c.ID, "(", SearchOptions{Regex: true}); err == nil {
+		t.Error("a bad regex was not reported")
+	}
+}
+
+func TestALongLineIsCutAroundItsMatch(t *testing.T) {
+	x := searchMatch("min.js", 1, strings.Repeat("a", 5000)+"NEEDLE"+strings.Repeat("b", 5000), []int{5000, 5006})
+	if len([]rune(x.Text)) > 245 || string([]rune(x.Text)[x.At:x.At+6]) != "NEEDLE" || x.Col != 5001 {
+		t.Fatalf("cut line = %d runes, at=%d col=%d", len([]rune(x.Text)), x.At, x.Col)
 	}
 }
