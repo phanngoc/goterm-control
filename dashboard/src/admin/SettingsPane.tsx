@@ -106,7 +106,9 @@ function AgentCard({ agent, call, onChanged }: { agent: AgentSettings; call: Cal
         </div>
         {agent.error && <p className="text-xs text-gray-500 font-mono truncate">{agent.error}</p>}
         {!agent.can_restart && (
-          <p className="text-xs text-gray-500">Không có service của agent này trên máy — phải bật từ máy của nó.</p>
+          <p className="text-xs text-gray-500">
+            Gateway đang mở màn này không chạy dưới service manager, nên không bật hộ được.
+          </p>
         )}
       </div>
     )
