@@ -7,6 +7,7 @@ import { filesPath } from '../lib/route'
 
 // xterm loads only when a terminal is first opened.
 const TerminalPanel = lazy(() => import('./TerminalPanel'))
+const PreviewPanel = lazy(() => import('./PreviewPanel'))
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -48,7 +49,7 @@ const narrow = () => window.innerWidth < 768
 // Agents write in this folder while it is open. A save therefore carries the
 // mtime the file was opened at and is refused if the file moved on since; the
 // person then picks between the version on disk and their own.
-export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine }: {
+export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine, initialPreview }: {
   call: Call; channelID: string; root: string; onClose: () => void
   /** standalone is the editor as its own page, /files/<channel>/<path>: it
    *  keeps the address bar pointing at the open file and line. */
@@ -56,6 +57,8 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   /** initialFile (and initialLine) open on arrival — a link to a spot. */
   initialFile?: string
   initialLine?: number
+  /** initialPreview opens the Preview panel on arrival (?preview=1). */
+  initialPreview?: boolean
 }) {
   const [dirs, setDirs] = useState<Record<string, Entry[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
@@ -77,6 +80,23 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const [termMounted, setTermMounted] = useState(false)
   const [termMax, setTermMax] = useState(false)
   const [termHeight, setTermHeight] = useState(() => Math.round(window.innerHeight * 0.35))
+  // The running project, beside the code.
+  const [previewOpen, setPreviewOpen] = useState(!!initialPreview)
+  const [previewWidth, setPreviewWidth] = useState(() => Math.round(window.innerWidth * 0.45))
+  const startPreviewDrag = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = previewWidth
+    const move = (ev: PointerEvent) => {
+      setPreviewWidth(Math.max(280, Math.min(window.innerWidth - 320, startW + (startX - ev.clientX))))
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   // A search hit waits here until its file's model is in the editor.
   const pendingReveal = useRef<{ path: string; at: Reveal } | null>(null)
@@ -511,6 +531,10 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           <a href={here} target="_blank" rel="noopener noreferrer" title="Mở editor ở tab riêng, tại file và dòng đang mở" className="text-xs text-gray-400 hover:text-sky-300">Tab riêng ↗</a>
         )}
         <button
+          onClick={() => setPreviewOpen(o => !o)} title="Chạy và xem dự án (bomclaw.json)"
+          className={`text-xs ${previewOpen ? 'text-sky-300' : 'text-gray-400 hover:text-white'}`}
+        >Preview</button>
+        <button
           onClick={toggleTerm} title="Terminal trong thư mục dự án (Ctrl+`)"
           className={`text-xs ${termOpen ? 'text-sky-300' : 'text-gray-400 hover:text-white'}`}
         >Terminal</button>
@@ -559,7 +583,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
         )}
 
         {/* Editor area */}
-        <main className="flex-1 min-w-0 flex flex-col">
+        <main className="flex-1 min-w-0 flex flex-col" hidden={previewOpen && narrow()}>
           {/* Tabs */}
           <div className="flex items-stretch h-9 bg-[#181818] overflow-x-auto shrink-0">
             {tabs.map(t => (
@@ -677,6 +701,19 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
             )}
           </footer>
         </main>
+
+        {previewOpen && (
+          <>
+            {!narrow() && (
+              <div onPointerDown={startPreviewDrag} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
+            )}
+            <div className="shrink-0 min-w-0" style={narrow() ? { width: '100%' } : { width: previewWidth }}>
+              <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở preview…</div>}>
+                <PreviewPanel call={call} channelID={channelID} onClose={() => setPreviewOpen(false)} />
+              </Suspense>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
