@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { monaco } from './monacoSetup'
 import MessageMarkdown from '../components/MessageMarkdown'
+import { QuickOpen, SearchPanel, type Reveal } from './EditorFinders'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -57,6 +58,12 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
   const [lang, setLang] = useState('')
   const [live, setLive] = useState('') // the active buffer, for the markdown preview
   const [sidebar, setSidebar] = useState(true)
+  const [view, setView] = useState<'explorer' | 'search'>('explorer')
+  const [quickOpen, setQuickOpen] = useState(false)
+  const [searchFocus, setSearchFocus] = useState(0)
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  // A search hit waits here until its file's model is in the editor.
+  const pendingReveal = useRef<{ path: string; at: Reveal } | null>(null)
 
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
@@ -117,10 +124,24 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
     } as Tab
   }
 
-  const openFile = async (path: string) => {
+  const revealIn = (ed: monaco.editor.IStandaloneCodeEditor, at: Reveal) => {
+    ed.revealLineInCenter(at.line)
+    ed.setSelection(new monaco.Range(at.line, at.col, at.line, at.col + at.len))
+    ed.focus()
+  }
+
+  const openFile = async (path: string, at?: Reveal) => {
     setFolder(parentOf(path))
     if (narrow()) setSidebar(false)
-    if (tabsRef.current.some(t => t.path === path)) { setActive(path); return }
+    pendingReveal.current = at ? { path, at } : null
+    if (tabsRef.current.some(t => t.path === path)) {
+      if (path === activeRef.current && at && editorRef.current) {
+        pendingReveal.current = null
+        revealIn(editorRef.current, at)
+      }
+      setActive(path)
+      return
+    }
     try {
       const tab = await read(path)
       // A model left from a tab closed without disposing would show old text.
@@ -187,20 +208,40 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
     }
   }
 
-  // Cmd+S anywhere in the editor window, not only with the cursor in Monaco.
+  // Cmd+P opens a file by name, Cmd+Shift+F searches every file.
+  const findFile = () => setQuickOpen(true)
+  const findInFiles = () => {
+    setSidebar(true)
+    setView('search')
+    setSearchFocus(n => n + 1)
+  }
+  const findFileRef = useRef(findFile)
+  findFileRef.current = findFile
+  const findInFilesRef = useRef(findInFiles)
+  findInFilesRef.current = findInFiles
+
+  // The shortcuts anywhere in the editor window, not only with the cursor in
+  // Monaco. Capture phase, so the browser's own Cmd+P (print) never opens.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault()
-        saveRef.current()
-      }
+      if (!(e.metaKey || e.ctrlKey)) return
+      const k = e.key.toLowerCase()
+      if (k === 's' && !e.shiftKey) { e.preventDefault(); saveRef.current() }
+      else if (k === 'p' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); findFileRef.current() }
+      else if (k === 'f' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); findInFilesRef.current() }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
   const onMount: OnMount = (editor, m) => {
+    editorRef.current = editor
+    // The editor unmounts when no text file is showing; a stale handle would
+    // be a disposed editor.
+    editor.onDidDispose(() => { if (editorRef.current === editor) editorRef.current = null })
     editor.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => saveRef.current())
+    editor.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyP, () => findFileRef.current())
+    editor.addCommand(m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyF, () => findInFilesRef.current())
     editor.onDidChangeCursorPosition(e => setCursor({ line: e.position.lineNumber, col: e.position.column }))
     // Opening a file is a request to work in it: the cursor goes there, not
     // back to the tree row or button that was clicked.
@@ -209,6 +250,11 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
       setLang(model?.getLanguageId() ?? '')
       setLive(model?.getValue() ?? '')
       editor.focus()
+      const pending = pendingReveal.current
+      if (pending && model && model.uri.toString() === uriFor(pending.path).toString()) {
+        pendingReveal.current = null
+        revealIn(editor, pending.at)
+      }
     }
     editor.onDidChangeModel(syncModel)
     syncModel()
@@ -353,6 +399,13 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#1e1e1e] text-gray-200">
+      {quickOpen && (
+        <QuickOpen
+          call={call} channelID={channelID} recent={tabs.map(t => t.path)}
+          onOpen={p => { setQuickOpen(false); openFile(p) }}
+          onClose={() => { setQuickOpen(false); editorRef.current?.focus() }}
+        />
+      )}
       {/* Title bar */}
       <header className="flex items-center gap-3 h-10 px-3 border-b border-black/40 bg-[#181818] text-sm shrink-0">
         <button onClick={() => setSidebar(s => !s)} title="Ẩn/hiện cây thư mục" className="text-gray-400 hover:text-white">☰</button>
@@ -373,19 +426,33 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
         {/* Explorer */}
         {sidebar && (
           <aside className="w-64 max-w-[45vw] shrink-0 flex flex-col border-r border-black/40 bg-[#181818]">
-            <div className="flex items-center gap-1 px-3 h-8 text-[11px] uppercase tracking-wide text-gray-500 shrink-0">
-              <span className="truncate">Explorer</span>
-              <span className="ml-auto flex gap-1 normal-case tracking-normal">
-                <button onClick={newFile} title="File mới" className="px-1 text-gray-400 hover:text-white">+file</button>
-                <button onClick={newFolder} title="Thư mục mới" className="px-1 text-gray-400 hover:text-white">+dir</button>
-                <button onClick={refresh} title="Làm mới" className="px-1 text-gray-400 hover:text-white">⟳</button>
-              </span>
+            <div className="flex items-center gap-2 px-3 h-8 text-[11px] uppercase tracking-wide shrink-0">
+              <button
+                onClick={() => setView('explorer')}
+                className={view === 'explorer' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}
+              >Explorer</button>
+              <button
+                onClick={findInFiles} title="Tìm trong mọi file (⌘⇧F)"
+                className={view === 'search' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}
+              >Search</button>
+              {view === 'explorer' && (
+                <span className="ml-auto flex gap-1 normal-case tracking-normal">
+                  <button onClick={findFile} title="Mở file theo tên (⌘P)" className="px-1 text-gray-400 hover:text-white">⌘P</button>
+                  <button onClick={newFile} title="File mới" className="px-1 text-gray-400 hover:text-white">+file</button>
+                  <button onClick={newFolder} title="Thư mục mới" className="px-1 text-gray-400 hover:text-white">+dir</button>
+                  <button onClick={refresh} title="Làm mới" className="px-1 text-gray-400 hover:text-white">⟳</button>
+                </span>
+              )}
             </div>
-            <div
-              onClick={() => setFolder('')}
-              className={`px-3 py-1 text-[12px] font-medium cursor-pointer ${folder === '' ? 'text-gray-100' : 'text-gray-400'}`}
-            >{project}</div>
-            <div className="flex-1 overflow-y-auto pb-4">{renderDir('', 0)}</div>
+            {view === 'search' ? (
+              <SearchPanel call={call} channelID={channelID} focusKey={searchFocus} onOpen={openFile} />
+            ) : (<>
+              <div
+                onClick={() => setFolder('')}
+                className={`px-3 py-1 text-[12px] font-medium cursor-pointer ${folder === '' ? 'text-gray-100' : 'text-gray-400'}`}
+              >{project}</div>
+              <div className="flex-1 overflow-y-auto pb-4">{renderDir('', 0)}</div>
+            </>)}
           </aside>
         )}
 
@@ -434,7 +501,7 @@ export default function ProjectEditor({ call, channelID, root, onClose }: {
           <div className="flex-1 min-h-0 flex">
             {!activeTab ? (
               <div className="flex-1 flex items-center justify-center text-sm text-gray-500">
-                Chọn một file bên trái · Cmd/Ctrl+S để lưu
+                ⌘P mở file theo tên · ⌘⇧F tìm trong mọi file · ⌘S lưu
               </div>
             ) : activeTab.binary ? (
               <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 overflow-auto">
