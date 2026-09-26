@@ -709,3 +709,85 @@ func TestSweepClearsProgressLinesAndNothingElse(t *testing.T) {
 		t.Error("another agent's progress line was swept")
 	}
 }
+
+// Two lines in one room must never share an instant, and the newer one must
+// never sort before the older.
+//
+// Ordering a room is `ORDER BY created_at`, so a tie has no order at all — the
+// database returns those rows however it likes, and not necessarily the same
+// way twice. Paging is worse: ChannelMessages pages on `created_at < before`,
+// so a tie straddling a page boundary either repeats a line or drops one.
+//
+// The test forces the collision rather than hoping for one. On a machine with
+// a nanosecond clock forty posts in a loop all get distinct stamps and prove
+// nothing; Windows CI, whose clock moves in milliseconds, has failed on exactly
+// this for the whole life of these tests. Writing the previous line's timestamp
+// by hand reproduces it everywhere — and it is a real shape besides: a peer
+// gateway's clock running a moment ahead does the same thing.
+func TestALineNeverSortsBeforeTheOneItFollows(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+
+	first, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: "dòng đầu",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stamp it a second into the future: a clock that has not moved, or a peer
+	// whose clock is a moment ahead. Either way the next line must still land
+	// after it.
+	ahead := time.Now().Add(time.Second)
+	if _, err := db.conn.Exec(`UPDATE channel_messages SET created_at = ? WHERE id = ?`,
+		ts(ahead), first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	second, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: "dòng sau",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.CreatedAt.After(ahead) {
+		t.Fatalf("the second line is stamped %v, not after the first at %v — the room now has\n"+
+			"two lines whose order the database decides, and paging across them repeats or drops one",
+			second.CreatedAt, ahead)
+	}
+
+	got, err := db.ChannelMessages(GeneralChannelID, 10, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Body != "dòng sau" {
+		t.Fatalf("the room reads back out of order: %+v", got)
+	}
+}
+
+// A second room is not held back by the first: the guard is per room, so two
+// busy channels do not push each other's timestamps forward.
+func TestOneBusyRoomDoesNotSkewAnother(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw")
+	other, err := db.CreateChannel("", "ops", ChannelPublic, "", "system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, _, err := db.PostMessage(NewChannelMessage{
+			ChannelID: GeneralChannelID, AuthorID: "bomclaw", Body: "ồn ào",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := time.Now()
+	m, _, err := db.PostMessage(NewChannelMessage{
+		ChannelID: other.ID, AuthorID: "bomclaw", Body: "yên tĩnh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CreatedAt.Before(before.Add(-time.Second)) || m.CreatedAt.After(time.Now().Add(time.Second)) {
+		t.Fatalf("a quiet room's line is stamped %v, nowhere near when it happened", m.CreatedAt)
+	}
+}

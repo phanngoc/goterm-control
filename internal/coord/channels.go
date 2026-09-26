@@ -416,7 +416,7 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 		AuthorID:   n.AuthorID,
 		Body:       n.Body,
 		TaskID:     n.TaskID,
-		CreatedAt:  time.Now(),
+		CreatedAt:  db.nextMessageTime(n.ChannelID),
 	}
 	if _, err := db.conn.Exec(`INSERT INTO channel_messages
 		(id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at)
@@ -954,4 +954,37 @@ func slug(s string) string {
 		out = out[:40]
 	}
 	return out
+}
+
+// nextMessageTime is when this line happened, and it is never the same instant
+// as the line before it in the same room.
+//
+// Ordering a room is `ORDER BY created_at`, so two messages sharing a timestamp
+// have no order at all — the database returns them however it likes, and it
+// does not have to be the same way twice. Paging is worse: ChannelMessages
+// pages on `created_at < before`, so a tie straddling a page boundary either
+// repeats a line or drops one.
+//
+// This is not hypothetical and not only about tests. A clock with millisecond
+// granularity ties constantly — Windows CI has failed on exactly this for the
+// whole life of the test, two tests at a time — and an agent writing three
+// lines into a room in one burst is the ordinary case everywhere else.
+//
+// Per channel rather than per process, because two gateways posting into one
+// room is the case a process-local counter cannot see. The read is an index
+// lookup on (channel_id, created_at DESC).
+func (db *DB) nextMessageTime(channelID string) time.Time {
+	now := time.Now()
+	var last string
+	err := db.conn.QueryRow(`SELECT created_at FROM channel_messages
+		WHERE channel_id = ? ORDER BY created_at DESC LIMIT 1`, channelID).Scan(&last)
+	if err != nil {
+		return now // no messages yet, or a read that failed: now is still right
+	}
+	if prev := parseTS(last); !now.After(prev) {
+		// The clock did not move between the two writes. A nanosecond is
+		// enough: the order is what matters, not the gap.
+		return prev.Add(time.Nanosecond)
+	}
+	return now
 }
