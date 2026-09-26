@@ -71,6 +71,10 @@ type Channel struct {
 	CreatedAt  time.Time `json:"created_at"`
 	ArchivedAt time.Time `json:"archived_at,omitempty"`
 
+	// Workspace is where this project's work lives on disk — source, artifacts,
+	// whatever the agents produce. Empty for rooms that are only rooms.
+	Workspace string `json:"workspace,omitempty"`
+
 	// Filled by ListChannels for the member asking.
 	Members       []Member  `json:"members,omitempty"`
 	Unread        int       `json:"unread"`   // messages since this member last read
@@ -178,6 +182,57 @@ func (db *DB) EnsureDM(a, b string) (*Channel, error) {
 	return db.CreateChannel(DMChannelID(a, b), name, ChannelDM, "", a, members)
 }
 
+// ArchiveChannel hides a room without destroying what was said in it.
+//
+// Deliberately not a delete. The rooms this exists to clean up were created by
+// a bug — a message id passed where an agent id belonged — and the lines inside
+// them are real things an agent said. Hiding the room costs nothing and keeps
+// them; deleting it would throw away the only record of work that was actually
+// done, to tidy a sidebar.
+func (db *DB) ArchiveChannel(channelID string) error {
+	res, err := db.conn.Exec(`UPDATE channels SET archived_at = ? WHERE id = ? AND archived_at = ''`,
+		ts(time.Now()), channelID)
+	if err != nil {
+		return fmt.Errorf("archive %s: %w", channelID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("coord: %s is not an open channel", channelID)
+	}
+	return nil
+}
+
+// IsAgent reports whether this id belongs to a registered agent.
+//
+// SendMessage needs it because `bomclaw msg --to <anything>` took any string at
+// all and EnsureDM would happily build a room for it. An agent once passed a
+// message id, and the result was a permanent room named after that id holding
+// a report nobody was ever going to read.
+func (db *DB) IsAgent(id string) (bool, error) {
+	var n int
+	if err := db.conn.QueryRow(`SELECT count(*) FROM agents WHERE id = ?`, id).Scan(&n); err != nil {
+		return false, fmt.Errorf("look up agent %s: %w", id, err)
+	}
+	return n > 0, nil
+}
+
+// EnsureOwnerDM is the private room between the owner and one agent.
+//
+// Every DM until now was agent↔agent, so the dashboard's Direct list was empty:
+// the owner was not a member of anything. "Message this one privately" had no
+// room to happen in — the only way to reach one agent alone was its Telegram
+// bot, and the dashboard could not even name which bot that was.
+func (db *DB) EnsureOwnerDM(agentID string) (*Channel, error) {
+	if agentID == "" {
+		return nil, fmt.Errorf("coord: a DM needs an agent")
+	}
+	return db.CreateChannel(
+		DMChannelID(OwnerUserID, agentID),
+		agentID,
+		ChannelDM, "", OwnerUserID,
+		[]Member{{Kind: MemberUser, ID: OwnerUserID}, {Kind: MemberAgent, ID: agentID}},
+	)
+}
+
 // JoinChannel adds a member. Idempotent: re-joining does not reset the read
 // cursor, which would resurrect every message the member had caught up on.
 func (db *DB) JoinChannel(channelID, kind, id string) error {
@@ -204,7 +259,7 @@ func (db *DB) LeaveChannel(channelID, kind, id string) error {
 
 // GetChannel returns one room with its members.
 func (db *DB) GetChannel(id string) (*Channel, error) {
-	row := db.conn.QueryRow(`SELECT id, name, kind, purpose, created_by, created_at, archived_at
+	row := db.conn.QueryRow(`SELECT id, name, kind, purpose, created_by, created_at, archived_at, workspace
 		FROM channels WHERE id = ?`, id)
 	c, err := scanChannel(row)
 	if err != nil {
@@ -220,7 +275,7 @@ func (db *DB) GetChannel(id string) (*Channel, error) {
 // ListChannels returns the rooms a member is in, most recently active first.
 // An empty memberID lists every channel — what the admin page shows.
 func (db *DB) ListChannels(memberKind, memberID string) ([]Channel, error) {
-	q := `SELECT c.id, c.name, c.kind, c.purpose, c.created_by, c.created_at, c.archived_at
+	q := `SELECT c.id, c.name, c.kind, c.purpose, c.created_by, c.created_at, c.archived_at, c.workspace
 		FROM channels c`
 	var args []any
 	if memberID != "" {
@@ -361,7 +416,7 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 		AuthorID:   n.AuthorID,
 		Body:       n.Body,
 		TaskID:     n.TaskID,
-		CreatedAt:  time.Now(),
+		CreatedAt:  db.nextMessageTime(n.ChannelID),
 	}
 	if _, err := db.conn.Exec(`INSERT INTO channel_messages
 		(id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at)
@@ -551,13 +606,29 @@ func (db *DB) resolveMentions(body string) ([]Member, error) {
 
 // ChannelMessages returns the channel's main line — top-level messages only,
 // newest first, each with its reply count so a thread announces itself.
-func (db *DB) ChannelMessages(channelID string, limit int) ([]ChannelMessage, error) {
+// ChannelMessages returns the newest page of a channel's main line. before is
+// the created_at of the oldest message already on screen, so scrolling up asks
+// for what came before it; empty means the newest page.
+//
+// Paged rather than "the last hundred": a busy room is thousands of messages,
+// and a reader arrives wanting the end of the conversation, not the start of
+// it. Loading everything to show the last screenful is work nobody asked for
+// and a wait nobody wanted.
+func (db *DB) ChannelMessages(channelID string, limit int, before time.Time) ([]ChannelMessage, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := db.conn.Query(`SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
-		FROM channel_messages WHERE channel_id = ? AND thread_root = ''
-		ORDER BY created_at DESC LIMIT ?`, channelID, limit)
+	query := `SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
+		FROM channel_messages WHERE channel_id = ? AND thread_root = ''`
+	args := []any{channelID}
+	if !before.IsZero() {
+		query += ` AND created_at < ?`
+		args = append(args, ts(before))
+	}
+	query += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("messages of %s: %w", channelID, err)
 	}
@@ -742,6 +813,91 @@ func (db *DB) SaveThreadSession(threadKey, agentID, provider, sessionID string) 
 	return nil
 }
 
+// UpdateMessageBody rewrites a message in place.
+//
+// It exists for one thing: an agent working on an answer puts a line in the
+// thread saying what it is doing, and that line becomes the answer when the
+// answer arrives. Posting progress as separate messages would leave a room
+// full of "I am reading the log" under every real reply — the progress is
+// interesting while it is happening and noise the moment it is not.
+//
+// created_at is deliberately left alone. The message keeps its place in the
+// thread: it was said when it was said, and a reply that jumped to the bottom
+// on every edit would reorder a conversation as it was being read.
+func (db *DB) UpdateMessageBody(id, body string) error {
+	res, err := db.conn.Exec(`UPDATE channel_messages SET body = ? WHERE id = ?`, body, id)
+	if err != nil {
+		return fmt.Errorf("update %s: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("message %s: no such message", id)
+	}
+	return nil
+}
+
+// DeleteMessage removes a message and the mentions that pointed at it.
+//
+// Only for a progress line whose turn produced nothing: leaving "working on
+// it…" in a thread forever is worse than never having said it. Real messages
+// are not deleted — a room where things vanish cannot be read back.
+func (db *DB) DeleteMessage(id string) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("delete %s: %w", id, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM channel_mentions WHERE message_id = ?`, id); err != nil {
+		return fmt.Errorf("delete mentions of %s: %w", id, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM channel_messages WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete %s: %w", id, err)
+	}
+	return tx.Commit()
+}
+
+// SweepProgressLines removes the "working on it" lines an agent left behind.
+//
+// A run that dies with its gateway — a deploy, a crash — leaves a message in
+// the room saying it is still going, and nothing ever corrects it. Sweeping at
+// startup is the only moment this is unambiguously safe: the process has just
+// begun, so any line it wrote is by definition from a run that no longer
+// exists.
+//
+// Matched on the prefix the progress lines carry rather than on a flag column,
+// because these are the only messages an agent writes that are meant to be
+// temporary — everything else it says, it meant.
+func (db *DB) SweepProgressLines(agentID, prefix string) (int, error) {
+	rows, err := db.conn.Query(`SELECT id FROM channel_messages
+		WHERE author_kind = ? AND author_id = ? AND body LIKE ? || '%'`,
+		MemberAgent, agentID, prefix)
+	if err != nil {
+		return 0, fmt.Errorf("sweep progress lines of %s: %w", agentID, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if err := db.DeleteMessage(id); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
+// GetMessage is getMessage for callers outside this package: the gateway needs
+// a thread's root to find the task, and through it what the work produced.
+func (db *DB) GetMessage(id string) (*ChannelMessage, error) { return db.getMessage(id) }
+
 func (db *DB) getMessage(id string) (*ChannelMessage, error) {
 	row := db.conn.QueryRow(`SELECT id, channel_id, thread_root, author_kind, author_id, body, task_id, created_at
 		FROM channel_messages WHERE id = ?`, id)
@@ -758,7 +914,7 @@ func (db *DB) getMessage(id string) (*ChannelMessage, error) {
 func scanChannel(s scanner) (*Channel, error) {
 	var c Channel
 	var created, archived string
-	if err := s.Scan(&c.ID, &c.Name, &c.Kind, &c.Purpose, &c.CreatedBy, &created, &archived); err != nil {
+	if err := s.Scan(&c.ID, &c.Name, &c.Kind, &c.Purpose, &c.CreatedBy, &created, &archived, &c.Workspace); err != nil {
 		return nil, err
 	}
 	c.CreatedAt, c.ArchivedAt = parseTS(created), parseTS(archived)
@@ -798,4 +954,37 @@ func slug(s string) string {
 		out = out[:40]
 	}
 	return out
+}
+
+// nextMessageTime is when this line happened, and it is never the same instant
+// as the line before it in the same room.
+//
+// Ordering a room is `ORDER BY created_at`, so two messages sharing a timestamp
+// have no order at all — the database returns them however it likes, and it
+// does not have to be the same way twice. Paging is worse: ChannelMessages
+// pages on `created_at < before`, so a tie straddling a page boundary either
+// repeats a line or drops one.
+//
+// This is not hypothetical and not only about tests. A clock with millisecond
+// granularity ties constantly — Windows CI has failed on exactly this for the
+// whole life of the test, two tests at a time — and an agent writing three
+// lines into a room in one burst is the ordinary case everywhere else.
+//
+// Per channel rather than per process, because two gateways posting into one
+// room is the case a process-local counter cannot see. The read is an index
+// lookup on (channel_id, created_at DESC).
+func (db *DB) nextMessageTime(channelID string) time.Time {
+	now := time.Now()
+	var last string
+	err := db.conn.QueryRow(`SELECT created_at FROM channel_messages
+		WHERE channel_id = ? ORDER BY created_at DESC LIMIT 1`, channelID).Scan(&last)
+	if err != nil {
+		return now // no messages yet, or a read that failed: now is still right
+	}
+	if prev := parseTS(last); !now.After(prev) {
+		// The clock did not move between the two writes. A nanosecond is
+		// enough: the order is what matters, not the gap.
+		return prev.Add(time.Nanosecond)
+	}
+	return now
 }

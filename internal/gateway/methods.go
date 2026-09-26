@@ -47,6 +47,10 @@ type Deps struct {
 	ProviderName string          // "claude" | "codex", for trace metadata
 	Trace        *trace.Recorder // nil-safe: nil disables tracing on this path
 
+	// ProjectsDir is where project folders are created. Empty uses
+	// coord.DefaultProjectsDir.
+	ProjectsDir string
+
 	// ConfigPath is this agent's own config file. The settings screen edits it;
 	// nothing else writes it.
 	ConfigPath string
@@ -56,9 +60,30 @@ type Deps struct {
 	// screen says so rather than editing a file nothing will reload.
 	Restart func() error
 
+	// ReviveAgent starts ANOTHER agent's gateway service from this process.
+	// Restart above can only speak for this agent, and the moment someone
+	// reaches for a restart button is usually the moment the agent they mean
+	// is not answering — so the request has to be carried out by a process
+	// that is still up. Every agent on this machine is a service in the same
+	// user's manager, which is what makes that possible. Nil when this
+	// gateway has no service manager to ask.
+	ReviveAgent func(agentID string) error
+
+	// OwnerChatID is the Telegram conversation that belongs to the owner, so a
+	// screen can bind a room to their phone without anyone typing a chat id.
+	// There is only one owner, and a number typed by hand is a number that can
+	// be mistyped — the same argument that removed --chat from the CLI. Zero
+	// when this gateway has no allow-list to read it from.
+	OwnerChatID int64
+
 	// PokeTasks asks the local task runner to check the queue immediately.
 	// Nil when this agent does not claim tasks.
 	PokeTasks func()
+
+	// SchedulesRun is whether any gateway on this machine fires schedules. An
+	// agent told it can put work on a clock, on a machine where nothing runs
+	// the clock, produces rows that never fire — which looks like it worked.
+	SchedulesRun bool
 
 	// PokeSchedules asks the local scheduler loop to tick now (after a
 	// "run now"). Nil when schedules are disabled on this gateway; the row is
@@ -170,6 +195,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleAdminSettingsAll(deps)
 		case "admin.set_model":
 			return handleAdminSetModelOn(deps, params)
+		case "admin.restart":
+			return handleAdminRestartOn(deps, params)
 		case "admin.overview":
 			return handleAdminOverview(deps)
 		case "traces.list":
@@ -184,6 +211,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleTaskCreate(deps, params)
 		case "tasks.cancel":
 			return handleTaskCancel(deps, params)
+		case "tasks.project":
+			return handleTaskSetProject(deps, params)
 		case "tasks.resume":
 			return handleTaskResume(deps, params)
 		case "tasks.unblock":
@@ -198,10 +227,30 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelMessages(deps, params)
 		case "channels.post":
 			return handleChannelPost(deps, params)
+		case "channels.files":
+			return handleProjectFiles(deps, params)
+		case "channels.brief":
+			return handleProjectBrief(deps, params)
 		case "channels.create":
 			return handleChannelCreate(deps, params)
 		case "channels.read":
 			return handleChannelRead(deps, params)
+		case "channels.gateways":
+			return handleChannelGateways(deps, params)
+		case "channels.bind":
+			return handleChannelBind(deps, params)
+		case "channels.unbind":
+			return handleChannelUnbind(deps, params)
+		case "skills.list":
+			return handleSkillsList(deps, params)
+		case "skills.get":
+			return handleSkillGet(deps, params)
+		case "skills.install":
+			return handleSkillInstall(deps, params)
+		case "skills.remove":
+			return handleSkillRemove(deps, params)
+		case "skills.copy":
+			return handleSkillCopy(deps, params)
 		case "artifacts.list":
 			return handleArtifactsList(deps, params)
 		case "artifacts.get":
@@ -211,7 +260,7 @@ func NewMethodHandler(deps Deps) MethodHandler {
 		case "notes.add":
 			return handleNoteAdd(deps, params)
 		case "schedules.list":
-			return handleSchedulesList(deps)
+			return handleSchedulesList(deps, params)
 		case "schedules.get":
 			return handleScheduleGet(deps, params)
 		case "schedules.create":

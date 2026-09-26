@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AgentPayload, CommandPayload, HeartbeatPayload, Schedule, ScheduleKind, ScheduleView } from './types'
+import type { AgentPayload, Channel, CommandPayload, HeartbeatPayload, Schedule, ScheduleKind, ScheduleView } from './types'
 import { ago, isZeroTime, rel, truncate } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -359,14 +359,26 @@ export default function SchedulesPane({ call, agents }: { call: Call; agents: st
   const [openID, setOpenID] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
+  // Which project's clocks these are. "" is all of them; "-" is the
+  // machine-wide ones — the heartbeat, anything set up before projects — which
+  // belong to no project and would vanish the day this starts scoping.
+  const [project, setProject] = useState('')
+  const [projects, setProjects] = useState<Channel[]>([])
+
+  useEffect(() => {
+    call('channels.list')
+      .then((cs: Channel[]) => setProjects((cs || []).filter(c => c.workspace)))
+      .catch(() => {})
+  }, [call])
+
   const load = useCallback(async () => {
     try {
-      setRows((await call('schedules.list')) || [])
+      setRows((await call('schedules.list', project ? { channel_id: project } : {})) || [])
       setErr(null)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
-  }, [call])
+  }, [call, project])
 
   useEffect(() => {
     load()
@@ -386,6 +398,20 @@ export default function SchedulesPane({ call, agents }: { call: Call; agents: st
   return (
     <div className="h-full flex flex-col">
       <NewScheduleForm call={call} agents={agents} onCreated={load} />
+      {projects.length > 0 && (
+        <div className="flex items-center gap-2 px-4 pt-3 text-xs">
+          <span className="text-gray-500">dự án</span>
+          <select
+            value={project}
+            onChange={e => setProject(e.target.value)}
+            className="px-2 py-1 bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+          >
+            <option value="">tất cả</option>
+            {projects.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="-">không thuộc dự án nào</option>
+          </select>
+        </div>
+      )}
       {err && <div className="px-4 pt-3 text-xs text-red-300">{err}</div>}
 
       <div className="flex-1 overflow-y-auto p-4">

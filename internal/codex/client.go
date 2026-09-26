@@ -39,8 +39,10 @@ const ProviderName = "codex"
 // Client wraps the codex CLI subprocess.
 type Client struct {
 	systemPrompt string
-	pool         *credentials.Pool
-	workspace    string // working directory for the CLI subprocess
+	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
+	systemExtra func(workspace string) string
+	pool        *credentials.Pool
+	workspace   string // working directory for the CLI subprocess
 }
 
 // New creates a Codex client backed by the codex CLI subprocess.
@@ -119,7 +121,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	prompt := userText
 	if isNewThread {
-		prompt = c.firstTurnPrompt(userText, memoryContext)
+		prompt = c.firstTurnPrompt(userText, memoryContext, chat.WorkspaceFor(sess, c.workspace))
 	}
 
 	args := buildArgs(modelID, threadID, isNewThread)
@@ -129,9 +131,15 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// codex has always inherited the ambient environment; the account layers
 	// CODEX_HOME on top so each login keeps its own threads.
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
-	if c.workspace != "" {
-		_ = os.MkdirAll(c.workspace, 0755)
-		cmd.Dir = c.workspace
+	// See claude/client.go: per-run variables, appended last so a session's
+	// own value wins over the gateway's.
+	cmd.Env = append(cmd.Env, sess.GetEnv()...)
+	// The session's directory wins when it has one: a turn answering a
+	// project works in that project's folder, which is where the other
+	// agents and the person will look for what it produced.
+	if dir := chat.WorkspaceFor(sess, c.workspace); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+		cmd.Dir = dir
 	}
 	cmd.Stdin = strings.NewReader(prompt)
 
@@ -361,11 +369,11 @@ func (c *Client) handleCompletedItem(it *threadItem, pending map[string]string, 
 
 // firstTurnPrompt folds the operating instructions and cross-session memory
 // into the opening message of a new thread.
-func (c *Client) firstTurnPrompt(userText, memoryContext string) string {
+func (c *Client) firstTurnPrompt(userText, memoryContext, workspace string) string {
 	var b strings.Builder
-	if c.systemPrompt != "" {
+	if sp := c.prompt(workspace); sp != "" {
 		b.WriteString("# Operating instructions\n\n")
-		b.WriteString(c.systemPrompt)
+		b.WriteString(sp)
 		b.WriteString(fsGuardPrompt)
 		if memoryContext != "" {
 			b.WriteString("\n")
@@ -441,6 +449,20 @@ func init() {
 		c := New(d.SystemPrompt)
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
+		c.SetSystemExtra(d.SystemExtra)
 		return c
 	})
+}
+
+// SetSystemExtra registers a function evaluated on every turn and appended to
+// the system prompt. See chat.Deps.SystemExtra.
+func (c *Client) SetSystemExtra(f func(workspace string) string) { c.systemExtra = f }
+
+// prompt is the operating instructions for THIS turn: the fixed system prompt
+// plus whatever systemExtra says right now.
+func (c *Client) prompt(workspace string) string {
+	if c.systemExtra == nil {
+		return c.systemPrompt
+	}
+	return c.systemPrompt + c.systemExtra(workspace)
 }

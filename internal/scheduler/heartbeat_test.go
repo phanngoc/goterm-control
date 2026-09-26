@@ -240,7 +240,7 @@ func TestEnsureHeartbeatFollowsConfig(t *testing.T) {
 	if err := EnsureHeartbeat(db, "a1", HeartbeatConfig{Enabled: false}); err != nil {
 		t.Fatal(err)
 	}
-	if all, _ := db.ListSchedules(); len(all) != 0 {
+	if all, _ := db.ListSchedules(""); len(all) != 0 {
 		t.Fatal("disabled heartbeat must not create a row")
 	}
 	// Bad config is refused, not half-applied.
@@ -250,7 +250,7 @@ func TestEnsureHeartbeatFollowsConfig(t *testing.T) {
 	if err := EnsureHeartbeat(db, "a1", HeartbeatConfig{Enabled: true, Every: "10s"}); err == nil {
 		t.Error("every under 1m must be refused")
 	}
-	if all, _ := db.ListSchedules(); len(all) != 0 {
+	if all, _ := db.ListSchedules(""); len(all) != 0 {
 		t.Fatal("refused config must not leave a row")
 	}
 	// On: one system row owned by a1, skip_missed, tz filled in.
@@ -275,7 +275,7 @@ func TestEnsureHeartbeatFollowsConfig(t *testing.T) {
 	// The other agent's row is untouched by a1's config.
 	db.RegisterAgent(coord.Agent{ID: "a2"})
 	EnsureHeartbeat(db, "a2", HeartbeatConfig{Enabled: true, Every: "1h"})
-	all, _ := db.ListSchedules()
+	all, _ := db.ListSchedules("")
 	if len(all) != 2 {
 		t.Errorf("one row per agent, got %d", len(all))
 	}

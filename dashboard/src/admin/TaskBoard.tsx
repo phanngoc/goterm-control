@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Task, TaskDetail } from './types'
+import type { AgentMessage, Channel, Task, TaskDetail } from './types'
 import { ago, runLivenessStyle, taskStateStyle, truncate } from './format'
+import { useArtifactOpener } from './ArtifactView'
+import MessageMarkdown from '../components/MessageMarkdown'
 import { useStore } from '../stores/store'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -91,9 +93,237 @@ function TaskCard({ task, kids, onOpen }: { task: Task; kids: { total: number; d
   )
 }
 
-function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenThread }: {
-  call: Call; id: string; agents: string[]; onClose: () => void; onChanged: () => void
+// Exchange is what the agents said to each other about this work.
+//
+// Two lists, not one. `mail` is what an agent deliberately filed against this
+// task; `side_talk` is what they said in their own rooms while it ran, which
+// the server infers from who is on the task and when. Mixing them would let a
+// coincidence read as a record, so the screen keeps the difference visible.
+function Exchange({ mail, sideTalk, self }: { mail: AgentMessage[]; sideTalk: AgentMessage[]; self?: string }) {
+  const [open, setOpen] = useState<string | null>(null)
+  if (mail.length === 0 && sideTalk.length === 0) return null
+
+  const line = (m: AgentMessage, loose: boolean) => {
+    const expanded = open === m.id
+    const oneLine = m.body.replace(/\s+/g, ' ').trim()
+    return (
+      <li key={m.id} className="text-xs">
+        <button
+          onClick={() => setOpen(expanded ? null : m.id)}
+          className="w-full text-left flex items-baseline gap-2 hover:bg-gray-900/60 rounded px-1 -mx-1 py-0.5"
+        >
+          <span className={`font-mono shrink-0 ${m.from_agent === self ? 'text-sky-300' : 'text-gray-300'}`}>
+            {m.from_agent}
+          </span>
+          {m.to_agent && <span className="text-gray-600 shrink-0">→ {m.to_agent}</span>}
+          <span className="text-gray-500 truncate">{expanded ? '' : truncate(oneLine, 80)}</span>
+          <span className="ml-auto text-gray-600 shrink-0">{ago(m.created_at)}</span>
+        </button>
+        {expanded && (
+          <div className={`mt-1 ml-1 pl-2 border-l ${loose ? 'border-gray-800' : 'border-sky-500/30'}`}>
+            <MessageMarkdown>{m.body}</MessageMarkdown>
+          </div>
+        )}
+      </li>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {mail.length > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">
+            Trao đổi về task này · {mail.length}
+          </div>
+          <ol className="space-y-0.5">{mail.map(m => line(m, false))}</ol>
+        </div>
+      )}
+      {sideTalk.length > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-1">
+            Cùng lúc, giữa các agent này · {sideTalk.length}
+          </div>
+          <p className="text-[11px] text-gray-600 mb-2">
+            Suy ra từ ai đang làm task và khoảng thời gian nó chạy — không phải agent chủ động gắn vào task.
+            Gắn đúng bằng <code className="font-mono">bomclaw msg --task</code>.
+          </p>
+          <ol className="space-y-0.5">{sideTalk.map(m => line(m, true))}</ol>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Output is what the work produced. A parent that only delegated has none of
+// its own, so this is the whole tree's — otherwise the task that organised
+// three agents shows an empty panel and the outputs hide under children
+// nobody thought to open.
+function Output({ call, artifacts, taskID }: { call: Call; artifacts: NonNullable<TaskDetail['artifacts']>; taskID: string }) {
+  const { open, modal, busy } = useArtifactOpener(call)
+  if (artifacts.length === 0) return null
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2">
+        Output · {artifacts.length}
+      </div>
+      {modal}
+      <ol className="space-y-1">
+        {artifacts.map(a => (
+          <li key={a.id + a.role} className="flex items-center gap-2 text-xs">
+            <button
+              onClick={() => open(a)}
+              disabled={busy}
+              className="min-w-0 flex-1 text-left truncate text-sky-300 hover:underline"
+            >
+              {a.title}
+            </button>
+            <span className="text-gray-600 shrink-0">{a.kind}</span>
+            {/* Whose output it is, when it is not this task's own. On a parent
+                that split the work, that is the useful half of the row. */}
+            {a.task_id !== taskID && (
+              <span className="font-mono text-gray-600 shrink-0" title={a.task_id}>
+                {a.created_by}
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+// Project is where this task's next run happens: the runner opens the
+// project's folder as its working directory. A task filed under none runs in
+// the agent's own directory, which is why that case says so out loud rather
+// than showing an empty field — it is the reason the output is not where
+// someone went looking for it.
+function Project({ call, detail, projects, onChanged, onOpenFiles }: {
+  call: Call; detail: TaskDetail; projects: Channel[]; onChanged: () => void
+  onOpenFiles?: (channelID: string) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  // Naming a project that does not exist yet. The dropdown is where someone
+  // discovers the task is filed nowhere, so it is also where the right project
+  // turns out not to have been made — sending them to another tab to make it
+  // and back again to pick it is two navigations for one thought.
+  const [naming, setNaming] = useState(false)
+  const [name, setName] = useState('')
+  const t = detail.task
+  const finished = ['completed', 'failed', 'canceled', 'rejected'].includes(t.state)
+
+  const file = async (channelID: string) => {
+    setBusy(true)
+    try {
+      await call('tasks.project', { id: t.id, channel_id: channelID })
+      setErr(null)
+      onChanged()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // A new project is a room with a folder behind it, made the same way the
+  // rooms pane makes one — then this task is filed under it straight away,
+  // which is the only reason anyone is making it from here.
+  const createAndFile = async () => {
+    if (!name.trim() || busy) return
+    setBusy(true)
+    try {
+      const c: Channel = await call('channels.create', { name: name.trim() })
+      await call('tasks.project', { id: t.id, channel_id: c.id })
+      setName(''); setNaming(false); setErr(null)
+      onChanged()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded ring-1 ring-gray-800 bg-gray-900/40 p-2 space-y-1.5">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-gray-600 shrink-0">dự án</span>
+        {finished ? (
+          <span className="text-gray-300">{detail.project?.name ?? 'không thuộc dự án nào'}</span>
+        ) : (
+          <select
+            value={t.channel_id ?? ''}
+            disabled={busy}
+            onChange={e => {
+              if (e.target.value === '+') { setNaming(true); return }
+              void file(e.target.value)
+            }}
+            className="px-2 py-1 bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+          >
+            <option value="">— không thuộc dự án nào —</option>
+            {projects.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="+">+ dự án mới…</option>
+          </select>
+        )}
+      </div>
+
+      {naming && (
+        <div className="flex gap-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') void createAndFile()
+              if (e.key === 'Escape') { setNaming(false); setName('') }
+            }}
+            placeholder="tên dự án — một thư mục và một AGENTS.md sẽ được tạo"
+            className="flex-1 px-2 py-1 text-xs bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
+          />
+          <button
+            onClick={createAndFile}
+            disabled={busy || !name.trim()}
+            className="px-2.5 py-1 text-xs rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
+          >
+            Tạo &amp; xếp vào
+          </button>
+          <button
+            onClick={() => { setNaming(false); setName('') }}
+            className="px-2 py-1 text-xs text-gray-500 hover:text-gray-300"
+          >
+            huỷ
+          </button>
+        </div>
+      )}
+
+      {detail.project?.workspace ? (
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-[11px] text-gray-500 break-all min-w-0" title="thư mục các run chạy trong đó">
+            {detail.project.workspace}
+          </span>
+          {onOpenFiles && (
+            <button
+              onClick={() => onOpenFiles(detail.project!.id)}
+              className="shrink-0 text-[11px] text-sky-300 hover:underline"
+            >
+              mở folder
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="text-[11px] text-amber-400/80">
+          Chưa thuộc dự án nào — run chạy trong thư mục riêng của agent, không phải folder dự án.
+        </div>
+      )}
+      {err && <div className="text-[11px] text-red-300">{err}</div>}
+    </div>
+  )
+}
+
+function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask, onOpenThread, onOpenFiles }: {
+  call: Call; id: string; agents: string[]; projects: Channel[]
+  onClose: () => void; onChanged: () => void
   onOpenTask: (id: string) => void; onOpenThread?: (rootID: string) => void
+  onOpenFiles?: (channelID: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
@@ -110,6 +340,14 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
   }, [call, id])
 
   useEffect(() => { load() }, [load])
+
+  // While something is running, the drawer is a live view and has to behave
+  // like one; opened on a finished task it stays still.
+  useEffect(() => {
+    if (!detail?.live) return
+    const t = setInterval(load, 3000)
+    return () => clearInterval(t)
+  }, [detail?.live, load])
 
   // Cancelling a parent cancels its unfinished children too — say so before
   // doing it, since those may be running on another agent right now.
@@ -195,6 +433,16 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
         <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-2">
           <span className="text-sm font-medium text-gray-100">Task</span>
           <span className="font-mono text-xs text-gray-500 truncate">{id}</span>
+          {/* The address bar already holds this task, so the link is just the
+              current one — the button exists because nobody thinks to look up
+              there, and "send me that task" should cost one click. */}
+          <button
+            onClick={() => { void navigator.clipboard?.writeText(location.href) }}
+            title="Chép link tới task này"
+            className="shrink-0 px-1.5 py-0.5 rounded ring-1 ring-gray-800 text-[11px] text-gray-500 hover:text-sky-300 hover:ring-sky-500/40"
+          >
+            link
+          </button>
           <button onClick={onClose} className="ml-auto text-gray-500 hover:text-gray-300 text-sm">✕</button>
         </div>
 
@@ -262,7 +510,58 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
                     )}
                   </dd>
                 </div>
+                <div>
+                  <dt className="text-gray-600">goal</dt>
+                  <dd className="text-gray-300">
+                    {detail.context_open
+                      ? <span className="text-sky-300">{detail.context_open} still open</span>
+                      : <span className="text-emerald-300">nothing open</span>}
+                    {!!detail.context_budget && (
+                      // Amber as the budget runs out: past it the goal stops
+                      // and waits for a person, so the warning is worth having
+                      // before that happens rather than after.
+                      <span className={(detail.context_runs ?? 0) >= detail.context_budget * 3 / 4
+                        ? 'ml-1 text-amber-400' : 'ml-1 text-gray-500'}>
+                        · {detail.context_runs}/{detail.context_budget} runs
+                      </span>
+                    )}
+                  </dd>
+                </div>
               </dl>
+
+              <Project
+                call={call} detail={detail} projects={projects}
+                onChanged={() => { load(); onChanged() }} onOpenFiles={onOpenFiles}
+              />
+
+              {/* The conversation the task has been running in, across every
+                  run. The board could see it existed and gave no way in. */}
+              {detail.session_id && (
+                <a
+                  href={`/chat/${encodeURIComponent(detail.session_id)}`}
+                  className="block text-xs text-sky-300 hover:underline"
+                >
+                  → mở cuộc hội thoại của task này (đọc tiếp, hỏi thêm, chạy tay)
+                </a>
+              )}
+
+              {/* A row saying "running" for four minutes tells you less than
+                  the log would. This is what it is actually doing. */}
+              {detail.live && (
+                <div className="rounded-md ring-1 ring-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
+                  <span className="text-amber-300">⏳ đang chạy</span>
+                  <span className="text-gray-500"> · {detail.live.agent}</span>
+                  {detail.live.last_tool && (
+                    <span className="text-gray-300 font-mono"> · {detail.live.last_tool}</span>
+                  )}
+                  {detail.live.tool_count > 0 && (
+                    <span className="text-gray-500"> · {detail.live.tool_count} tool calls</span>
+                  )}
+                  {detail.live.started_at && (
+                    <span className="text-gray-500"> · {ago(detail.live.started_at)}</span>
+                  )}
+                </div>
+              )}
 
               {detail.thread_root && onOpenThread && (
                 <button
@@ -330,6 +629,14 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
                   />
                 </div>
               )}
+
+              <Output call={call} artifacts={detail.artifacts ?? []} taskID={id} />
+
+              <Exchange
+                mail={detail.mail ?? []}
+                sideTalk={detail.side_talk ?? []}
+                self={t.claimed_by || t.assigned_to}
+              />
 
               {detail!.runs?.length > 0 && (
                 <div>
@@ -443,31 +750,43 @@ function TaskDrawer({ call, id, agents, onClose, onChanged, onOpenTask, onOpenTh
   )
 }
 
-export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOpenThread }: {
+export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpenThread, onOpenFiles }: {
   call: Call; agents: string[]
-  openTaskID?: string; onOpenedTask?: () => void; onOpenThread?: (rootID: string) => void
+  /** openTaskID is which task's detail is showing; it lives in the URL, so a
+   *  task can be linked to instead of described. */
+  openTaskID?: string; onOpenTask: (id: string) => void
+  onOpenThread?: (rootID: string) => void
+  /** onOpenFiles takes you to a project's folder — where a task's work lands. */
+  onOpenFiles?: (channelID: string) => void
 }) {
   const [tasks, setTasks] = useState<Task[]>([])
-  const [openID, setOpenID] = useState<string | null>(null)
+  const openID = openTaskID || null
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [to, setTo] = useState('')
   const [err, setErr] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!openTaskID) return
-    setOpenID(openTaskID)
-    onOpenedTask?.()
-  }, [openTaskID, onOpenedTask])
+  // Which project's board this is. "" is every project, which is what the
+  // board was before projects existed; "-" is the work that belongs to none,
+  // and it needs its own entry or it disappears the day scoping arrives.
+  const [project, setProject] = useState('')
+  const [projects, setProjects] = useState<Channel[]>([])
+
+  const loadProjects = useCallback(() => {
+    call('channels.list')
+      .then((cs: Channel[]) => setProjects((cs || []).filter(c => c.workspace)))
+      .catch(() => {})
+  }, [call])
+  useEffect(() => { loadProjects() }, [loadProjects])
 
   const load = useCallback(async () => {
     try {
-      setTasks((await call('tasks.list', { limit: 200 })) || [])
+      setTasks((await call('tasks.list', { limit: 200, ...(project ? { channel_id: project } : {}) })) || [])
       setErr(null)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
-  }, [call])
+  }, [call, project])
 
   useEffect(() => {
     load()
@@ -485,7 +804,12 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
   const create = async () => {
     if (!title.trim()) return
     try {
-      await call('tasks.create', { title, body, assigned_to: to || undefined })
+      await call('tasks.create', {
+        title, body, assigned_to: to || undefined,
+        // Created on a project's board, it belongs to that project. Filing it
+        // anywhere else would put it somewhere the person cannot see it.
+        ...(project && project !== '-' ? { channel_id: project } : {}),
+      })
       setTitle(''); setBody(''); setTo('')
       load()
     } catch (e: any) {
@@ -495,7 +819,21 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 border-b border-gray-800 bg-gray-900/40">
+      <div className="p-4 border-b border-gray-800 bg-gray-900/40 space-y-2">
+        {projects.length > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-gray-500">dự án</span>
+            <select
+              value={project}
+              onChange={e => setProject(e.target.value)}
+              className="px-2 py-1 bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+            >
+              <option value="">tất cả</option>
+              {projects.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <option value="-">việc lẻ (không thuộc dự án nào)</option>
+            </select>
+          </div>
+        )}
         <div className="flex gap-2">
           <input
             value={title}
@@ -544,7 +882,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
                   {rows.length === 0 && (
                     <div className="rounded-lg ring-1 ring-dashed ring-gray-800 p-4 text-xs text-gray-600">empty</div>
                   )}
-                  {rows.map(t => <TaskCard key={t.id} task={t} kids={childCounts(tasks, t.id)} onOpen={() => setOpenID(t.id)} />)}
+                  {rows.map(t => <TaskCard key={t.id} task={t} kids={childCounts(tasks, t.id)} onOpen={() => onOpenTask(t.id)} />)}
                 </div>
               </div>
             )
@@ -553,7 +891,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenedTask, onOp
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} agents={agents} onClose={() => setOpenID(null)} onChanged={load} onOpenTask={setOpenID} onOpenThread={onOpenThread} />
+        <TaskDrawer call={call} id={openID} agents={agents} projects={projects} onClose={() => onOpenTask('')} onChanged={() => { load(); loadProjects() }} onOpenTask={onOpenTask} onOpenThread={onOpenThread} onOpenFiles={onOpenFiles} />
       )}
     </div>
   )

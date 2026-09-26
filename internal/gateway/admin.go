@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -100,7 +101,11 @@ func handleTraceGet(deps Deps, params json.RawMessage) (json.RawMessage, error) 
 type tasksListParams struct {
 	State   string `json:"state,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
+	// ChannelID scopes the board to one project; "-" asks for work belonging
+	// to no project, which is where everything queued before projects existed
+	// lives.
+	ChannelID string `json:"channel_id,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
 }
 
 func handleTasksList(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -114,7 +119,7 @@ func handleTasksList(deps Deps, params json.RawMessage) (json.RawMessage, error)
 		}
 	}
 	tasks, err := deps.Coord.ListTasks(coord.TaskFilter{
-		State: p.State, AgentID: p.AgentID, Limit: p.Limit,
+		State: p.State, AgentID: p.AgentID, ChannelID: p.ChannelID, Limit: p.Limit,
 	})
 	if err != nil {
 		return nil, err
@@ -139,10 +144,67 @@ type TaskDetail struct {
 	// its limit, so counting there would be quietly wrong on a large tree.
 	ContextCount int `json:"context_count"`
 	ContextCap   int `json:"context_cap"`
+	// ContextOpen and ContextRuns are the tree, not this task: how much of the
+	// goal is still moving and what it has cost so far. The board could show
+	// one level of children and nothing else, so a goal three waves deep read
+	// as "2/2 children finished" while half of it was still running.
+	ContextOpen   int `json:"context_open"`
+	ContextRuns   int `json:"context_runs"`
+	ContextBudget int `json:"context_budget"`
 
 	// The conversation this work came out of, when it came out of one, so the
 	// board has a way back to the room instead of being a dead end.
 	ThreadRoot string `json:"thread_root,omitempty"`
+
+	// Artifacts is what this piece of work produced — this task's outputs and
+	// its children's. Tree-wide rather than task-only because a parent that
+	// split the job into three has produced nothing itself, and a pane that
+	// says so is a pane nobody opens twice.
+	Artifacts []coord.Artifact `json:"artifacts"`
+
+	// Mail is what the agents deliberately filed against this task with
+	// `bomclaw msg --task`. The exact link, and worth keeping separate from
+	// what follows: a line an agent chose to file here means more than one that
+	// merely happened at the same time.
+	Mail []coord.Message `json:"mail"`
+
+	// SideTalk is the conversation between this task's agents while it was
+	// running, in their own DM rooms, that nobody filed against it. Inferred
+	// from who is on the task and when it ran — which is why it is a separate
+	// field and labelled as such on screen, not quietly mixed into Mail.
+	//
+	// It exists because that is where the real coordination has been happening:
+	// agreeing a schema, naming a blocker, saying where the file landed.
+	SideTalk []coord.Message `json:"side_talk"`
+
+	// Project is the room this work belongs to, resolved so the screen can name
+	// it and link to its folder. Empty when the task was filed under no project
+	// — which is worth showing rather than hiding: it is why the run happened
+	// in the agent's own directory instead of the project's.
+	Project *coord.Channel `json:"project,omitempty"`
+
+	// SessionID is the CLI conversation this task has been running in, across
+	// all its runs. The board could see that a task had a session and offered
+	// no way to open it — so "read what it actually did" meant finding the
+	// session by name in another tab.
+	SessionID string `json:"session_id,omitempty"`
+
+	// Live is what the run is doing right now, when one is running HERE. The
+	// task_runs row only says a run is open; a board that shows "running 0s"
+	// for four minutes is telling you less than the log would.
+	//
+	// Empty when the run belongs to another gateway: this one can read the
+	// shared row but not the other's session, and inventing an answer is worse
+	// than admitting the board only sees its own work in this much detail.
+	Live *LiveRun `json:"live,omitempty"`
+}
+
+// LiveRun is the part of a running turn a person wants while they wait.
+type LiveRun struct {
+	Agent     string `json:"agent"`
+	LastTool  string `json:"last_tool,omitempty"`
+	ToolCount int    `json:"tool_count"`
+	StartedAt string `json:"started_at,omitempty"`
 }
 
 func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -173,15 +235,113 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Best effort: a detail pane that fails to open because a progress number
+	// could not be read is worse than a detail pane without the number.
+	contextOpen, contextRuns := 0, 0
+	if prog, err := deps.Coord.ContextProgress(task.ContextID); err == nil {
+		contextOpen, contextRuns = len(prog.Open), prog.Runs
+	}
 	threadRoot, _, err := deps.Coord.TaskThread(p.ID)
 	if err != nil {
 		return nil, err
 	}
+	var live *LiveRun
+	if deps.Runs != nil {
+		for _, r := range deps.Runs() {
+			if r.TaskID == p.ID {
+				live = &LiveRun{
+					Agent: deps.AgentID, LastTool: r.LastTool,
+					ToolCount: r.ToolCount, StartedAt: r.StartedAt,
+				}
+				break
+			}
+		}
+	}
+	// The whole tree's output, so a parent that only delegated still shows what
+	// came back.
+	artifacts, err := deps.Coord.ContextArtifacts(task.ContextID)
+	if err != nil {
+		return nil, err
+	}
+	mail, err := deps.Coord.TaskMail(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	sideTalk, err := taskSideTalk(deps, task, children)
+	if err != nil {
+		return nil, err
+	}
+	var project *coord.Channel
+	if task.ChannelID != "" {
+		if c, err := deps.Coord.GetChannel(task.ChannelID); err == nil {
+			project = c
+		}
+	}
 	return json.Marshal(TaskDetail{
 		Task: task, Events: events, Runs: runs, Children: children,
+		Artifacts: artifacts, Mail: mail, SideTalk: sideTalk,
+		Project: project, SessionID: coord.TaskSessionID(task.ID),
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
-		ThreadRoot: threadRoot,
+		ContextOpen: contextOpen, ContextRuns: contextRuns, ContextBudget: deps.Coord.RunsPerGoal(),
+		ThreadRoot: threadRoot, Live: live,
 	})
+}
+
+// SideTalkGrace is how far past a task's last movement its agents' conversation
+// is still counted as being about it. A hand-off lands minutes after the run
+// that produced it — cutting exactly at the task's clock would hide the reply
+// that mattered.
+const SideTalkGrace = 30 * time.Minute
+
+// taskSideTalk finds what this task's agents said to each other while it ran.
+//
+// Participants come from the task and its children: the agent that asked, the
+// ones that took it, and the ones a piece was handed to. Two agents
+// coordinating have exactly one room, so the rooms are derivable — there is
+// nothing to look up and nothing to keep in step.
+func taskSideTalk(deps Deps, task *coord.Task, children []coord.Task) ([]coord.Message, error) {
+	who := []string{task.CreatedBy, task.ClaimedBy, task.AssignedTo}
+	for _, c := range children {
+		who = append(who, c.CreatedBy, c.ClaimedBy, c.AssignedTo)
+	}
+	rooms := coord.DMRoomsAmong(who)
+	if len(rooms) == 0 {
+		return []coord.Message{}, nil
+	}
+	// Open work runs to now; finished work stops moving, and its window closes
+	// with it plus the grace above.
+	until := time.Time{}
+	if task.State == coord.TaskCompleted || task.State == coord.TaskFailed ||
+		task.State == coord.TaskCanceled || task.State == coord.TaskRejected {
+		until = task.UpdatedAt.Add(SideTalkGrace)
+	}
+	return deps.Coord.MessagesIn(rooms, task.CreatedAt, until, 60)
+}
+
+type taskProjectParams struct {
+	ID        string `json:"id"`
+	ChannelID string `json:"channel_id"` // "" files it under no project
+}
+
+// handleTaskSetProject files a task under a project after the fact.
+//
+// The project is not a label. It is where the next run's working directory
+// comes from, so a task in the wrong one produces its work in the wrong folder.
+func handleTaskSetProject(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p taskProjectParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	if err := deps.Coord.SetTaskChannel(p.ID, p.ChannelID); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"ok": true})
 }
 
 type taskResumeParams struct {
@@ -256,6 +416,9 @@ type taskCreateParams struct {
 	AssignedTo string `json:"assigned_to,omitempty"`
 	Priority   int    `json:"priority,omitempty"`
 	ParentID   string `json:"parent_id,omitempty"` // set: a child of that task, same rules as `bomclaw task sub`
+	// ChannelID files the task under a project. A child ignores it and
+	// inherits its parent's, because a piece of a task is the same work.
+	ChannelID string `json:"channel_id,omitempty"`
 }
 
 func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -272,6 +435,7 @@ func handleTaskCreate(deps Deps, params json.RawMessage) (json.RawMessage, error
 		Title:      p.Title,
 		Body:       p.Body,
 		Priority:   p.Priority,
+		ChannelID:  p.ChannelID,
 	}
 	var task *coord.Task
 	var err error

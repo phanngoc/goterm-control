@@ -3,6 +3,9 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -42,6 +45,10 @@ type channelMessagesParams struct {
 	ChannelID  string `json:"channel_id"`
 	ThreadRoot string `json:"thread_root,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
+	// Before pages backwards: the created_at of the oldest message already on
+	// screen. Empty asks for the newest page, which is where a reader wants to
+	// start — a conversation is read from its end.
+	Before string `json:"before,omitempty"`
 }
 
 func handleChannelMessages(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -62,7 +69,15 @@ func handleChannelMessages(deps Deps, params json.RawMessage) (json.RawMessage, 
 	if p.ChannelID == "" {
 		return nil, fmt.Errorf("channel_id is required")
 	}
-	msgs, err := deps.Coord.ChannelMessages(p.ChannelID, p.Limit)
+	var before time.Time
+	if p.Before != "" {
+		t, err := time.Parse(time.RFC3339Nano, p.Before)
+		if err != nil {
+			return nil, fmt.Errorf("before must be an RFC3339 timestamp: %w", err)
+		}
+		before = t
+	}
+	msgs, err := deps.Coord.ChannelMessages(p.ChannelID, p.Limit, before)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +137,10 @@ type channelCreateParams struct {
 	Name    string   `json:"name"`
 	Purpose string   `json:"purpose,omitempty"`
 	Members []string `json:"members,omitempty"` // agent ids; the owner always joins
+	// Plain makes a room with no project folder behind it, the way #general
+	// is. The default is a project, because that is what people are making
+	// when they create a room: somewhere for a piece of work to live.
+	Plain bool `json:"plain,omitempty"`
 }
 
 func handleChannelCreate(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -136,11 +155,106 @@ func handleChannelCreate(deps Deps, params json.RawMessage) (json.RawMessage, er
 	for _, id := range p.Members {
 		members = append(members, coord.Member{Kind: coord.MemberAgent, ID: id})
 	}
-	c, err := deps.Coord.CreateChannel("", p.Name, coord.ChannelPublic, p.Purpose, coord.OwnerUserID, members)
+	var c *coord.Channel
+	var err error
+	if p.Plain {
+		c, err = deps.Coord.CreateChannel("", p.Name, coord.ChannelPublic, p.Purpose, coord.OwnerUserID, members)
+	} else {
+		c, err = deps.Coord.CreateProject(p.Name, p.Purpose, coord.OwnerUserID, deps.ProjectsDir, members)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(c)
+}
+
+type projectBriefParams struct {
+	ChannelID string `json:"channel_id"`
+	// Body set means write; absent means read. One method rather than two
+	// because the screen does both and the permission is the same.
+	Body *string `json:"body,omitempty"`
+}
+
+// handleProjectBrief reads or replaces a project's AGENTS.md — the file the
+// agents read before working, and edit with their own tools.
+func handleProjectBrief(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p projectBriefParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ChannelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	c, err := deps.Coord.GetChannel(p.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	if p.Body != nil {
+		if err := deps.Coord.WriteProjectBrief(p.ChannelID, *p.Body); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(map[string]any{
+		"channel_id": c.ID,
+		"workspace":  c.Workspace,
+		"path":       filepath.Join(c.Workspace, coord.AgentsFile),
+		"body":       deps.Coord.ProjectBrief(p.ChannelID),
+	})
+}
+
+type projectFilesParams struct {
+	ChannelID string `json:"channel_id"`
+	Path      string `json:"path,omitempty"` // relative to the project folder; "" is its root
+	// Read asks for one file's contents instead of a directory listing.
+	Read bool `json:"read,omitempty"`
+	// Body set means write that file. Separate from Read so an empty file is
+	// a thing you can save: "" is a legitimate document, and a bare string
+	// field could not tell it from "not writing".
+	Body *string `json:"body,omitempty"`
+}
+
+// handleProjectFiles browses a project's folder — the place the work actually
+// lands, which until now could only be seen from a terminal.
+func handleProjectFiles(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p projectFilesParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ChannelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	if p.Body != nil {
+		if err := deps.Coord.WriteProjectFile(p.ChannelID, p.Path, *p.Body); err != nil {
+			return nil, err
+		}
+		body, truncated, binary, err := deps.Coord.ReadProjectFile(p.ChannelID, p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{
+			"path": p.Path, "body": body, "truncated": truncated, "binary": binary, "saved": true,
+		})
+	}
+	if !p.Read {
+		entries, err := deps.Coord.ProjectFiles(p.ChannelID, p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"path": p.Path, "entries": entries})
+	}
+	body, truncated, binary, err := deps.Coord.ReadProjectFile(p.ChannelID, p.Path)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"path": p.Path, "body": body, "truncated": truncated, "binary": binary,
+	})
 }
 
 type channelReadParams struct {
@@ -174,6 +288,123 @@ func handleChannelRead(deps Deps, params json.RawMessage) (json.RawMessage, erro
 		}
 	}
 	return json.Marshal(map[string]any{"ok": true, "mentions_cleared": cleared})
+}
+
+// --- channel gateways ------------------------------------------------------
+//
+// Registering a destination was a CLI command and nothing else, so the only
+// way to give a room a phone was a terminal. These three put it on the screen
+// where the rooms already are.
+
+type channelGatewaysParams struct {
+	// ChannelID empty means every room's gateways, which is one small array
+	// and saves the sidebar a call per room.
+	ChannelID string `json:"channel_id,omitempty"`
+}
+
+func handleChannelGateways(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p channelGatewaysParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	gws, err := deps.Coord.ChannelGateways(p.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	// default_target is what the owner's own chat is, so the screen can offer
+	// "your private chat" instead of a box for a number nobody remembers.
+	target := ""
+	if deps.OwnerChatID != 0 {
+		target = strconv.FormatInt(deps.OwnerChatID, 10)
+	}
+	return json.Marshal(map[string]any{
+		"gateways":       gws,
+		"kinds":          coord.GatewayKinds,
+		"modes":          coord.ForwardModes,
+		"default_target": target,
+		"default_agent":  deps.AgentID,
+	})
+}
+
+type channelBindParams struct {
+	// ID set means edit that row; the rest of the fields are then optional and
+	// an empty one leaves what is stored alone. That is what lets the screen
+	// change a mode without resending a secret it was never shown.
+	ID        string `json:"id,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+	Kind      string `json:"kind,omitempty"`   // default telegram
+	Target    string `json:"target,omitempty"` // default: the owner's chat, for telegram
+	Secret    string `json:"secret,omitempty"`
+	Mode      string `json:"mode,omitempty"` // default: whatever the kind starts at
+	Label     string `json:"label,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"` // default: this gateway's agent
+}
+
+func handleChannelBind(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p channelBindParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ID != "" {
+		g, err := deps.Coord.UpdateChannelGateway(p.ID, p.Mode, p.Label, p.Target, p.Secret)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(g)
+	}
+	if p.ChannelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	if p.Kind == "" {
+		p.Kind = coord.GatewayTelegram
+	}
+	if p.AgentID == "" {
+		// The agent whose dashboard this is, which is also the bot the person
+		// is already talking to.
+		p.AgentID = deps.AgentID
+	}
+	if p.Target == "" && p.Kind == coord.GatewayTelegram {
+		if deps.OwnerChatID == 0 {
+			return nil, fmt.Errorf("no Telegram chat id: this gateway has no allowed_user_ids to take one from, " +
+				"so the chat has to be given explicitly")
+		}
+		p.Target = strconv.FormatInt(deps.OwnerChatID, 10)
+	}
+	g, err := deps.Coord.AddChannelGateway(coord.ChannelGateway{
+		ChannelID: p.ChannelID, Kind: p.Kind, AgentID: p.AgentID,
+		Target: p.Target, Secret: p.Secret, Mode: p.Mode, Label: p.Label,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(g)
+}
+
+type channelUnbindParams struct {
+	ID string `json:"id"`
+}
+
+func handleChannelUnbind(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p channelUnbindParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	if err := deps.Coord.RemoveChannelGateway(p.ID); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"ok": true})
 }
 
 // --- artifacts -------------------------------------------------------------

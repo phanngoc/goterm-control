@@ -94,15 +94,35 @@ func runTask(args []string) {
 		depth := fs.Int("depth", 0, "Chain depth when an agent spawns follow-up work")
 		context := fs.String("context", "", "Existing context id to attach this task to")
 		thread := fs.String("thread", "", "Root message id of the conversation this work came out of")
+		channel := fs.String("channel", "", "Project this work belongs to (default: the thread's)")
+		// A goal is a root task with a bar written on it. Until now only
+		// `task sub` could set one, so the only tasks that could carry criteria
+		// were the ones nobody was opening a goal with.
+		acceptance := fs.String("acceptance", "", "How anyone knows this is done — the bar it is judged against")
 		fs.Parse(rest)
 
 		db := openCoord(*dbPath)
 		defer db.Close()
 
 		me := requireAgent(*agent)
+		// Work opened from a conversation belongs to that conversation's
+		// project. Without this the board loses it the moment it is scoped.
+		channelID := *channel
+		if channelID == "" && *thread != "" {
+			channelID = threadChannel(db, *thread)
+		}
+		// Work handed to a peer from inside a task stays in that task's
+		// project. `task sub` inherits it from the parent row; this is the
+		// other half — `task new --to <peer>` opens a root task with nothing to
+		// inherit from, and five real pieces of work left a project this way
+		// before anybody noticed. The gateway exports it per run.
+		if channelID == "" {
+			channelID = strings.TrimSpace(os.Getenv("BOMCLAW_TASK_CHANNEL"))
+		}
 		task, err := db.CreateTask(coord.NewTask{
 			CreatedBy: me, AssignedTo: *to, Title: *title, Body: *body,
 			Priority: *priority, Depth: *depth, ContextID: *context,
+			ChannelID: channelID, Acceptance: *acceptance,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "task new: %v\n", err)
@@ -118,7 +138,7 @@ func runTask(args []string) {
 				os.Exit(1)
 			}
 			if _, _, err := db.PostMessage(coord.NewChannelMessage{
-				ChannelID: threadChannel(db, *thread), ThreadRoot: *thread, AuthorID: me,
+				ChannelID: threadRoom(db, *thread), ThreadRoot: *thread, AuthorID: me,
 				Body: fmt.Sprintf("Đã mở task %s cho việc này: %s", task.ID, *title),
 			}); err != nil {
 				fmt.Fprintf(os.Stderr, "task new: bound, but could not say so in the thread: %v\n", err)
@@ -192,7 +212,7 @@ func runTask(args []string) {
 		fmt.Printf("%s\nattempts: %d (pass this to `task done --attempts`)\n\n%s\n\n%s\n",
 			task.ID, task.Attempts, task.Title, task.Body)
 
-	case "done", "fail":
+	case "done", "fail", "reject":
 		fs := flag.NewFlagSet("task "+sub, flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		id := fs.String("id", "", "Task id (required)")
@@ -204,8 +224,15 @@ func runTask(args []string) {
 		defer db.Close()
 
 		state := coord.TaskCompleted
-		if sub == "fail" {
+		switch sub {
+		case "fail":
+			// The work broke.
 			state = coord.TaskFailed
+		case "reject":
+			// The work ran and the answer is no. A different fact from `fail`,
+			// and the state for it has existed unused since the table was
+			// written — this is where it belongs.
+			state = coord.TaskRejected
 		}
 		// Without an explicit fencing token, fall back to whatever the row
 		// says now: still correct for the common single-claim case.
@@ -379,6 +406,79 @@ func runTask(args []string) {
 		}
 		w.Flush()
 
+	case "accept":
+		// Writing the bar for a goal that arrived without one. Write-once: an
+		// agent that can lower the bar it is judged against is not being
+		// judged.
+		fs := flag.NewFlagSet("task accept", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		acceptance := fs.String("acceptance", "", "What makes this done — numbered and checkable")
+		fs.Parse(rest)
+		if *acceptance == "" && fs.NArg() > 0 {
+			*acceptance = strings.Join(fs.Args(), " ")
+		}
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		if err := db.SetAcceptance(*id, *acceptance); err != nil {
+			fmt.Fprintf(os.Stderr, "task accept: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s will be judged against:\n%s\n", *id, *acceptance)
+
+	case "tree":
+		// How far along is this goal? Before ContextProgress the answer meant
+		// walking parent_id by hand, so in practice nobody asked it.
+		fs := flag.NewFlagSet("task tree", flag.ExitOnError)
+		dbPath := dbFlag(fs)
+		id := fs.String("id", "", "Any task in the tree (required)")
+		fs.Parse(rest)
+
+		db := openCoord(*dbPath)
+		defer db.Close()
+		task, err := db.GetTask(*id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task tree: %v\n", err)
+			os.Exit(1)
+		}
+		p, err := db.ContextProgress(task.ContextID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task tree: %v\n", err)
+			os.Exit(1)
+		}
+		if p.Goal != nil {
+			fmt.Printf("%s  [%s]  %s\n", p.Goal.ID, p.Goal.State, p.Goal.Title)
+			if p.Goal.Acceptance != "" {
+				fmt.Printf("accepted if:\n%s\n", p.Goal.Acceptance)
+			}
+		}
+		fmt.Printf("%s   %d tasks, %d runs, last moved %s\n",
+			p.ContextID, p.Total, p.Runs, age(p.LastMovedAt))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprint(w, "STATE\tCOUNT\n")
+		for _, st := range []string{coord.TaskSubmitted, coord.TaskWorking, coord.TaskBlocked,
+			coord.TaskCompleted, coord.TaskFailed, coord.TaskCanceled, coord.TaskRejected} {
+			if n := p.ByState[st]; n > 0 {
+				fmt.Fprintf(w, "%s\t%d\n", st, n)
+			}
+		}
+		w.Flush()
+		if len(p.Open) == 0 {
+			// Said plainly, because "nothing open" is not "goal met" and the
+			// difference is the whole reason this command exists.
+			fmt.Println("\nNothing is open. That means the pieces that exist are finished —\n" +
+				"whether the goal is met is a separate question, answered against the criteria above.")
+			return
+		}
+		fmt.Printf("\nStill open (%d):\n", len(p.Open))
+		w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		for _, o := range p.Open {
+			who := orAny(o.ClaimedBy, o.AssignedTo)
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", shortID(o.ID), o.State, who, truncate(o.Title, 50))
+		}
+		w.Flush()
+
 	case "show":
 		fs := flag.NewFlagSet("task show", flag.ExitOnError)
 		dbPath := dbFlag(fs)
@@ -405,6 +505,13 @@ func runTask(args []string) {
 		fmt.Printf("from %s → %s   attempts %d/%d   continuations %d/%d   depth %d   kind %s\n",
 			task.CreatedBy, orAny(task.ClaimedBy, task.AssignedTo), task.Attempts, task.MaxAttempts,
 			task.Continuations, task.MaxContinuations, task.Depth, task.Kind)
+		if dir, shared := db.TaskWorkspace(task); dir != "" {
+			if shared {
+				fmt.Printf("working in: %s (shared by this context)\n", dir)
+			} else {
+				fmt.Printf("working in: %s (project folder)\n", dir)
+			}
+		}
 		if ref := coord.ParseSessionRef(task.SessionRef); ref.SessionID != "" {
 			fmt.Printf("session: %s/%s%s (next run resumes it on %s)\n",
 				ref.Provider, shortID(ref.SessionID), accountSuffix(ref.Account), orAny(task.AssignedTo, "any agent"))
@@ -494,7 +601,7 @@ func accountSuffix(a string) string {
 func taskUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: bomclaw task <command>
 
-  new    --title T [--body B] [--to agent] [--priority N]   create work
+  new    --title T [--body B] [--to agent] [--acceptance A]  create work (a goal is one with criteria)
   sub    --parent ID --title T --body B [--acceptance A]    split a piece off a task you hold (max 8 open)
          [--to agent] [--input a_id,a_id]                   the body must stand alone: another agent may claim it
   claim  [--json]                                           take the next claimable task
@@ -507,6 +614,8 @@ func taskUsage() {
   resume --id ID [--more N]                                 (person) reopen a task the system gave up on
   list   [--state S] [--mine] [--limit N]                   see the queue
   show   --id ID                                            one task: runs, checkpoint, history
+  tree   --id ID                                            the whole goal: what is left, what it cost
+  accept --id ID --acceptance A                             write what done means (once)
 
 Every command accepts --agent (default $BOMCLAW_AGENT_ID) and --db.`)
 }
@@ -787,10 +896,38 @@ func orAny(primary, fallback string) string {
 	return "any"
 }
 
-// threadChannel is the room a thread lives in. The caller already named the
-// thread, and making it also name the channel would be asking for a fact the
-// database holds.
+// threadChannel is the PROJECT a thread lives in, or "" when it does not live
+// in one. The caller already named the thread, and making it also name the
+// channel would be asking for a fact the database holds.
+//
+// A room that is not a project gives "" on purpose. #general and DMs have no
+// folder and do not appear in the board's project list, so filing a task there
+// hides it from every filter at once — it is not unfiled, it is filed somewhere
+// nothing looks. A real piece of work went into a DM this way and was invisible
+// on the board for two days. Unfiled is worse than filed and far better than
+// filed out of sight: it shows up under "no project", where it can be moved.
+//
+// The thread↔task link does not depend on this. BindThreadToTask keeps it in
+// both directions whatever the channel is.
 func threadChannel(db *coord.DB, rootID string) string {
+	channelID := threadRoom(db, rootID)
+	if channelID == "" {
+		return ""
+	}
+	c, err := db.GetChannel(channelID)
+	if err != nil || c.Workspace == "" {
+		return ""
+	}
+	return channelID
+}
+
+// threadRoom is where a thread's messages go — any room, project or not.
+//
+// Separate from threadChannel because they answer different questions with the
+// same-looking answer: "which project does this work belong to" may be nothing,
+// but "which room do I reply in" must always be somewhere, or the note saying a
+// task was opened is posted into the void.
+func threadRoom(db *coord.DB, rootID string) string {
 	channelID, err := db.MessageChannel(rootID)
 	if err != nil || channelID == "" {
 		return coord.GeneralChannelID

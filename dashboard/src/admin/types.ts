@@ -1,6 +1,6 @@
 // Mirrors internal/coord — keep field names in sync with the Go json tags.
 
-export type RunType = 'chain' | 'llm' | 'tool' | 'memory' | 'task'
+export type RunType = 'chain' | 'llm' | 'tool' | 'memory' | 'task' | 'command'
 export type RunStatus = 'pending' | 'success' | 'error'
 
 export interface Run {
@@ -36,6 +36,9 @@ export interface TraceSummary extends Run {
 }
 
 export interface Agent {
+  /** telegram_bot: the @name of this agent's own bot, without the @. Absent
+   *  when the agent has no Telegram bot of its own. */
+  telegram_bot?: string
   id: string
   display_name: string
   provider: string
@@ -115,6 +118,7 @@ export interface Task {
   max_continuations: number
   blocked_on?: 'children' | 'human' | ''
   fail_reason?: 'exhausted' | 'continuations-exhausted' | 'empty-exhausted' | ''
+  channel_id?: string
 }
 
 export interface TaskEvent {
@@ -134,7 +138,40 @@ export interface TaskDetail {
   children: Task[]
   context_count?: number
   context_cap?: number
-  thread_root?: string // the tasks it split off (`bomclaw task sub`); empty for a leaf
+  /** The whole goal, not this task: how much is still moving, what it has cost,
+   *  and the ceiling it stops at. One level of children said "2/2 finished"
+   *  while half a three-wave goal was still running. */
+  context_open?: number
+  context_runs?: number
+  context_budget?: number
+  thread_root?: string // the conversation this work came out of, when it came from one
+
+  // The project this work belongs to, and so the folder its next run happens
+  // in. Absent when it was filed under none.
+  project?: Channel
+
+  // The CLI conversation the task has been running in, across all its runs.
+  session_id?: string
+
+  // What this piece of work produced — this task's outputs and its children's.
+  artifacts?: Artifact[]
+
+  // What the agents filed against this task with `bomclaw msg --task`.
+  mail?: AgentMessage[]
+
+  // What they said to each other while it ran, without filing it here. Kept
+  // apart from mail because it is inferred from who is on the task and when it
+  // ran, not recorded — and the screen says so.
+  side_talk?: AgentMessage[]
+
+  // What the run is doing right now, when one is running on this gateway. A
+  // board that says "running" for four minutes tells you less than the log.
+  live?: {
+    agent: string
+    last_tool?: string
+    tool_count: number
+    started_at?: string
+  }
 }
 
 export interface Message {
@@ -238,6 +275,7 @@ export interface Channel {
   unread: number
   mentions: number
   last_message_at?: string
+  workspace?: string
 }
 
 export interface ChannelMessage {
@@ -256,9 +294,55 @@ export interface ChannelMessage {
   last_reply_text?: string
 }
 
+// --- channel gateways -------------------------------------------------------
+// Where a room speaks outside the dashboard. A room may have several: the same
+// sentence can reach a phone and a Slack channel at once.
+//
+// agent_id is the carrier — which gateway process does the sending. It is not
+// bookkeeping: it is what stops three gateways from all sending the same line.
+// `since` is the cut-off, so adding a destination to a busy room does not empty
+// the week onto it.
+
+export type GatewayKind = 'telegram' | 'webhook'
+export type ForwardMode = 'all' | 'mentions' | 'off'
+
+export interface ChannelGateway {
+  id: string
+  channel_id: string
+  kind: GatewayKind
+  agent_id: string
+  target: string
+  /** There is a secret; the secret itself never leaves the server. */
+  has_secret: boolean
+  mode: ForwardMode
+  label?: string
+  since: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GatewayList {
+  gateways: ChannelGateway[]
+  kinds: GatewayKind[]
+  modes: ForwardMode[]
+  /** The owner's own Telegram chat, so nobody has to remember a chat id. */
+  default_target: string
+  default_agent: string
+}
+
 // --- artifacts --------------------------------------------------------------
 
 export type ArtifactKind = 'document' | 'patch' | 'file' | 'link' | 'result'
+
+export interface AgentMessage {
+  id: string
+  from_agent: string
+  to_agent?: string
+  task_id?: string
+  body: string
+  channel_id?: string
+  created_at: string
+}
 
 export interface Artifact {
   id: string
@@ -274,4 +358,32 @@ export interface Artifact {
   created_by: string
   created_at: string
   role?: 'input' | 'output'
+}
+
+// --- skills -----------------------------------------------------------------
+
+export interface HubSkill {
+  name: string
+  description: string
+  path: string
+  dir: string
+  /** category: the folder a nested skill sits under, or absent for a top-level
+   *  one. A backend with its own self-improvement loop files skills this way. */
+  category?: string
+  /** bundled: one of the defaults every agent is seeded with, so it can be
+   *  offered back after a removal. */
+  bundled: boolean
+  /** edited: this agent's copy no longer matches what it was seeded with — the
+   *  mark of a lesson this agent has and its peers do not. */
+  edited: boolean
+}
+
+export interface AgentSkills {
+  agent_id: string
+  workspace: string
+  skills: HubSkill[]
+  missing?: string[]
+  error?: string
+  online: boolean
+  provider?: string
 }

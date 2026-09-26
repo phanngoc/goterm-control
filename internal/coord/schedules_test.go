@@ -354,10 +354,85 @@ func TestMigrateV3DatabaseGainsSchedules(t *testing.T) {
 	if n != 1 {
 		t.Error("tasks.reported_at missing after migration")
 	}
-	if _, err := db.ListSchedules(); err != nil {
+	if _, err := db.ListSchedules(""); err != nil {
 		t.Errorf("schedules table: %v", err)
 	}
 	if agents, err := db.ListAgents(); err != nil || len(agents) != 1 {
 		t.Errorf("existing agents survive: %v %d", err, len(agents))
+	}
+}
+
+// A Schedules screen showing every clock on the machine has the same problem
+// as a board showing every task: unreadable the moment there is more than one
+// project.
+func TestSchedulesScopeToTheirProject(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "a1")
+	proj, err := db.CreateProject("Trading", "", "a1", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(name, channelID string) {
+		t.Helper()
+		if _, err := db.CreateSchedule(NewSchedule{
+			Name: name, CreatedBy: "a1", Kind: "every", Spec: "5m", TZ: "Asia/Ho_Chi_Minh",
+			PayloadKind: PayloadCommand, Payload: CommandPayload{Cmd: "true"},
+			NextRunAt:   time.Now().Add(time.Minute), ChannelID: channelID,
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	mk("prices", proj.ID)
+	mk("disk", "") // machine-wide, the way the heartbeat is
+
+	scoped, err := db.ListSchedules(proj.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped) != 1 || scoped[0].Name != "prices" {
+		t.Fatalf("scoping gave %+v", scoped)
+	}
+	if scoped[0].ChannelID != proj.ID {
+		t.Errorf("the clock does not remember its project: %q", scoped[0].ChannelID)
+	}
+
+	// The machine-wide ones must stay reachable, or the heartbeat disappears
+	// from the screen the day it starts scoping.
+	loose, err := db.ListSchedules(NoChannel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loose) != 1 || loose[0].Name != "disk" {
+		t.Fatalf("machine-wide clocks are unreachable: %+v", loose)
+	}
+
+	all, err := db.ListSchedules("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("no filter should show both, got %d", len(all))
+	}
+}
+
+// And the task a project's clock produces belongs to that project, or the work
+// leaves the board the moment it stops being typed by hand.
+func TestAScheduledTaskCarriesTheProject(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "a1")
+	proj, _ := db.CreateProject("Trading", "", "a1", t.TempDir(), nil)
+
+	task, err := db.CreateTask(NewTask{
+		CreatedBy: "schedule:prices", Title: "lấy giá", Kind: KindScheduled, ChannelID: proj.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ChannelID != proj.ID {
+		t.Fatalf("scheduled work landed on %q", got.ChannelID)
 	}
 }

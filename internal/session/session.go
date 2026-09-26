@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -15,13 +16,40 @@ type Session struct {
 	ClaudeSessionID string    `json:"claude_session_id,omitempty"`
 	Provider        string    `json:"provider,omitempty"` // CLI that owns ClaudeSessionID ("claude", "codex")
 	Account         string    `json:"account,omitempty"`  // credential pool entry this session is pinned to
-	MessageCount    int       `json:"message_count"`
-	InputTokens     int       `json:"input_tokens"`
-	OutputTokens    int       `json:"output_tokens"`
-	CompactSummary  string    `json:"compact_summary,omitempty"`
-	Label           string    `json:"label,omitempty"`
-	Seq             int       `json:"seq"`
-	MemoryFlushed   bool      `json:"memory_flushed,omitempty"` // threshold flush already ran this session
+	// Workspace is where this conversation's CLI runs. Empty means the agent's
+	// own workspace — which is right for a chat and wrong for a project: work
+	// on a project belongs in the project's folder, where the other agents and
+	// the person will look for it.
+	//
+	// Not persisted: it is derived from the room the turn is answering, and a
+	// stale value would silently run a project's work somewhere else.
+	Workspace string `json:"-"`
+	// Env is what the CLI this turn spawns should see beyond the gateway's own
+	// environment. A task run puts the task and its project here, so a
+	// `bomclaw task new` the agent runs inside that turn can default to the
+	// project the work already belongs to.
+	//
+	// Per session rather than os.Setenv because a gateway runs several turns at
+	// once — a chat, a mention, one or more tasks — and a process-wide variable
+	// would hand one turn's task id to another turn's CLI.
+	//
+	// Not persisted, for the same reason as Workspace: it describes this run.
+	Env map[string]string `json:"-"`
+	// TraceTags is what this conversation IS, for the trace of every turn it
+	// runs. A channel turn carries its room and the line that summoned it, so a
+	// message in the room can be opened as the trace it produced; a chat turn
+	// carries nothing and the field stays empty.
+	//
+	// Not persisted: it describes where the session came from this run, and a
+	// session adopted by another lane would otherwise wear the old lane's tags.
+	TraceTags      []string `json:"-"`
+	MessageCount   int      `json:"message_count"`
+	InputTokens    int      `json:"input_tokens"`
+	OutputTokens   int      `json:"output_tokens"`
+	CompactSummary string   `json:"compact_summary,omitempty"`
+	Label          string   `json:"label,omitempty"`
+	Seq            int      `json:"seq"`
+	MemoryFlushed  bool     `json:"memory_flushed,omitempty"` // threshold flush already ran this session
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
@@ -42,12 +70,12 @@ type Session struct {
 
 // RunInfo is a snapshot of the live execution state for status reporting.
 type RunInfo struct {
-	Running      bool
-	StartedAt    time.Time
-	CurrentTask  string
-	LastTool     string
-	LastToolAt   time.Time
-	ToolCount    int
+	Running     bool
+	StartedAt   time.Time
+	CurrentTask string
+	LastTool    string
+	LastToolAt  time.Time
+	ToolCount   int
 }
 
 // SessionSnapshot is a mutex-free copy of session fields for persistence.
@@ -125,6 +153,66 @@ func (s *Session) SetProvider(name string) {
 	defer s.mu.Unlock()
 	s.Provider = name
 	s.UpdatedAt = time.Now()
+}
+
+// SetWorkspace points this conversation's CLI at a directory. Call it before
+// the turn; the clients read it when they spawn.
+func (s *Session) SetWorkspace(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Workspace = dir
+}
+
+// SetTraceTags records what this conversation is, for its turns' traces.
+func (s *Session) SetTraceTags(tags ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TraceTags = tags
+}
+
+// GetTraceTags returns the tags every turn on this session is recorded with.
+func (s *Session) GetTraceTags() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.TraceTags...)
+}
+
+// SetEnv adds one variable to what this conversation's CLI is spawned with.
+// Call it before the turn; the clients read it when they spawn.
+func (s *Session) SetEnv(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Env == nil {
+		s.Env = map[string]string{}
+	}
+	s.Env[key] = value
+}
+
+// GetEnv returns this conversation's extra environment as KEY=VALUE lines,
+// ready to append to a command's own environment. Nil when there is none.
+func (s *Session) GetEnv() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.Env) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.Env))
+	for k, v := range s.Env {
+		out = append(out, k+"="+v)
+	}
+	sort.Strings(out) // deterministic, so a test can read it
+	return out
+}
+
+// GetWorkspace returns the directory this conversation runs in, or "" for the
+// agent's own.
+func (s *Session) GetWorkspace() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Workspace
 }
 
 // GetAccount returns the credential pool entry this session is pinned to.

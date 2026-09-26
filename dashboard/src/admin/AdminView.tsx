@@ -7,6 +7,7 @@ import ChannelView from './ChannelView'
 import NotesPane from './NotesPane'
 import SettingsPane from './SettingsPane'
 import SchedulesPane from './SchedulesPane'
+import SkillsPane from './SkillsPane'
 import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -20,20 +21,30 @@ const LABELS: Record<Pane, string> = {
   schedules: 'Schedules',
   notes: 'Notes',
   messages: 'Messages',
+  skills: 'Skills',
   settings: 'Settings',
 }
 
 const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
 
-export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pane; onPane: (p: Pane) => void }) {
+export default function AdminView({ call, pane, onPane, taskId, onTaskId, channelId, onChannelId }: {
+  call: Call; pane: Pane; onPane: (p: Pane) => void
+  /** taskId is the task whose detail is open, owned by the address bar. */
+  taskId: string; onTaskId: (id: string) => void
+  /** channelId is the room the Messages pane is showing, owned by the address
+   *  bar the same way. */
+  channelId: string; onChannelId: (id: string) => void
+}) {
   const [data, setData] = useState<OverviewData | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  // Work and the conversation it came out of live in two panes. These carry a
-  // click from one to the other: a task id the board should open, a thread the
-  // room should open. Cleared once handed over, so returning to a pane later
-  // does not reopen what you already closed.
-  const [openTask, setOpenTask] = useState<string>('')
+  // Work and the conversation it came out of live in two panes. A thread the
+  // room should open is carried here and cleared once handed over, so returning
+  // to a pane later does not reopen what you already closed. The task the board
+  // should open is not: that one is the address bar's, so it can be linked.
   const [openThread, setOpenThread] = useState<string>('')
+  // And a project whose folder the board wants opened: "where did this task's
+  // work land" is one click from the task, not a hunt through the rooms.
+  const [openFiles, setOpenFiles] = useState<string>('')
 
   // The overview drives the agent list every other pane filters by, so it is
   // refreshed regardless of which pane is showing.
@@ -69,6 +80,12 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
   }
 
   const agentIDs = data?.agents.map(a => a.id) ?? []
+  // Each agent answers on its own Telegram bot, so a direct room links to a
+  // different chat per agent.
+  const bots: Record<string, string> = {}
+  for (const a of data?.agents ?? []) {
+    if (a.telegram_bot) bots[a.id] = a.telegram_bot
+  }
   const selfID = data?.agent_id ?? ''
 
   return (
@@ -103,18 +120,22 @@ export default function AdminView({ call, pane, onPane }: { call: Call; pane: Pa
         {pane === 'tasks' && (
           <TaskBoard
             call={call} agents={agentIDs}
-            openTaskID={openTask} onOpenedTask={() => setOpenTask('')}
+            openTaskID={taskId} onOpenTask={onTaskId}
             onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
+            onOpenFiles={channelID => { setOpenFiles(channelID); onPane('messages') }}
           />
         )}
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
+        {pane === 'skills' && <SkillsPane call={call} />}
         {pane === 'settings' && <SettingsPane call={call} />}
         {pane === 'messages' && (
           <ChannelView
-            call={call} agents={agentIDs} selfID={selfID}
+            call={call} agents={agentIDs} selfID={selfID} bots={bots}
+            channelID={channelId} onChannel={onChannelId}
             openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
-            onOpenTask={taskID => { setOpenTask(taskID); onPane('tasks') }}
+            openFilesFor={openFiles} onOpenedFiles={() => setOpenFiles('')}
+            onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
           />
         )}
       </div>

@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -65,6 +66,28 @@ func handleAdminSettings(deps Deps) (json.RawMessage, error) {
 	})
 }
 
+// restartAfterReply kills this process a moment after the caller has been
+// answered, because the reply cannot survive the process sending it.
+//
+// Returning first is not enough on its own: the handler returns, and only then
+// does the reply get written to the socket. A restart racing that write loses
+// it. For the person at the dashboard that is a spinner that never resolves;
+// for a peer carrying out a restart on this agent's behalf it is worse — a
+// dropped connection is indistinguishable from an agent that was never
+// listening, so the peer would conclude this gateway is down and start it
+// again, killing the process that had just come up.
+//
+// The pause is short enough that nobody waits on it and long enough that a
+// loopback write has finished many times over.
+func restartAfterReply(deps Deps) {
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if err := deps.Restart(); err != nil {
+			log.Printf("settings: restart failed: %v", err)
+		}
+	}()
+}
+
 type setModelParams struct {
 	Model string `json:"model"`
 	// Force skips the busy check. The screen sets it only after the person has
@@ -101,13 +124,7 @@ func handleAdminSetModel(deps Deps, params json.RawMessage) (json.RawMessage, er
 			"note": "config written, but this gateway has no service manager — restart it yourself for the change to take",
 		})
 	}
-	// Answer before the restart: the reply cannot survive the process it is
-	// being sent from.
-	go func() {
-		if err := deps.Restart(); err != nil {
-			log.Printf("settings: restart failed: %v", err)
-		}
-	}()
+	restartAfterReply(deps)
 	return json.Marshal(map[string]any{"written": true, "restarted": true})
 }
 
@@ -150,7 +167,16 @@ func handleAdminSettingsAll(deps Deps) (json.RawMessage, error) {
 			if a.ID == deps.AgentID {
 				continue
 			}
-			out = append(out, peerSettings(client, a.ID, a.DisplayName, a.WSAddr))
+			peer := peerSettings(client, a.ID, a.DisplayName, a.WSAddr)
+			if !peer.Reachable {
+				// A peer that is down cannot say whether it has a service
+				// manager, and the answer the screen needs is not about it
+				// anyway: the restart would be carried out from here. So the
+				// flag on a dead row means "this gateway can start it", which
+				// is the question the button is asking.
+				peer.CanRestart = deps.ReviveAgent != nil
+			}
+			out = append(out, peer)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AgentID < out[j].AgentID })
@@ -247,6 +273,137 @@ func SettingsHandler(deps Deps) http.HandlerFunc {
 			http.Error(w, `{"error":"GET or POST"}`, http.StatusMethodNotAllowed)
 			return
 		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(raw)
+	}
+}
+
+// --- restarting an agent ---------------------------------------------------
+//
+// The settings screen could already restart an agent as a side-effect of
+// changing its model, and could not restart one at all otherwise. That was
+// backwards in the case that matters most: an agent listed as "không liên lạc
+// được" has no model to change and is precisely the one someone wants to bring
+// back.
+//
+// Who carries out the restart depends on who is up. An agent that answers is
+// asked, because only it knows whether a turn is in flight and only it can
+// refuse. An agent that does not answer is started from here through the
+// service manager — there is nothing to ask and nothing running to cut.
+
+type restartParams struct {
+	AgentID string `json:"agent_id"`
+	// Force skips the busy check, after the screen has said a turn is running
+	// and the person has answered that anyway.
+	Force bool `json:"force,omitempty"`
+}
+
+// handleAdminRestart restarts THIS gateway.
+func handleAdminRestart(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	var p restartParams
+	if len(params) > 0 {
+		if err := decodeParams(params, &p); err != nil {
+			return nil, err
+		}
+	}
+	// Same rule as a model change: cutting a run in flight is a decision, not
+	// a side-effect of pressing a button.
+	if !p.Force && deps.Runs != nil {
+		if n := len(deps.Runs()); n > 0 {
+			return nil, fmt.Errorf("%d run(s) in flight — restarting now cancels them; retry with force to go ahead", n)
+		}
+	}
+	if deps.Restart == nil {
+		return nil, fmt.Errorf("%s is not under a service manager — restart it yourself", deps.AgentID)
+	}
+	log.Printf("settings: restarting %s on request", deps.AgentID)
+	restartAfterReply(deps)
+	return json.Marshal(map[string]any{"agent_id": deps.AgentID, "restarted": true, "how": "asked"})
+}
+
+// handleAdminRestartOn routes a restart to whichever agent it names.
+func handleAdminRestartOn(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	var p restartParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if p.AgentID == "" || p.AgentID == deps.AgentID {
+		return handleAdminRestart(deps, params)
+	}
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	agents, err := deps.Coord.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range agents {
+		if a.ID != p.AgentID {
+			continue
+		}
+		raw, err := askPeerToRestart(a.WSAddr, p)
+		if err == nil {
+			return raw, nil
+		}
+		// A peer that answered and said no is answered for: it refused
+		// because a run is in flight, and starting it from here would kill
+		// exactly the run it was protecting. Only silence earns the fallback.
+		var down peerUnreachable
+		if !errors.As(err, &down) {
+			return nil, fmt.Errorf("%s: %w", p.AgentID, err)
+		}
+		if deps.ReviveAgent == nil {
+			return nil, fmt.Errorf("%s is not answering (%v) and this gateway has no service manager to start it with", p.AgentID, down.err)
+		}
+		if err := deps.ReviveAgent(p.AgentID); err != nil {
+			return nil, fmt.Errorf("start %s: %w", p.AgentID, err)
+		}
+		log.Printf("settings: %s was not answering (%v); started it from here", p.AgentID, down.err)
+		return json.Marshal(map[string]any{"agent_id": p.AgentID, "restarted": true, "how": "started"})
+	}
+	return nil, fmt.Errorf("no agent %q is registered", p.AgentID)
+}
+
+// peerUnreachable marks the one failure that justifies reaching past the peer
+// and into the service manager: nothing answered. An HTTP error is an answer.
+type peerUnreachable struct{ err error }
+
+func (p peerUnreachable) Error() string { return p.err.Error() }
+
+func askPeerToRestart(wsAddr string, p restartParams) (json.RawMessage, error) {
+	url, err := PeerURL(wsAddr, "/api/settings/restart")
+	if err != nil {
+		return nil, peerUnreachable{err}
+	}
+	body, _ := json.Marshal(p)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, peerUnreachable{err}
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		// The peer's own words: it knows why better than this does.
+		return nil, fmt.Errorf("%s", strings.TrimSpace(string(raw)))
+	}
+	return raw, nil
+}
+
+// RestartHandler is the loopback face of a restart, for a peer to call.
+// Mounted beside /api/settings under the same rule: a login, or a local
+// caller — and another agent on this machine is local.
+func RestartHandler(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"POST required"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		raw, err := handleAdminRestart(deps, body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

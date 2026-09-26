@@ -38,8 +38,10 @@ type StreamCallbacks = chat.StreamCallbacks
 // Client wraps the claude CLI subprocess.
 type Client struct {
 	systemPrompt string
-	workspace    string // working directory for the CLI subprocess
-	pool         *credentials.Pool
+	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
+	systemExtra func(workspace string) string
+	workspace   string // working directory for the CLI subprocess
+	pool        *credentials.Pool
 }
 
 // New creates a Claude client backed by the claude CLI subprocess.
@@ -159,7 +161,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// Resumed sessions already carry full conversation history in the CLI,
 	// so injecting memory again causes context pollution (e.g. old topics
 	// overriding the user's current intent).
-	systemPrompt := c.systemPrompt + fsGuardPrompt
+	systemPrompt := c.prompt(chat.WorkspaceFor(sess, c.workspace)) + fsGuardPrompt
 	if memoryContext != "" && isNewSession {
 		systemPrompt += memoryContext
 	}
@@ -185,9 +187,12 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	// Set working directory so Claude creates files in the workspace,
 	// not in the bot's own source directory.
-	if c.workspace != "" {
-		_ = os.MkdirAll(c.workspace, 0755)
-		cmd.Dir = c.workspace
+	// The session's directory wins when it has one: a turn answering a
+	// project works in that project's folder, which is where the other
+	// agents and the person will look for what it produced.
+	if dir := chat.WorkspaceFor(sess, c.workspace); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+		cmd.Dir = dir
 	}
 
 	// Pass user message via stdin (safe for arbitrary text).
@@ -197,6 +202,10 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// then let the chosen account override that: an API-key account puts one
 	// back, an OAuth account points CLAUDE_CONFIG_DIR at its own login.
 	cmd.Env = credentials.ApplyEnv(filteredEnv(envVarsToRemove), acct)
+	// Whatever this particular run needs the CLI to know — the task it is
+	// inside, and the project that task belongs to. Appended last so a
+	// session's own value wins over the gateway's.
+	cmd.Env = append(cmd.Env, sess.GetEnv()...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -468,6 +477,20 @@ func init() {
 		c := New(d.SystemPrompt, d.Executor)
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
+		c.SetSystemExtra(d.SystemExtra)
 		return c
 	})
+}
+
+// SetSystemExtra registers a function evaluated on every turn and appended to
+// the system prompt. See chat.Deps.SystemExtra.
+func (c *Client) SetSystemExtra(f func(workspace string) string) { c.systemExtra = f }
+
+// prompt is the operating instructions for THIS turn: the fixed system prompt
+// plus whatever systemExtra says right now.
+func (c *Client) prompt(workspace string) string {
+	if c.systemExtra == nil {
+		return c.systemPrompt
+	}
+	return c.systemPrompt + c.systemExtra(workspace)
 }

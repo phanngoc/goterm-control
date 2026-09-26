@@ -80,7 +80,7 @@ func TestCancelTaskTreeCascadesToOpenDescendants(t *testing.T) {
 		t.Errorf("late result overwrote the cancel: %+v", got)
 	}
 	// Nothing is left for the parent to be woken by, and nothing is claimable.
-	if woken, _ := db.WakeParents(time.Now()); len(woken) != 0 {
+	if woken, _, _ := db.WakeParents(time.Now()); len(woken) != 0 {
 		t.Error("a canceled parent must not be woken")
 	}
 	if _, err := db.ClaimTask("a2"); err != ErrNoTask {

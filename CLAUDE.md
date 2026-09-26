@@ -43,9 +43,21 @@ When restarting the gateway service, stale Claude CLI subprocesses (spawned by p
 
    Check with: `grep -c "telegram polling off" ~/.goterm<N>/logs/gateway.err.log`
 
+   **Superseded 2026-09-14: each agent now owns a distinct bot token**
+   (@Goterm_bot / @Goterm2_bot / @Goterm3_bot), so all three poll and all three
+   have `poll: true`. The mechanism above still applies the moment two agents
+   share a token again. Anything that assumes "only agent 1 polls" is wrong
+   now — that assumption shipped a channel forwarder that three gateways would
+   have raced for, which is why every channel gateway names the agent that
+   carries it. Since 2026-09-20 a room may have several gateways (coord v11,
+   `channel_gateways` + `channel_deliveries`), and that per-row carrier is
+   still what divides the work: a row is only ever seen by the process named
+   on it. See `docs/channel-gateways.md`.
+
 **Agents on this machine:** `bomclaw` (:18789, claude), `bomclaw2` (:18790,
-codex), `bomclaw3` (:18791, claude, shares agent 1's OAuth quota). One shared
-binary at `~/.bomclaw/bomclaw`, so a deploy restarts all three. Adding one:
-`docs/adding-an-agent.md`.
+codex), `bomclaw3` (:18791, opencode). One shared binary at
+`~/.bomclaw/bomclaw`, so a deploy restarts all three. Each has its OWN Telegram
+bot, so a Telegram message id only means something to the agent whose bot sent
+it. Adding one: `docs/adding-an-agent.md`.
 
 Both causes are now fixed in code. What remains is the ungraceful case (SIGKILL, power loss), where nothing in the process can run cleanup — that is what the checklist above is for.

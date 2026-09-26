@@ -43,6 +43,10 @@ export const RUN_COLORS: Record<string, { bar: string; text: string; chip: strin
   tool:   { bar: 'bg-emerald-500', text: 'text-emerald-300', chip: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30' },
   memory: { bar: 'bg-amber-500',   text: 'text-amber-300',   chip: 'bg-amber-500/15 text-amber-300 ring-amber-500/30' },
   task:   { bar: 'bg-fuchsia-500', text: 'text-fuchsia-300', chip: 'bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-500/30' },
+  // A shell command a schedule fired. Slate rather than a colour of its own:
+  // there is no model in it, so it is deliberately the quiet one on a list
+  // where every other row is work an agent did.
+  command: { bar: 'bg-slate-400', text: 'text-slate-300', chip: 'bg-slate-500/20 text-slate-300 ring-slate-500/40' },
 }
 
 export function runColor(type: string) {
@@ -72,6 +76,10 @@ export const RUN_LIVENESS_STYLE: Record<string, string> = {
   failed:    'bg-red-500/15 text-red-300 ring-red-500/30',
   timed_out: 'bg-red-500/15 text-red-300 ring-red-500/30',
   canceled:  'bg-gray-500/15 text-gray-400 ring-gray-500/30',
+  lost:      'bg-gray-500/15 text-gray-400 ring-gray-500/30',
+  // Not a failure of the work: the gateway restarted under it. Its own colour
+  // so it does not read as either success or breakage.
+  interrupted: 'bg-slate-500/20 text-slate-300 ring-slate-500/40',
 }
 
 export function runLivenessStyle(l: string): string {

@@ -26,7 +26,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
+const schemaVersion = 12
+
+// ProgressPrefix marks a message that exists only while something is running.
+// It lives here because two packages write these lines — the mention watcher
+// and the task runner — and the startup sweep has to recognise both.
+const ProgressPrefix = "⏳ "
 
 // DB is the shared coordination database.
 type DB struct {
@@ -35,6 +40,17 @@ type DB struct {
 	// artifactsDir is the root artifact bytes are written under; empty means
 	// DefaultArtifactsDir. Config overrides it, tests point it at t.TempDir.
 	artifactsDir string
+	// runsDir is the root shared run folders are created under; empty means
+	// DefaultRunsDir. Same rules as artifactsDir.
+	runsDir string
+	// runsPerGoal caps how many runs one tree may cost; 0 means the default,
+	// negative means no ceiling.
+	runsPerGoal int
+	// goalExtensions is how many further budgets a producing goal may grant
+	// itself; goalExtensionsSet distinguishes "configured to zero" (never
+	// extend) from "not configured" (the default).
+	goalExtensions    int
+	goalExtensionsSet bool
 	// maxTasksPerContext caps the size of one task tree; 0 means the default.
 	maxTasksPerContext int
 }
@@ -390,6 +406,24 @@ var ddl = []string{
 	// Keyed by thread rather than by channel: two threads in one room are two
 	// conversations, and Slack's own model says so. turns is the loop stop —
 	// nothing inside a conversation ever says "enough".
+	// --- v9: a channel that also speaks to Telegram -------------------------
+	// One row per bound room. chat_id is the Telegram conversation it speaks
+	// into; mode is how much of the room goes there; created_at is the cut-off,
+	// so binding a room that has been busy all week does not empty that week
+	// onto a phone.
+	//
+	// A table rather than a column on channels: most rooms are not bound, the
+	// binding is an integration rather than a property of the place, and
+	// dropping it should leave no trace on the channel itself.
+	`CREATE TABLE IF NOT EXISTS channel_telegram (
+		channel_id TEXT PRIMARY KEY,
+		agent_id   TEXT NOT NULL DEFAULT '',       -- whose bot carries this room
+		chat_id    INTEGER NOT NULL,
+		mode       TEXT NOT NULL DEFAULT 'mentions',  -- all | mentions | off
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	) STRICT`,
+
 	`CREATE TABLE IF NOT EXISTS channel_sessions (
 		thread_key TEXT NOT NULL,             -- thread_root, or channel_id for the main line
 		agent_id   TEXT NOT NULL,
@@ -399,6 +433,76 @@ var ddl = []string{
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY (thread_key, agent_id)
 	) STRICT`,
+
+	// --- v11: a room speaks to several places, not to one bot --------------
+	//
+	// channel_telegram held exactly one binding by construction — channel_id
+	// was its primary key — so #trading reached Telegram or it reached nothing.
+	// A room with a Telegram chat, a Slack webhook and a dashboard is three
+	// destinations for the same sentence, and there was nowhere to write the
+	// second one down.
+	//
+	// agent_id is still the carrier, and still load-bearing: every gateway
+	// process runs the same sweep, and a row is only ever seen by the process
+	// named here. That is what keeps 6ac6462's triple send from coming back
+	// now that one room can have several rows.
+	//
+	// since is split from created_at. One column used to carry both the row's
+	// birth and the forward cut-off, which is why the re-bind path has a
+	// comment defending not touching it — and why there was no way to move the
+	// cut-off forward when a paused destination was switched back on.
+	`CREATE TABLE IF NOT EXISTS channel_gateways (
+		id         TEXT PRIMARY KEY,                 -- 'cg_' || uuid
+		channel_id TEXT NOT NULL,
+		kind       TEXT NOT NULL,                    -- telegram | webhook
+		agent_id   TEXT NOT NULL,                    -- which process carries it
+		target     TEXT NOT NULL,                    -- chat id (decimal) or URL
+		secret     TEXT NOT NULL DEFAULT '',         -- bearer token for webhook
+		mode       TEXT NOT NULL DEFAULT 'mentions', -- all | mentions | off
+		label      TEXT NOT NULL DEFAULT '',         -- what a person calls it
+		since      TEXT NOT NULL,                    -- cut-off: nothing older travels
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	) STRICT`,
+
+	// The unique index deliberately leaves out agent_id. Two different bots
+	// firing into one chat is the owner getting two notifications for one
+	// sentence — 6ac6462 wearing a different hat. Several gateways means
+	// several DESTINATIONS, not several roads to one destination.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_gateways_dest
+		ON channel_gateways(channel_id, kind, target)`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_gateways_agent
+		ON channel_gateways(agent_id, mode)`,
+
+	// --- v11: one delivery per (line, destination) -------------------------
+	//
+	// This is the column-to-row move. forwarded_at/tg_message_id/forwarded_by
+	// sat on the message itself, so a line could be delivered exactly once,
+	// forever.
+	//
+	// state records both outcomes: 'sent' with the id the far side gave it,
+	// and 'skipped' when the mode declined it — because a declined line whose
+	// answer can never change must not be re-asked every ten seconds.
+	//
+	// The primary key is the idempotency latch: inserting is how a delivery is
+	// claimed, and a second attempt is a no-op rather than a second
+	// notification. It is not the thing that prevents the race — it cannot
+	// recall a message that has already left. Carrier scoping does that.
+	//
+	// agent_id duplicates the gateway's carrier on purpose: it is the scope of
+	// the return path, it replaces forwarded_by one for one, and moving a
+	// binding to another agent must not orphan the Telegram ids already sent.
+	`CREATE TABLE IF NOT EXISTS channel_deliveries (
+		message_id  TEXT NOT NULL,
+		gateway_id  TEXT NOT NULL,
+		state       TEXT NOT NULL,              -- sent | skipped
+		external_id TEXT NOT NULL DEFAULT '',   -- telegram message id; '' when there is none
+		agent_id    TEXT NOT NULL DEFAULT '',   -- the bot that sent it: a tg id is per-bot
+		created_at  TEXT NOT NULL,
+		PRIMARY KEY (message_id, gateway_id)
+	) STRICT`,
+	`CREATE INDEX IF NOT EXISTS idx_channel_deliveries_ext
+		ON channel_deliveries(agent_id, external_id)`,
 }
 
 // v3Columns are the columns added to tasks after it first shipped. CREATE TABLE
@@ -433,6 +537,35 @@ var v5Columns = []struct{ name, decl string }{
 	{"reported_at", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v8 turns a channel into a project: a room with a folder behind it, and tasks
+// that belong to it.
+//
+// Two columns rather than a new table. A project IS a channel — the
+// conversation, the work and the files are the same thing seen from three
+// sides, and modelling them apart would mean keeping three names in step.
+var v8ChannelColumns = []struct{ name, decl string }{
+	// Where this project's work lives on disk: source, artifacts, whatever the
+	// agents produce. Empty for rooms that are only rooms (#general, DMs).
+	{"workspace", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v8TaskColumns: which project a task belongs to.
+//
+// context_id already groups a task with its own children; it does not say
+// which piece of work the tree is part of. A board showing every task on the
+// machine is a board nobody can read once there is more than one project.
+var v8TaskColumns = []struct{ name, decl string }{
+	{"channel_id", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v8ScheduleColumns: which project a schedule belongs to. Timed work is work —
+// "check the prices every five minutes" belongs to the trading project the
+// same way a task does, and a Schedules tab listing every clock on the machine
+// has the same problem as a board listing every task.
+var v8ScheduleColumns = []struct{ name, decl string }{
+	{"channel_id", "TEXT NOT NULL DEFAULT ''"},
+}
+
 // v6Columns: the acceptance bar a child is judged against. Paperclip's rule —
 // a child a reviewer could call "half done" was never scoped — so the bar is
 // recorded with the work, not left in the parent's head.
@@ -440,8 +573,72 @@ var v6Columns = []struct{ name, decl string }{
 	{"acceptance", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v10AgentColumns: which Telegram bot this agent answers on.
+//
+// Every agent here runs its own bot now, so "message this agent privately" is a
+// different chat per agent — and the dashboard had no way to name which. Read
+// from the bot itself once it logs in rather than from config: config holds a
+// token, and the username is what a person clicks.
+// v12TaskColumns: how many waves in a row produced nothing.
+//
+// A goal that fans out, gathers, and fans out again is the loop this system
+// wants. A goal that does that forever is the loop it fears, and the run budget
+// only catches it once the quota is nearly gone. This is the cheaper signal: a
+// wave where not one child reached `completed` produced nothing, and two of
+// those in a row is a goal going in circles rather than closing.
+//
+// A column rather than a derived query because the comparison is between
+// consecutive wakes, and the tree at the second wake cannot tell you what the
+// first one looked like.
+var v12TaskColumns = []struct{ name, decl string }{
+	{"fruitless_waves", "INTEGER NOT NULL DEFAULT 0"},
+}
+
+var v10AgentColumns = []struct{ name, decl string }{
+	{"telegram_bot", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v9MessageColumns: what has left the room, and what it became out there.
+//
+// forwarded_at is "this line has been decided about", not "this line was sent"
+// — a message the mode filtered out is stamped too, because the answer would
+// never change and reconsidering it on every sweep is work that repeats
+// forever. tg_message_id is 0 for those, and for everything that was sent it is
+// the hook the return path hangs on: a reply on Telegram quotes a message id,
+// and that is how the reply finds its thread.
+var v9MessageColumns = []struct{ name, decl string }{
+	{"forwarded_at", "TEXT NOT NULL DEFAULT ''"},
+	{"tg_message_id", "INTEGER NOT NULL DEFAULT 0"},
+	// Which agent's bot sent it. Every agent on this machine now runs its own
+	// Telegram bot, and a message id is per-bot: @Goterm_bot's message 8821 and
+	// @Goterm3_bot's message 8821 are different messages. Without this column a
+	// reply to one would be matched against the other's line and answered into
+	// the wrong thread.
+	{"forwarded_by", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// v9BindingColumns: which agent a binding belongs to. A chat id alone does not
+// say who speaks into it, and three bots can all reach the same person.
+var v9BindingColumns = []struct{ name, decl string }{
+	{"agent_id", "TEXT NOT NULL DEFAULT ''"},
+}
+
 var v3Indexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id, state)`,
+	// Same rule, v8: this indexes a column the ALTERs above add, so it cannot
+	// sit in ddl — a fresh database would build it before the column exists.
+	// The test suite said so within a minute of it being put there.
+	`CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id, state)`,
+	// v9 indexed forwarded_at and (forwarded_by, tg_message_id) on
+	// channel_messages. v11 moved delivery state out to channel_deliveries, so
+	// all three are dead columns now. The columns themselves stay one more
+	// version — if the migration got something wrong the data is still where it
+	// was — but an index nothing reads is pure write cost on every message
+	// inserted, so the indexes go. Dropping by name rather than deleting the
+	// CREATEs: a database that already has them is the case that matters.
+	`DROP INDEX IF EXISTS idx_channel_messages_tg`,
+	`DROP INDEX IF EXISTS idx_channel_messages_forward`,
+	`DROP INDEX IF EXISTS idx_channel_messages_tgmsg`,
 }
 
 func (db *DB) migrate() error {
@@ -470,12 +667,50 @@ func (db *DB) migrate() error {
 			return err
 		}
 	}
+	for _, c := range v8ChannelColumns {
+		if err := db.ensureColumn("channels", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v8TaskColumns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v8ScheduleColumns {
+		if err := db.ensureColumn("schedules", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v9MessageColumns {
+		if err := db.ensureColumn("channel_messages", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v9BindingColumns {
+		if err := db.ensureColumn("channel_telegram", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v10AgentColumns {
+		if err := db.ensureColumn("agents", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v12TaskColumns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
 	for _, stmt := range v3Indexes {
 		if _, err := db.conn.Exec(stmt); err != nil {
 			return fmt.Errorf("%s: %w", firstLine(stmt), err)
 		}
 	}
 	if err := db.migrateMessagesToChannels(); err != nil {
+		return err
+	}
+	if err := db.migrateBindingsToGateways(); err != nil {
 		return err
 	}
 	_, err := db.conn.Exec(

@@ -7,7 +7,7 @@ import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
 import AdminView from './admin/AdminView'
 import type { Me } from './Root'
-import { parseRoute, pathFor, type AdminPane } from './lib/route'
+import { parseRoute, pathFor, isRefinement, type AdminPane } from './lib/route'
 
 export default function App({ me, onLogout }: { me: Me; onLogout?: () => void }) {
   const { call } = useGateway()
@@ -26,6 +26,13 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // Which admin pane is on screen. Lifted out of AdminView so that one place
   // owns the address bar; AdminView is now told which pane to show.
   const [adminPane, setAdminPane] = useState<AdminPane>('overview')
+  // Which task's detail is open, mirrored in the address bar. A drawer that
+  // lives only in component state cannot be sent to anybody — "look at this
+  // task" meant "open the board and find it".
+  const [adminTask, setAdminTask] = useState<string>('')
+  // Which room the Messages pane is showing, for the same reason as the task
+  // above: one address per room, so a room can be linked and reloaded.
+  const [adminChannel, setAdminChannel] = useState<string>('')
 
   // Another channel wrote to a session — Telegram, or an agent that claimed a
   // task. Refresh the list (labels, counts), and if that session is the one on
@@ -57,6 +64,10 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       setTab(r.tab)
       if (r.sessionId) setActiveSessionId(r.sessionId)
       if (r.adminPane) setAdminPane(r.adminPane)
+      setAdminTask(r.taskId ?? '')
+      // Only when the address names one. A bare /admin/messages leaves the
+      // pane's own pick alone rather than blanking the room it just chose.
+      if (r.channelId) setAdminChannel(r.channelId)
     }
     apply()
     window.addEventListener('popstate', apply)
@@ -73,12 +84,15 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // same navigation, not a second one: pushing it would leave a /chat entry
   // that Back returns to and the auto-select immediately leaves again.
   useEffect(() => {
-    const path = pathFor({ tab, sessionId: activeSessionId ?? undefined, adminPane })
+    const path = pathFor({
+      tab, sessionId: activeSessionId ?? undefined, adminPane,
+      taskId: adminTask || undefined,
+      channelId: adminChannel || undefined,
+    })
     const here = location.pathname
     if (path === here) return
-    const refines = here !== '/' && path.startsWith(here + '/')
-    history[refines ? 'replaceState' : 'pushState'](null, '', path)
-  }, [tab, activeSessionId, adminPane])
+    history[isRefinement(here, path) ? 'replaceState' : 'pushState'](null, '', path)
+  }, [tab, activeSessionId, adminPane, adminTask, adminChannel])
 
   // Load sessions + status on connect
   useEffect(() => {
@@ -171,7 +185,13 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         {tab === 'sessions' && <SessionList call={call} />}
         {tab === 'chat' && <ChatView call={call} />}
         {tab === 'status' && <StatusBar />}
-        {tab === 'admin' && <AdminView call={call} pane={adminPane} onPane={setAdminPane} />}
+        {tab === 'admin' && (
+          <AdminView
+            call={call} pane={adminPane} onPane={setAdminPane}
+            taskId={adminTask} onTaskId={setAdminTask}
+            channelId={adminChannel} onChannelId={setAdminChannel}
+          />
+        )}
       </main>
     </div>
   )

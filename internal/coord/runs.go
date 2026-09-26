@@ -13,6 +13,12 @@ const (
 	RunTypeTool   = "tool"   // a tool the model invoked
 	RunTypeMemory = "memory" // a memory flush / injection
 	RunTypeTask   = "task"   // execution of a handed-off task
+	// RunTypeCommand is a shell command a schedule fired. It is its own type
+	// because it has no model in it at all: nothing to filter by provider,
+	// nothing to count tokens for, and a waterfall of exactly one bar. Folding
+	// it into "task" would put work with no agent behind it on the same list as
+	// work an agent did.
+	RunTypeCommand = "command"
 )
 
 // Run statuses.
@@ -102,7 +108,7 @@ func (db *DB) EndRun(id string, end time.Time, outputs, errMsg string, inTok, ou
 type TraceFilter struct {
 	AgentID string
 	Status  string // "", "success", "error", "pending"
-	Search  string // substring of the root run name or inputs
+	Search  string // substring of the root run name, inputs or tags
 	Limit   int
 }
 
@@ -133,9 +139,13 @@ func (db *DB) ListTraces(f TraceFilter) ([]TraceSummary, error) {
 		args = append(args, f.Status)
 	}
 	if f.Search != "" {
-		where = append(where, "(r.name LIKE ? OR r.inputs LIKE ?)")
+		// Tags are searched too, which is what makes them worth writing: a
+		// channel turn is tagged with its room and the line that summoned it,
+		// so typing that id here is how you get from a message in a room to
+		// the trace it produced.
+		where = append(where, "(r.name LIKE ? OR r.inputs LIKE ? OR r.tags LIKE ?)")
 		like := "%" + f.Search + "%"
-		args = append(args, like, like)
+		args = append(args, like, like, like)
 	}
 	args = append(args, limit)
 

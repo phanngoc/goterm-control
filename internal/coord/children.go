@@ -104,6 +104,18 @@ func (db *DB) CreateSubTask(parentID, byAgent string, n NewTask) (*Task, error) 
 			"this piece of work has grown past what one tree should carry: finish or merge "+
 			"some of it, or start a separate task rather than another child", parent.ContextID, inContext, cap)
 	}
+	// The tree's run budget. The caps above bound the SHAPE of a tree — how
+	// wide, how deep, how many rows. None of them bound what it costs, and a
+	// goal that keeps splitting with every split legal is exactly the thing
+	// they cannot see. Refused here rather than silently: the agent reading
+	// this is the one deciding whether to split again.
+	if spent, runs, err := db.GoalBudgetSpent(parent.ContextID); err != nil {
+		return nil, err
+	} else if spent {
+		return nil, fmt.Errorf("coord: this goal has already cost %d runs (max %d) — "+
+			"it has spent its budget, so finish with what you have or block on a person "+
+			"rather than splitting again", runs, goalLimitOf(db, parent.ContextID))
+	}
 	if utf8.RuneCountInString(strings.TrimSpace(n.Body)) < MinSubTaskBody {
 		return nil, fmt.Errorf("coord: a child needs a brief of its own (at least %d characters). "+
 			"Whoever claims it may be a different agent on a different harness with none of your "+
@@ -111,6 +123,10 @@ func (db *DB) CreateSubTask(parentID, byAgent string, n NewTask) (*Task, error) 
 	}
 	n.ParentID = parentID
 	n.ContextID = parent.ContextID
+	// A child belongs to the same project as its parent. It is the same piece
+	// of work, split up; landing half of it on a different board would be a
+	// filing error nobody would think to look for.
+	n.ChannelID = parent.ChannelID
 	n.Depth = parent.Depth + 1
 	n.Kind = KindSub
 	if n.CreatedBy == "" {
@@ -175,39 +191,83 @@ type WokenParent struct {
 // sweeps seeing the same parent wake it once. The parent is pinned to whoever
 // held it last (soft affinity, §5.4) so that agent's --resume finds the
 // conversation that created the children.
-func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
+func (db *DB) WakeParents(now time.Time) (woken []WokenParent, stalled []Task, err error) {
 	rows, err := db.conn.Query(`SELECT `+taskCols+` FROM tasks p
 		WHERE p.state = ? AND p.blocked_on = ?
 		  AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = p.id AND c.state NOT IN (?, ?, ?, ?))`,
 		TaskBlocked, BlockedOnChildren, TaskCompleted, TaskFailed, TaskCanceled, TaskRejected)
 	if err != nil {
-		return nil, fmt.Errorf("wake parents: %w", err)
+		return nil, nil, fmt.Errorf("wake parents: %w", err)
 	}
 	var parents []Task
 	for rows.Next() {
 		t, err := scanTask(rows)
 		if err != nil {
 			rows.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		parents = append(parents, *t)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var woken []WokenParent
 	for _, p := range parents {
 		children, err := db.Children(p.ID)
 		if err != nil {
-			return woken, err
+			return woken, stalled, err
 		}
 		checkpoint := strings.TrimSpace(p.Checkpoint)
 		if checkpoint != "" {
 			checkpoint += "\n\n"
 		}
 		checkpoint += db.childrenSummary(children)
+		// And what is still open in the tree. Without it the parent sees only
+		// the wave it just gathered and has to guess whether that was all of
+		// it — which is how a goal ends one wave early.
+		if left, err := db.ContextProgress(p.ContextID); err == nil {
+			checkpoint += "\n\n" + remainingLine(left, p.ID)
+		}
+
+		// Did this wave produce anything? A wave where not one child reached
+		// `completed` moved nothing forward, whatever it cost. Two of those in
+		// a row is a goal circling rather than closing, and it stops to ask
+		// instead of splitting a third time.
+		//
+		// Measured on completions rather than on "did the frontier shrink":
+		// the frontier is empty at every wake by definition — that is what
+		// being woken means — so it can tell you nothing here.
+		fruitless := p.FruitlessWaves
+		if completedChildren(children) > 0 {
+			fruitless = 0
+		} else {
+			fruitless++
+		}
+		if fruitless >= MaxFruitlessWaves {
+			checkpoint += fmt.Sprintf("\n\nStopped: %d waves in a row finished without a single "+
+				"child completing. Something here is not working — say what you have, or ask for "+
+				"what you need, rather than splitting again.", fruitless)
+			res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = ?, checkpoint = ?,
+					fruitless_waves = ?, lease_until = ?, updated_at = ?
+				WHERE id = ? AND state = ? AND blocked_on = ?`,
+				TaskBlocked, BlockedOnHuman, checkpoint, fruitless, ts(now), ts(now),
+				p.ID, TaskBlocked, BlockedOnChildren)
+			if err != nil {
+				return woken, stalled, fmt.Errorf("stall parent %s: %w", p.ID, err)
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				continue
+			}
+			_ = db.appendEvent(p.ID, "system", TaskBlocked, TaskBlocked,
+				fmt.Sprintf("%d waves produced nothing; waiting on a person", fruitless))
+			// Returned, not just logged: a goal that has stopped and told
+			// nobody is a goal that waits until somebody happens to look at a
+			// board. The guarded UPDATE above is what makes this fire once.
+			p.Checkpoint = checkpoint
+			stalled = append(stalled, p)
+			continue
+		}
 		// Pin to the last holder so its --resume picks the conversation up;
 		// RelaxDeadAssignments lifts the pin if that agent is gone.
 		assigned := p.AssignedTo
@@ -215,11 +275,11 @@ func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
 			assigned = p.ClaimedBy
 		}
 		res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', checkpoint = ?, assigned_to = ?,
-				lease_until = ?, updated_at = ?
+				fruitless_waves = ?, lease_until = ?, updated_at = ?
 			WHERE id = ? AND state = ? AND blocked_on = ?`,
-			TaskSubmitted, checkpoint, assigned, ts(now), ts(now), p.ID, TaskBlocked, BlockedOnChildren)
+			TaskSubmitted, checkpoint, assigned, fruitless, ts(now), ts(now), p.ID, TaskBlocked, BlockedOnChildren)
 		if err != nil {
-			return woken, fmt.Errorf("wake parent %s: %w", p.ID, err)
+			return woken, stalled, fmt.Errorf("wake parent %s: %w", p.ID, err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			continue // another sweep got there first
@@ -228,7 +288,45 @@ func (db *DB) WakeParents(now time.Time) ([]WokenParent, error) {
 			fmt.Sprintf("%s: %d child task(s) finished", ChildrenDoneEvent, len(children)))
 		woken = append(woken, WokenParent{TaskID: p.ID, AssignedTo: assigned})
 	}
-	return woken, nil
+	return woken, stalled, nil
+}
+
+// remainingLine says what is left in the tree, for the parent that has just
+// been woken. It excludes the parent itself: it is being woken precisely
+// because it is open, and counting itself as outstanding work would read as
+// "one thing left" forever.
+func remainingLine(p *ContextProgress, parentID string) string {
+	var open []string
+	for _, o := range p.Open {
+		if o.ID == parentID {
+			continue
+		}
+		open = append(open, fmt.Sprintf("  %s [%s] %s", o.ID, o.State, o.Title))
+	}
+	if len(open) == 0 {
+		return fmt.Sprintf("Still open in this goal: nothing. %d tasks have run, costing %d runs. "+
+			"Everything split off so far is finished — decide against the criteria whether the goal "+
+			"is met, and either finish it or split what is missing.", p.Total, p.Runs)
+	}
+	return fmt.Sprintf("Still open in this goal (%d of %d tasks, %d runs so far):\n%s",
+		len(open), p.Total, p.Runs, strings.Join(open, "\n"))
+}
+
+// MaxFruitlessWaves is how many consecutive waves may finish without a single
+// child completing before the goal stops and asks a person. Two: one is an
+// ordinary bad round, two in a row is a pattern.
+const MaxFruitlessWaves = 2
+
+// completedChildren counts the children that actually finished their work, as
+// opposed to failing, being cancelled or being rejected.
+func completedChildren(children []Task) int {
+	n := 0
+	for _, c := range children {
+		if c.State == TaskCompleted {
+			n++
+		}
+	}
+	return n
 }
 
 // ChildResultRunes caps the result text quoted per child. It used to be 1500

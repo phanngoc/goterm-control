@@ -34,6 +34,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/reporter"
 	"github.com/ngocp/goterm-control/internal/scheduler"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/skills"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/taskrunner"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -118,6 +119,8 @@ func main() {
 		runMsg(os.Args[2:])
 	case "ch", "channel":
 		runChannel(os.Args[2:])
+	case "skills", "skill":
+		runSkills(os.Args[2:])
 	case "artifact":
 		runArtifact(os.Args[2:])
 	case "agents":
@@ -168,6 +171,7 @@ Commands:
   msg                Send a message to another agent
   ch                 Shared channels: post, read, thread, mention
   artifact           Store and fetch what a task produced
+  skills             What this agent can do, and when each skill applies
   passwd             Set the dashboard password (creates the account if none)
   help               Show this help`)
 }
@@ -253,6 +257,33 @@ func runGateway(args []string) {
 			log.Printf("gateway: could not export BOMCLAW_ARTIFACTS_DIR: %v", err)
 		}
 	}
+	// And run folders, so `bomclaw task show` from an agent's shell names the
+	// directory that agent is actually standing in.
+	if cfg.Coord.RunsDir != "" {
+		if err := os.Setenv("BOMCLAW_RUNS_DIR", cfg.Coord.RunsDir); err != nil {
+			log.Printf("gateway: could not export BOMCLAW_RUNS_DIR: %v", err)
+		}
+	}
+
+	// And the same for the owner's Telegram chat, so `bomclaw ch bind` needs no
+	// chat id typed by hand. A private chat's id equals the user's id, so the
+	// first trusted user is the owner's conversation — the same assumption
+	// Bot.Notify already makes when it sends a schedule's result.
+	if chat := ownerChat(cfg); chat != 0 {
+		if err := os.Setenv("BOMCLAW_OWNER_CHAT_ID", fmt.Sprint(chat)); err != nil {
+			log.Printf("gateway: could not export BOMCLAW_OWNER_CHAT_ID: %v", err)
+		}
+	}
+
+	// The toolkit this agent starts with. Seeded once into its workspace and
+	// never overwritten: an agent revises its own copies, and re-seeding on
+	// every start would undo that silently, on a schedule nobody chose.
+	if n, err := skills.EnsureDefaults(cfg.Claude.Workspace); err != nil {
+		log.Printf("skills: %v", err)
+	} else if len(n) > 0 {
+		log.Printf("skills: seeded %s into %s", strings.Join(n, ", "),
+			filepath.Join(cfg.Claude.Workspace, skills.Dir))
+	}
 
 	// One-shot text backend (session titles, `bomclaw send` fallback). Which
 	// one is bot.TitleBackend's decision, so this cannot drift from the bot.
@@ -300,8 +331,17 @@ func runGateway(args []string) {
 		if err == nil && cfg.Coord.ArtifactsDir != "" {
 			coordDB.SetArtifactsDir(cfg.Coord.ArtifactsDir)
 		}
+		if err == nil && cfg.Coord.RunsDir != "" {
+			coordDB.SetRunsDir(cfg.Coord.RunsDir)
+		}
 		if err == nil && cfg.Tasks.MaxPerContext > 0 {
 			coordDB.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
+		}
+		if err == nil && cfg.Tasks.RunsPerGoal != 0 {
+			coordDB.SetRunsPerGoal(cfg.Tasks.RunsPerGoal)
+		}
+		if err == nil && cfg.Tasks.GoalExtensions != 0 {
+			coordDB.SetGoalExtensions(cfg.Tasks.GoalExtensions)
 		}
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
@@ -309,6 +349,25 @@ func runGateway(args []string) {
 		} else {
 			defer coordDB.Close()
 			log.Printf("coord: shared database at %s (agent=%s)", coordDB.Path(), cfg.Agent.ID)
+			// A run that died with the last gateway left a line in the room
+			// saying it was still working. Nothing else ever corrects it, and
+			// startup is the one moment clearing it is unambiguously safe.
+			if n, err := coordDB.SweepProgressLines(cfg.Agent.ID, coord.ProgressPrefix); err != nil {
+				log.Printf("coord: sweep progress lines: %v", err)
+			} else if n > 0 {
+				log.Printf("coord: cleared %d progress line(s) left by a previous run", n)
+			}
+			// Same moment, same reasoning, for the work itself: a task this
+			// agent was running when it stopped is held by a ten-minute lease
+			// that nothing will touch until it lapses — and the reclaim then
+			// charges it an attempt it never got to use. Put it straight back
+			// in the queue with the attempt returned.
+			if freed, err := coordDB.ReleaseInterruptedRuns(cfg.Agent.ID); err != nil {
+				log.Printf("coord: release interrupted runs: %v", err)
+			} else if len(freed) > 0 {
+				log.Printf("coord: requeued %d task(s) interrupted by the last restart: %s",
+					len(freed), strings.Join(freed, ", "))
+			}
 			startCoordUpkeep(ctx, coordDB, cfg, *bind, *port, resolver.Default())
 			gwTrace = trace.New(coordDB, cfg.Agent.ID)
 			defer gwTrace.Close()
@@ -407,11 +466,35 @@ func runGateway(args []string) {
 			// P3: how many tasks this agent runs side by side. Chat keeps its
 			// own lane; this only stops a long task from blocking a short one.
 			Concurrency: cfg.Tasks.Concurrency,
+			VerifyGoals: cfg.Tasks.VerifyGoals,
+			// The same MEMORY.md the chat lane uses. Until this, a task run
+			// neither read what the agent knew nor wrote anything down — and
+			// tasks are where most of the real work happens.
+			Memory: tgBot.Memory(),
 		})
 		// A parent whose children all finished goes back in the queue pinned
 		// to whoever held it; ring that agent so it resumes at once.
 		runner.SetWakeListener(func(w coord.WokenParent) {
 			gateway.NotifyAgents(coordDB, w.AssignedTo, cfg.Agent.ID, "about parent "+w.TaskID)
+		})
+		// A goal that stops for a person has to say so. Nothing did: the
+		// reporter only delivers terminal states, and `blocked` is not one, so
+		// work that stopped overnight waited until somebody opened a board.
+		// The whole point of running unattended is that the one moment it
+		// needs you, it reaches you.
+		runner.SetStuckListener(func(t coord.Task) {
+			if tgBot != nil {
+				_ = tgBot.Notify(stuckMessage(&t))
+			}
+			// And in the room it came from, for whoever reads there instead.
+			if root, _, err := coordDB.TaskThread(t.ID); err == nil && root != "" {
+				if ch, err := coordDB.MessageChannel(root); err == nil && ch != "" {
+					_, _, _ = coordDB.PostMessage(coord.NewChannelMessage{
+						ChannelID: ch, ThreadRoot: root, AuthorID: cfg.Agent.ID,
+						Body: stuckMessage(&t),
+					})
+				}
+			}
 		})
 		runner.Start(ctx)
 	} else if coordDB != nil {
@@ -428,7 +511,7 @@ func runGateway(args []string) {
 	if coordDB != nil {
 		report = reporter.New(coordDB, reporter.Config{AgentID: cfg.Agent.ID})
 		if tgBot != nil {
-			report.SetNotify(func(text string) { tgBot.Notify(text) })
+			report.SetNotify(tgBot.Notify)
 		}
 		report.Start(ctx)
 	}
@@ -445,7 +528,14 @@ func runGateway(args []string) {
 		})
 		// Results and alerts go to the owner's Telegram; the local runner is
 		// rung directly and peers over HTTP, exactly as for a hand-queued task.
-		sched.SetNotify(func(text string) { tgBot.Notify(text) })
+		// A shell command fired at 03:00 that goes wrong left nothing but
+		// schedule_runs.output, cut at 8KB. Only the command path uses this;
+		// an `agent` schedule produces a task, and that task's run already
+		// opens a trace of its own.
+		sched.SetRecorder(gwTrace)
+		// The scheduler has nowhere to put a delivery failure: its result is
+		// already recorded and there is no claim to give back.
+		sched.SetNotify(func(text string) { _ = tgBot.Notify(text) })
 		sched.SetWake(func(t *coord.Task) {
 			if runner != nil {
 				runner.Poke()
@@ -489,15 +579,19 @@ func runGateway(args []string) {
 		Coord:         coordDB,
 		AgentID:       cfg.Agent.ID,
 		AgentName:     cfg.Agent.Name,
+		OwnerChatID:   ownerChat(cfg),
 		Workspace:     cfg.Claude.Workspace,
 		ProviderName:  cfg.Provider,
 		Trace:         gwTrace,
 		PokeTasks:     runner.Poke,
 		PokeSchedules: sched.Poke,
+		SchedulesRun:  cfg.Schedules.Enabled,
 		NotesFile:     cfg.Coord.NotesFile,
 		Conversations: conversations,
+		ProjectsDir:   cfg.Coord.ProjectsDir,
 		ConfigPath:    absPath(*configPath),
 		Restart:       restartSelf(cfg.Agent.ID),
+		ReviveAgent:   reviveAgent,
 	}
 	if tgBot != nil {
 		// Dashboard messages run through the bot's turn engine, so both
@@ -514,6 +608,31 @@ func runGateway(args []string) {
 	} else {
 		log.Printf("mentions: answering off (coord.reply_to_mentions=false)")
 	}
+
+	// Carrying bound rooms out to the places they speak into.
+	//
+	// Every gateway process carries the rooms bound to it, and which rooms
+	// those are is a decision made at bind time rather than a race between
+	// gateways: a gateway row names the agent that carries it.
+	//
+	// Telegram is registered only when this process actually polls. Each agent
+	// here has its own bot, so several could carry rooms at once — but a room
+	// whose bot nobody listens to is a one-way street: the owner would read the
+	// answers and have nowhere to reply. A webhook has no such half. It is
+	// one-way by nature, needs no bot and no poller, so every process can carry
+	// one — which is why the watcher is now built outside this branch.
+	var transports []gateway.ChannelTransport
+	if tgBot != nil && cfg.Telegram.Polling() {
+		transports = append(transports, gateway.NewTelegramTransport(tgBot.Handler()))
+		tgBot.Handler().SetChannelReplyListener(func(channelID string, wake []string) {
+			for _, who := range wake {
+				gateway.NotifyAgents(coordDB, who, "", "about a mention in "+channelID)
+			}
+			mentions.Poke()
+		})
+	}
+	transports = append(transports, gateway.NewWebhookTransport())
+	forwards := gateway.NewForwardWatcher(deps, transports...)
 	// Everything running right now, from both sources: chat turns and claimed
 	// tasks. The tray's awake-while-running mode, `bomclaw status` and the
 	// dashboard all read this list — a task run missing from it meant the Mac
@@ -566,6 +685,7 @@ func runGateway(args []string) {
 		return out
 	}
 	mentions.Start(ctx)
+	forwards.Start(ctx)
 	if sched != nil {
 		sched.SetBusy(func() bool { return len(deps.Runs()) > 0 })
 		sched.Start(ctx)
@@ -585,6 +705,13 @@ func runGateway(args []string) {
 		srv.Handle("/api/browser/token", authMgr.RequireAuthExceptLocal(browserAPI.HandleToken))
 	}
 
+	if tgBot != nil && coordDB != nil {
+		// Which bot this agent answers on, known only once it has logged in —
+		// config holds a token, and a person clicks a name.
+		if err := coordDB.SetAgentTelegramBot(cfg.Agent.ID, tgBot.Username()); err != nil {
+			log.Printf("coord: telegram bot name: %v", err)
+		}
+	}
 	if tgBot != nil {
 		// Push conversation changes to open dashboards. A Telegram turn (or a
 		// claimed task) writes the session both channels now share, and nothing
@@ -619,11 +746,17 @@ func runGateway(args []string) {
 		// Peers read and change each other's backend over this, which is why it
 		// sits behind the same rule as the doorbell: a login, or a local
 		// caller. Two agents on one machine are local to each other.
+		// A project's own files, served so the thing the work produced can be
+		// looked at: /project/<channel>/board/ opens the board with its data
+		// beside it, which a single file opened from a blob cannot do.
+		srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
 		srv.Handle("/api/settings", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/settings/model", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
+		srv.Handle("/api/settings/restart", authMgr.RequireAuthExceptLocal(gateway.RestartHandler(deps)))
 		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(func() {
 			runner.Poke()
 			mentions.Poke()
+			forwards.Poke()
 		})))
 	}
 
@@ -795,6 +928,12 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 	}); err != nil {
 		log.Printf("coord: register agent: %v", err)
 	}
+	// The private room between the owner and this agent. Every DM until now was
+	// agent↔agent, so the dashboard's Direct list was empty — there was nowhere
+	// for "message this one alone" to happen.
+	if _, err := cdb.EnsureOwnerDM(cfg.Agent.ID); err != nil {
+		log.Printf("coord: owner DM: %v", err)
+	}
 
 	go func() {
 		ticker := time.NewTicker(heartbeatInterval)
@@ -841,6 +980,15 @@ func startCoordUpkeep(ctx context.Context, cdb *coord.DB, cfg *config.Config, bi
 						log.Printf("coord: purge artifacts: %v", err)
 					} else if rows > 0 {
 						log.Printf("coord: purged %d artifacts (%d files) from task trees finished over %d days ago", rows, files, artifactDays)
+					}
+					// Shared run folders go out on the same clock. They are
+					// scratch belonging to a finished tree, so a second
+					// retention knob would be two names for one decision.
+					n, err := cdb.PurgeRunspaces(time.Now().AddDate(0, 0, -artifactDays))
+					if err != nil {
+						log.Printf("coord: purge run folders: %v", err)
+					} else if n > 0 {
+						log.Printf("coord: removed %d run folders from task trees finished over %d days ago", n, artifactDays)
 					}
 				}
 			}
@@ -1520,4 +1668,50 @@ func restartSelf(agentID string) func() error {
 		defer cancel()
 		return svc.Restart(ctx)
 	}
+}
+
+// reviveAgent starts another agent's gateway from this process, for the
+// settings screen's restart button. It is separate from restartSelf because
+// the case it exists for is the one restartSelf cannot serve: the agent that
+// is not answering is not running a handler that could restart it.
+func reviveAgent(agentID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return daemon.Revive(ctx, agentID)
+}
+
+// ownerChat is the Telegram conversation that belongs to the owner. A private
+// chat's id equals the user's id, so the first trusted user is that
+// conversation — the same assumption Bot.Notify already makes. Zero when there
+// is no allow-list, in which case the screens and the CLI say so rather than
+// guessing a number.
+func ownerChat(cfg *config.Config) int64 {
+	if len(cfg.Security.AllowedUserIDs) == 0 {
+		return 0
+	}
+	return cfg.Security.AllowedUserIDs[0]
+}
+
+// stuckMessage is what the owner reads when a goal stops for them. It has to
+// carry the decision, not just the fact: the reason it stopped, what it had
+// done by then, and the one command that starts it again — typed on a phone,
+// at whatever hour it stopped.
+func stuckMessage(t *coord.Task) string {
+	why := "it is waiting on a decision"
+	if note := strings.TrimSpace(lastLine(t.Checkpoint)); note != "" {
+		why = note
+	}
+	return fmt.Sprintf("⏸ *%s* stopped and needs you\n\n%s\n\nStart it again:\n"+
+		"`bomclaw task unblock --id %s --note \"<your answer>\"`\n"+
+		"Or look first: `bomclaw task tree --id %s`", t.Title, why, t.ID, t.ID)
+}
+
+// lastLine is the most recent thing written into a checkpoint — the reason the
+// task stopped, rather than the whole history of how it got there.
+func lastLine(checkpoint string) string {
+	parts := strings.Split(strings.TrimSpace(checkpoint), "\n\n")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }

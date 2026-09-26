@@ -20,11 +20,22 @@ type ScheduleView struct {
 	When     string              `json:"when"` // human rendering of kind+spec+tz
 }
 
-func handleSchedulesList(deps Deps) (json.RawMessage, error) {
+type schedulesListParams struct {
+	// ChannelID scopes to one project; "-" asks for the machine-wide clocks,
+	// which belong to no project and would otherwise disappear from the screen
+	// the day it starts scoping.
+	ChannelID string `json:"channel_id,omitempty"`
+}
+
+func handleSchedulesList(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if deps.Coord == nil {
 		return nil, errNoCoord()
 	}
-	all, err := deps.Coord.ListSchedules()
+	var p schedulesListParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	all, err := deps.Coord.ListSchedules(p.ChannelID)
 	if err != nil {
 		return nil, err
 	}

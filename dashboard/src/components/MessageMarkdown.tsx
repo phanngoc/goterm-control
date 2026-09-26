@@ -39,9 +39,19 @@ const proseClass = [
   '[&_blockquote]:border-gray-600 [&_blockquote]:text-gray-300 [&_hr]:border-gray-700 [&_hr]:my-3',
 ].join(' ')
 
-export default function MessageMarkdown({ children }: { children: string }) {
+export default function MessageMarkdown({ children, wide }: { children: string; wide?: boolean }) {
+  // A chat bubble and a full document want different rhythms. The bubble is
+  // tightened above because a paragraph gap the size of an article's is most
+  // of the bubble; a report read in a modal wants the article spacing back,
+  // and wrapped table cells rather than a horizontal scroll.
+  const cls = wide
+    ? proseClass
+        .replace('prose prose-sm', 'prose prose-base')
+        .replace('[&_td]:whitespace-nowrap', '[&_td]:whitespace-normal')
+        .replace('[&_p]:my-1.5', '[&_p]:my-3')
+    : proseClass
   return (
-    <div className={proseClass}>
+    <div className={cls}>
       <Markdown remarkPlugins={[remarkGfm]} components={components}>
         {children}
       </Markdown>

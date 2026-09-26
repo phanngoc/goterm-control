@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 )
@@ -88,4 +89,41 @@ func Resolve(agentID string) (Service, error) {
 	default:
 		return nil, fmt.Errorf("daemon service not supported on %s", runtime.GOOS)
 	}
+}
+
+// Revive brings one agent's gateway up, whatever state it is in: running,
+// stopped, or booted out of the service manager entirely. It exists because
+// the one moment a person most wants a restart button is the moment the agent
+// is not answering — and every path that asks the agent to restart itself is
+// closed exactly then.
+//
+// The unit file is the locality check. Every agent on this machine has one;
+// an agent that registered from somewhere else does not, and saying so names
+// the real problem instead of failing inside launchctl with a service label
+// nobody recognises.
+func Revive(ctx context.Context, agentID string) error {
+	svc, err := Resolve(agentID)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(svc.UnitPath()); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no %s for %s on this machine (%s) — it is managed somewhere else",
+				svc.Label(), agentID, svc.UnitPath())
+		}
+		return err
+	}
+	// Restart is the right verb for a job the manager still holds, and the
+	// wrong one for a job that was booted out: launchctl kickstart answers
+	// "Could not find service" for something whose plist is sitting right
+	// there. Start is what loads it back. Trying the second only after the
+	// first fails keeps a running agent from being stopped and left down.
+	rerr := svc.Restart(ctx)
+	if rerr == nil {
+		return nil
+	}
+	if serr := svc.Start(ctx); serr != nil {
+		return fmt.Errorf("restart: %v; start: %w", rerr, serr)
+	}
+	return nil
 }

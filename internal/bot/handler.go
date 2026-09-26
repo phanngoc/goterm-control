@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -49,6 +48,17 @@ type Handler struct {
 	titler     *titler.Titler  // async session auto-naming (nil-safe)
 	trace      *trace.Recorder // run/trace recorder (nil-safe)
 	agentID    string          // identity in the shared coordination database
+
+	// coord is the shared coordination database, for the one thing this
+	// handler does that is not a turn: a reply to a line forwarded out of a
+	// channel goes back into that channel. Nil when coordination is off, and
+	// the reply is then an ordinary message like any other.
+	coord *coord.DB
+
+	// onChannelReply, when set, is told which agents a routed reply named, so
+	// the gateway can ring them. Declared as a callback for the same reason
+	// onTurn is: bot must not import gateway.
+	onChannelReply func(channelID string, wake []string)
 
 	// onTurn, when set, is told when any turn on any channel starts and ends.
 	// The gateway uses it to push a refresh to open dashboards; without it a
@@ -125,6 +135,14 @@ func (h *Handler) Handle(update tgbotapi.Update) {
 		sess := h.sessions.Get(msg.Chat.ID)
 		sess.Cancel()
 		h.sendText(msg.Chat.ID, "🛑 Request cancelled.")
+		return
+	}
+
+	// A reply to a line this bot carried out of a channel belongs back in that
+	// channel, not to the model. It sits here — after the commands, before
+	// everything that runs a turn — because a reply that quotes nothing of
+	// ours must still mean what it has always meant: talk to the agent.
+	if h.channelReply(msg) {
 		return
 	}
 
@@ -475,7 +493,7 @@ func (h *Handler) runFlush(ctx context.Context, sess *session.Session, modelID s
 		OnText: func(chunk string) { reply.WriteString(chunk) },
 		OnToolCall: func(name, inputJSON string) {
 			sess.NoteTool(name)
-			log.Printf("memory: flush tool %s", toolLabel(name, inputJSON))
+			log.Printf("memory: flush tool %s", chat.ToolLabel(name, inputJSON))
 		},
 	}
 
@@ -656,6 +674,10 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		ChatID:    chatID,
 		Model:     modelID,
 		Provider:  h.llm.Name(),
+		// What this conversation is, when it is not just a chat: a channel turn
+		// carries its room and the line that summoned it, so a message in the
+		// room can be opened as the trace it produced.
+		Tags: trace.Tags(sess.GetTraceTags()...),
 	})
 	turnSpan.SetInputs(userText)
 
@@ -780,7 +802,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		OnToolCall: func(name string, inputJSON string) {
 			addEvent(transcript.Event{Type: transcript.EventToolCall, ToolName: name, ToolInput: inputJSON})
 			pushTool(name, inputJSON)
-			label := toolLabel(name, inputJSON)
+			label := chat.ToolLabel(name, inputJSON)
 			// Compact tool progress with short snippet: Bash(cd stock_d) → Read(main.go)
 			streamer.NoteTool(label)
 			// Mirror to session so /status can show what's running right now.
@@ -1116,138 +1138,107 @@ func truncateLabel(text string, maxRunes int) string {
 	return text
 }
 
-// toolLabel creates a short label like Bash(cd stock_d) or Read(bot/handler.go)
-func toolLabel(name, inputJSON string) string {
-	var m map[string]any
-	if json.Unmarshal([]byte(inputJSON), &m) != nil {
-		return name
-	}
-
-	// Path keys get tail-truncated (show meaningful end); others get head-truncated.
-	pathKeys := map[string]bool{"path": true, "file_path": true}
-
-	for _, key := range []string{"command", "path", "file_path", "url", "query", "pattern", "script", "expression", "name", "ref", "text", "glob", "regex"} {
-		if v, ok := m[key]; ok {
-			s := fmt.Sprintf("%v", v)
-			if s == "" {
-				continue
-			}
-			if pathKeys[key] {
-				s = shortenPath(s, 25)
-			} else if key == "command" {
-				s = shortenBashCommand(s, 25)
-			} else {
-				r := []rune(s)
-				if len(r) > 20 {
-					s = string(r[:20])
-				}
-			}
-			return name + "(" + s + ")"
-		}
-	}
-	return name
+// SetChannelReplyListener registers who to tell when a Telegram reply was
+// routed into a channel.
+func (h *Handler) SetChannelReplyListener(fn func(channelID string, wake []string)) {
+	h.onChannelReply = fn
 }
 
-// shortenBashCommand extracts the first segment of a shell command (before
-// &&, ||, |, ;) and shortens any path-like argument while keeping the
-// command prefix (cd, ls, grep, etc.).
+// SendChannelLine delivers one line out of a channel and returns the Telegram
+// message id it became. The gateway's forward watcher holds onto that id: a
+// reply quoting it is how an answer typed on a phone finds its thread.
 //
-//	"cd /Users/ngocp/Documents/projects/meClaw/goterm-control" → "cd ../goterm-control"
-//	"ls -la /very/long/path/to/dir"                            → "ls ../dir"
-//	"echo hello world"                                         → "echo hello world"
-func shortenBashCommand(s string, maxRunes int) string {
-	if len([]rune(s)) <= maxRunes {
-		return s
-	}
-
-	// Take the first command segment (before &&, ||, |, ;).
-	seg := s
-	for _, sep := range []string{" && ", " || ", " | ", "; "} {
-		if idx := strings.Index(seg, sep); idx >= 0 {
-			seg = seg[:idx]
+// Unlike sendText this returns the error. A line that failed to send must stay
+// unsent in the database — swallowing the failure would mark it delivered and
+// the owner would never see it.
+func (h *Handler) SendChannelLine(chatID int64, text string) (int64, error) {
+	html := markdownToTelegramHTML(text)
+	msg := tgbotapi.NewMessage(chatID, html)
+	msg.ParseMode = "HTML"
+	sent, err := h.bot.Send(msg)
+	if err != nil {
+		plain := tgbotapi.NewMessage(chatID, stripHTML(html))
+		sent, err = h.bot.Send(plain)
+		if err != nil {
+			return 0, err
 		}
 	}
-
-	// Split into tokens; find the command prefix and the first path argument.
-	tokens := strings.Fields(seg)
-	if len(tokens) == 0 {
-		return headTruncate(s, maxRunes)
-	}
-
-	cmd := tokens[0] // e.g. "cd", "ls", "grep"
-	var pathIdx int   // index of the first path-like token
-	var foundPath bool
-	for i := 1; i < len(tokens); i++ {
-		t := tokens[i]
-		if strings.HasPrefix(t, "/") || strings.HasPrefix(t, "./") ||
-			strings.HasPrefix(t, "~/") || strings.HasPrefix(t, "../") {
-			pathIdx = i
-			foundPath = true
-			break
-		}
-	}
-
-	if !foundPath {
-		return headTruncate(s, maxRunes)
-	}
-
-	// Budget for the path: maxRunes minus "cmd " prefix.
-	prefix := cmd
-	pathBudget := maxRunes - len([]rune(prefix)) - 1 // -1 for space
-	if pathBudget < 6 {
-		return headTruncate(s, maxRunes)
-	}
-
-	shortened := shortenPath(tokens[pathIdx], pathBudget)
-	return prefix + " " + shortened
+	return int64(sent.MessageID), nil
 }
 
-// headTruncate keeps the first maxRunes runes of s.
-func headTruncate(s string, maxRunes int) string {
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
+// channelReply routes a reply to a forwarded line back into its channel, and
+// reports whether it did.
+//
+// False is the ordinary answer and must stay cheap: every message the owner
+// sends passes through here, and all but a handful are conversations with the
+// agent that this must not disturb.
+//
+// The reply is written as the owner, in the thread the quoted line belongs to.
+// That authorship is also the echo stop: the forward watcher only ever carries
+// an agent's lines outward, so a message written as a person can never be sent
+// back to that person — the loop is closed by who wrote it, not by a flag
+// somebody has to remember to set.
+func (h *Handler) channelReply(msg *tgbotapi.Message) bool {
+	if h.coord == nil || h.agentID == "" || msg.ReplyToMessage == nil || strings.TrimSpace(msg.Text) == "" {
+		return false
 	}
-	return string(r[:maxRunes])
+	src, err := h.coord.ForwardedMessage(h.agentID, int64(msg.ReplyToMessage.MessageID))
+	if err != nil {
+		log.Printf("channel reply: look up %d: %v", msg.ReplyToMessage.MessageID, err)
+		return false
+	}
+	if src == nil {
+		return false // not one of ours; an ordinary message
+	}
+
+	// A reply to a reply belongs to the same thread, and a reply to a
+	// top-level line starts that line's thread.
+	root := src.ThreadRoot
+	if root == "" {
+		root = src.ID
+	}
+	posted, wake, err := h.coord.PostMessage(coord.NewChannelMessage{
+		ChannelID:  src.ChannelID,
+		ThreadRoot: root,
+		AuthorKind: coord.MemberUser,
+		AuthorID:   coord.OwnerUserID,
+		Body:       msg.Text,
+	})
+	if err != nil {
+		log.Printf("channel reply: post to %s: %v", src.ChannelID, err)
+		h.sendText(msg.Chat.ID, "⚠️ Không gửi được vào "+src.ChannelID+": "+err.Error())
+		return true // handled: reporting the failure beats running it as a prompt
+	}
+	// Nobody was named, so nothing has been woken: PostMessage's own rule
+	// gives an unaddressed reply to the agents already in the thread, and the
+	// line was forwarded from one of them, so there is always someone.
+	if h.onChannelReply != nil {
+		h.onChannelReply(src.ChannelID, wake)
+	}
+	if len(wake) == 0 {
+		// Said out loud rather than logged: silence here is indistinguishable
+		// from a bot that lost the message.
+		h.sendText(msg.Chat.ID, "📝 Đã ghi vào "+src.ChannelID+", nhưng không có agent nào trong thread để trả lời.")
+	}
+	log.Printf("channel reply: %s → %s thread %s (woke %s)",
+		posted.ID, src.ChannelID, root, strings.Join(wake, ", "))
+	return true
 }
 
-// shortenPath keeps the last path components that fit within maxRunes,
-// so "/Users/ngocp/Documents/projects/meClaw/goterm-control/internal/bot/handler.go"
-// becomes "../bot/handler.go" instead of the useless "/Users/ngocp/Do".
-func shortenPath(s string, maxRunes int) string {
-	if len([]rune(s)) <= maxRunes {
-		return s
-	}
-	parts := strings.Split(s, "/")
-	// Build from the tail, accumulating components.
-	var tail string
-	for i := len(parts) - 1; i >= 0; i-- {
-		candidate := parts[i]
-		if tail != "" {
-			candidate = parts[i] + "/" + tail
-		}
-		if len([]rune(candidate))+3 > maxRunes { // +3 for "../"
-			break
-		}
-		tail = candidate
-	}
-	if tail == "" {
-		// Filename alone exceeds budget — truncate the filename.
-		r := []rune(parts[len(parts)-1])
-		if len(r) > maxRunes-3 {
-			tail = string(r[:maxRunes-3])
-		} else {
-			tail = string(r)
-		}
-	}
-	if tail == s {
-		return s
-	}
-	return "../" + tail
-}
-
-// sendText converts markdown to Telegram HTML and sends the message.
 func (h *Handler) sendText(chatID int64, text string) int {
+	id, err := h.sendTextErr(chatID, text)
+	if err != nil {
+		log.Printf("sendText: %v", err)
+		return 0
+	}
+	return id
+}
+
+// sendTextErr is sendText for the callers that have to know it failed. Most do
+// not: a line that could not be delivered is a line in a log. The reporter is
+// the exception — it claims a delivery before making it, so a silent failure
+// there is a result the owner never sees and nothing ever retries.
+func (h *Handler) sendTextErr(chatID int64, text string) (int, error) {
 	html := markdownToTelegramHTML(text)
 	msg := tgbotapi.NewMessage(chatID, html)
 	msg.ParseMode = "HTML"
@@ -1256,11 +1247,10 @@ func (h *Handler) sendText(chatID int64, text string) int {
 		msg2 := tgbotapi.NewMessage(chatID, stripHTML(html))
 		sent, err = h.bot.Send(msg2)
 		if err != nil {
-			log.Printf("sendText: %v", err)
-			return 0
+			return 0, err
 		}
 	}
-	return sent.MessageID
+	return sent.MessageID, nil
 }
 
 // buildHistoryContext loads recent messages from the store and formats them

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Channel, ChannelMessage } from './types'
+import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
+import MessageMarkdown from '../components/MessageMarkdown'
+import { ArtifactModal, isPage } from './ArtifactView'
+import GatewayEditor from './GatewayEditor'
 import { ago, clock } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -11,12 +14,26 @@ type Call = (method: string, params?: any) => Promise<any>
 // were not in the history at all. Here the human is an ordinary member: the
 // composer posts as "you" unless you deliberately speak as an agent.
 
-export default function ChannelView({ call, agents, selfID, openThreadID, onOpenedThread, onOpenTask }: {
+const PAGE = 30
+
+export default function ChannelView({ call, agents, selfID, bots, channelID, onChannel, openThreadID, onOpenedThread, onOpenTask, openFilesFor, onOpenedFiles }: {
   call: Call; agents: string[]; selfID: string
+  /** channelID is the room on screen, and onChannel is how it changes. The
+   *  selection lives in the address bar rather than in this component, so a
+   *  room can be linked, bookmarked and reloaded — every room in the sidebar
+   *  used to share the one address /admin/messages. */
+  channelID: string; onChannel: (id: string) => void
+  /** bots maps an agent id to its own Telegram bot name, so a direct room can
+   *  offer the private chat that agent actually answers on. */
+  bots?: Record<string, string>
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
+  /** openFilesFor is a project whose folder should open on arrival — the board
+   *  sends a task here when someone asks where its work landed. */
+  openFilesFor?: string; onOpenedFiles?: () => void
 }) {
   const [channels, setChannels] = useState<Channel[]>([])
-  const [active, setActive] = useState<string>('')
+  const active = channelID
+  const setActive = onChannel
   const [msgs, setMsgs] = useState<ChannelMessage[]>([])
   const [thread, setThread] = useState<ChannelMessage[] | null>(null)
   const [threadRoot, setThreadRoot] = useState<string>('')
@@ -24,17 +41,35 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // The thread keeps its own draft. One shared box meant typing a reply in the
   // panel on the right while the words appeared in the box on the left.
   const [threadBody, setThreadBody] = useState('')
-  // Who the message is addressed to. From a browser the author is always the
-  // person at it; the only choice to make is which agent you are talking to.
+  // Which agent you are talking to. Always exactly one: a message to the room
+  // in general is a message nobody answers, and a thread with three agents in
+  // it answering at once is the same question asked three times.
   const [to, setTo] = useState<string>('')
+  useEffect(() => { setTo(t => t || agents[0] || '') }, [agents])
   const [err, setErr] = useState<string | null>(null)
+  // What this conversation has produced. A path named in prose is findable for
+  // about a day; these are findable by id and survive the file moving.
+  const [files, setFiles] = useState<Artifact[]>([])
+  const [more, setMore] = useState(false)
+  const [briefFor, setBriefFor] = useState('')
+  const [filesFor, setFilesFor] = useState('')
+  // Where each room speaks outside the dashboard. Loaded for every room at
+  // once — it is a short list — so the header can show a count without a call
+  // per room.
+  const [gateways, setGateways] = useState<ChannelGateway[]>([])
+  const [gatewaysFor, setGatewaysFor] = useState('')
   const sending = useRef(false)
+  const loadingOlder = useRef(false)
+  const scroller = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(true)
   const bottom = useRef<HTMLDivElement>(null)
 
   const loadChannels = useCallback(async () => {
     try {
       const list: Channel[] = (await call('channels.list')) || []
       setChannels(list)
+      const gw: GatewayList = await call('channels.gateways')
+      setGateways(gw?.gateways ?? [])
       setErr(null)
       return list
     } catch (e: any) {
@@ -43,36 +78,92 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
     }
   }, [call])
 
+  // A page, not the whole room. A reader arrives wanting the end of the
+  // conversation; loading thousands of messages to show the last screenful is
+  // work nobody asked for and a wait nobody wanted.
   const loadMessages = useCallback(async (channelID: string) => {
     if (!channelID) return
     try {
-      setMsgs((await call('channels.messages', { channel_id: channelID, limit: 200 })) || [])
+      const page: ChannelMessage[] = (await call('channels.messages', { channel_id: channelID, limit: PAGE })) || []
+      setMsgs(page)
+      setMore(page.length === PAGE)
       setErr(null)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
   }, [call])
 
+  // Scrolling up asks for what came before the oldest message on screen. The
+  // scroll position is pinned across the insert, because a list that jumps
+  // when it grows upwards is a list you cannot read.
+  const loadOlder = useCallback(async () => {
+    const box = scroller.current
+    if (!box || !active || loadingOlder.current || !more) return
+    const oldest = msgs[msgs.length - 1]
+    if (!oldest) return
+    loadingOlder.current = true
+    const before = box.scrollHeight - box.scrollTop
+    try {
+      const page: ChannelMessage[] = (await call('channels.messages', {
+        channel_id: active, limit: PAGE, before: oldest.created_at,
+      })) || []
+      if (page.length) {
+        setMsgs(m => [...m, ...page])
+      }
+      setMore(page.length === PAGE)
+      requestAnimationFrame(() => {
+        if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight - before
+      })
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      loadingOlder.current = false
+    }
+  }, [active, call, more, msgs])
+
   const loadThread = useCallback(async (rootID: string) => {
     try {
-      setThread((await call('channels.messages', { thread_root: rootID })) || [])
+      const msgs: ChannelMessage[] = (await call('channels.messages', { thread_root: rootID })) || []
+      setThread(msgs)
       setThreadRoot(rootID)
+      // Only a thread bound to a task can have produced anything; that binding
+      // is what #134 put on the root message.
+      const taskID = msgs[0]?.task_id
+      setFiles(taskID ? ((await call('artifacts.list', { task_id: taskID, tree: true })) || []) : [])
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
   }, [call])
 
-  // First load picks the busiest room so the tab opens on something to read.
+  // First load picks the busiest room so the tab opens on something to read —
+  // but only when the address named no room. A link to one has to survive the
+  // first load, which is the whole point of putting it in the address.
+  //
+  // Read through a ref, not the captured prop: the check happens after an
+  // await, and whether the address had been applied by then depends on mount
+  // order in another file. The ref is right whenever it is read.
+  const wanted = useRef(channelID)
+  wanted.current = channelID
   useEffect(() => {
     let cancelled = false
     loadChannels().then(list => {
-      if (cancelled || !list.length) return
-      setActive(prev => prev || (list.find(c => c.mentions > 0) ?? list[0]).id)
+      if (cancelled || !list.length || wanted.current) return
+      setActive((list.find(c => c.mentions > 0) ?? list[0]).id)
     })
     return () => { cancelled = true }
-  }, [loadChannels])
+  }, [loadChannels, setActive])
 
   useEffect(() => { loadMessages(active) }, [active, loadMessages])
+
+  // Land on the newest message when a room opens, and follow it while you are
+  // already at the bottom — but never yank the view down while somebody is
+  // reading further up.
+  useEffect(() => {
+    if (!msgs.length) return
+    if (atBottom.current) bottom.current?.scrollIntoView({ block: 'end' })
+  }, [msgs])
+
+  useEffect(() => { atBottom.current = true }, [active])
 
   // Arriving from the board: open the conversation the task came out of.
   useEffect(() => {
@@ -88,11 +179,26 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
       .finally(() => onOpenedThread?.())
   }, [openThreadID, call, onOpenedThread])
 
+  // Arriving from the board: open the project's folder, which is where a
+  // task's work actually lands. Selecting the room too, so closing the browser
+  // leaves you somewhere that makes sense rather than on whatever was open.
+  useEffect(() => {
+    if (!openFilesFor) return
+    setActive(openFilesFor)
+    setFilesFor(openFilesFor)
+    onOpenedFiles?.()
+  }, [openFilesFor, onOpenedFiles])
+
   // Poll: an agent posting from its own shell has no way to push to this page.
+  //
+  // Only while you are at the bottom. The poll replaces the list with the
+  // newest page, so running it after somebody scrolled up would throw away the
+  // history they just asked for and drop them back at the end — twice a
+  // minute, while they were reading.
   useEffect(() => {
     const id = setInterval(() => {
       loadChannels()
-      loadMessages(active)
+      if (atBottom.current) loadMessages(active)
       if (threadRoot) loadThread(threadRoot)
     }, 4000)
     return () => clearInterval(id)
@@ -112,13 +218,12 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   // is decided by the caller, not by a mode the composer is left sitting in.
   const post = async (inThread: boolean) => {
     const text = (inThread ? threadBody : body).trim()
-    if (!text || !active || sending.current) return
+    if (!text || !active || !to || sending.current) return
     if (inThread && !threadRoot) return
     sending.current = true
     try {
       const posted: ChannelMessage = await call('channels.post', {
-        channel_id: active, body: text,
-        ...(to ? { notify: [to] } : {}),
+        channel_id: active, body: text, notify: [to],
         ...(inThread ? { thread_root: threadRoot } : {}),
       })
       if (inThread) setThreadBody(''); else setBody('')
@@ -131,6 +236,7 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         // instead of behind a click nobody knew to make.
         await loadThread(posted.id)
       } else {
+        atBottom.current = true
         bottom.current?.scrollIntoView({ behavior: 'smooth' })
       }
     } catch (e: any) {
@@ -140,8 +246,17 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
     }
   }
 
+  // Asking for a review FILLS THE BOX; it does not send. A button that posts
+  // words in your name the moment it is touched is a button you cannot try,
+  // and the first thing it did was put a sentence nobody wrote into a thread.
+  // Edit it, or delete it, then send — the way you would any other message.
+  const reviewFile = (a: Artifact) => {
+    setThreadBody(`Xem lại giúp mình artifact \`${a.id}\` (${a.title}) — đọc nội dung rồi nói thẳng chỗ nào sai, thiếu, hoặc đáng ngờ.`)
+  }
+
   const ordered = useMemo(() => [...msgs].reverse(), [msgs])
   const current = channels.find(c => c.id === active)
+  const roomGateways = gateways.filter(g => g.channel_id === active)
 
   return (
     <div className="h-full flex min-h-0">
@@ -153,11 +268,15 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         ))}
         <div className="px-3 py-2 mt-2 text-[11px] uppercase tracking-wide text-gray-500">Direct</div>
         {channels.filter(c => c.kind === 'dm').map(c => (
-          <ChannelRow key={c.id} c={c} active={c.id === active} onPick={() => { setActive(c.id); setThread(null); setThreadRoot('') }} />
+          <ChannelRow
+            key={c.id} c={c} active={c.id === active} bot={bots?.[c.name]}
+            onPick={() => { setActive(c.id); setThread(null); setThreadRoot('') }}
+          />
         ))}
         {channels.length === 0 && (
           <div className="px-3 py-2 text-xs text-gray-600">No channels yet.</div>
         )}
+        <NewProject call={call} onCreated={loadChannels} />
       </aside>
 
       {/* Main line */}
@@ -165,12 +284,74 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         <header className="px-4 py-2 border-b border-gray-800 flex items-baseline gap-3">
           <span className="text-sm text-gray-200 font-medium">{current?.name ?? '—'}</span>
           {current?.purpose && <span className="text-xs text-gray-500 truncate">{current.purpose}</span>}
+          {current?.workspace && (
+            <button
+              onClick={() => setFilesFor(current.id)}
+              title={current.workspace}
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              Files
+            </button>
+          )}
+          {current?.workspace && (
+            // Browsing the files shows the source; this shows the result. A
+            // page the work produced is served from its own folder, so its
+            // relative requests for data and images resolve — which a single
+            // file opened on its own cannot do.
+            <a
+              href={`/project/${current.id}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Mở thư mục dự án trong tab mới — trang nào có sẽ chạy thật"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
+            >
+              Mở ↗
+            </a>
+          )}
+          {current?.workspace && (
+            <button
+              onClick={() => setBriefFor(current.id)}
+              title={current.workspace}
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              AGENTS.md
+            </button>
+          )}
+          {current && (
+            <button
+              onClick={() => setGatewaysFor(current.id)}
+              title="Nơi phòng này nói ra ngoài dashboard"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              Gateways
+              {roomGateways.length > 0 && (
+                // Amber when one is paused: a destination that has quietly
+                // stopped carrying is worth seeing without opening the panel.
+                <span className={`ml-1 ${roomGateways.some(g => g.mode === 'off') ? 'text-amber-300' : 'text-sky-300'}`}>
+                  {roomGateways.length}
+                </span>
+              )}
+            </button>
+          )}
           <span className="ml-auto text-[11px] text-gray-600 font-mono">
             {current?.members?.map(m => m.id).join(' · ')}
           </span>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div
+          ref={scroller}
+          onScroll={e => {
+            const el = e.currentTarget
+            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+            if (el.scrollTop < 120) loadOlder()
+          }}
+          className="flex-1 overflow-y-auto p-4 space-y-3"
+        >
+          {more && (
+            <div className="text-center text-[11px] text-gray-600 py-1">
+              kéo lên để xem thêm…
+            </div>
+          )}
           {err && <div className="text-xs text-red-300">{err}</div>}
           {ordered.length === 0 && !err && (
             <div className="text-sm text-gray-500">
@@ -192,6 +373,26 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
         />
       </div>
 
+      {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
+      {gatewaysFor && (
+        <GatewayEditor
+          call={call} channelID={gatewaysFor}
+          channelName={channels.find(c => c.id === gatewaysFor)?.name ?? gatewaysFor}
+          agents={agents} bots={bots}
+          onChanged={loadChannels}
+          onClose={() => setGatewaysFor('')}
+        />
+      )}
+      {filesFor && (
+        <FileBrowser
+          call={call} channelID={filesFor}
+          // By id rather than from `current`: arriving from the board sets both
+          // at once, and `current` is whatever the list has resolved so far.
+          root={channels.find(c => c.id === filesFor)?.workspace ?? ''}
+          onClose={() => setFilesFor('')}
+        />
+      )}
+
       {/* Thread */}
       {thread && (
         <aside className="w-96 shrink-0 border-l border-gray-800 bg-gray-900/30 flex flex-col min-h-0">
@@ -209,6 +410,18 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
               </div>
             ))}
           </div>
+          {files.length > 0 && (
+            <div className="border-t border-gray-800 px-3 py-2 space-y-1">
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">Files</div>
+              {files.map(a => (
+                <FileRow
+                  key={a.id} a={a} call={call}
+                  onReview={() => reviewFile(a)}
+                  reviewer={to}
+                />
+              ))}
+            </div>
+          )}
           {/* Typing happens where you are reading. */}
           <Composer
             value={threadBody} onChange={setThreadBody} onSend={() => post(true)}
@@ -221,12 +434,21 @@ export default function ChannelView({ call, agents, selfID, openThreadID, onOpen
   )
 }
 
-function ChannelRow({ c, active, onPick }: { c: Channel; active: boolean; onPick: () => void }) {
+function ChannelRow({ c, active, onPick, bot }: {
+  c: Channel; active: boolean; onPick: () => void
+  /** bot is the @name of this agent's own Telegram bot, for a direct room. Each
+   *  agent here answers on a different one, so "message this one on my phone"
+   *  is a different chat per agent and the row has to say which. */
+  bot?: string
+}) {
   return (
+    <div className={`group relative flex items-center ${
+      active ? 'bg-gray-800' : 'hover:bg-gray-800/50'
+    }`}>
     <button
       onClick={onPick}
-      className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 ${
-        active ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'
+      className={`min-w-0 flex-1 text-left px-3 py-1.5 text-sm flex items-center gap-2 ${
+        active ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'
       }`}
     >
       <span className="truncate">{c.kind === 'dm' ? c.name : `# ${c.name}`}</span>
@@ -238,6 +460,19 @@ function ChannelRow({ c, active, onPick }: { c: Channel; active: boolean; onPick
         <span className="ml-auto text-[10px] px-1.5 rounded-full bg-gray-700 text-gray-300">{c.unread}</span>
       )}
     </button>
+    {bot && (
+      <a
+        href={`https://t.me/${bot}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()}
+        title={`Nhắn riêng agent này trên Telegram — @${bot}`}
+        className="shrink-0 px-2 py-1.5 text-[11px] text-gray-600 hover:text-sky-300"
+      >
+        ↗
+      </a>
+    )}
+    </div>
   )
 }
 
@@ -269,7 +504,11 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
         ))}
         <span className="ml-auto" title={ago(m.created_at)}>{clock(m.created_at)}</span>
       </div>
-      <div className="mt-1 text-sm text-gray-100 whitespace-pre-wrap break-words">{m.body}</div>
+      {/* The agents write markdown — tables, code, headings — and a thread that
+          shows it raw is a thread where a comparison table is a wall of pipes. */}
+      <div className="mt-1 text-sm text-gray-100 break-words">
+        <MessageMarkdown>{m.body}</MessageMarkdown>
+      </div>
 
       {/* An answered message shows its answer. A count on its own reads like
           silence next to a question you asked an agent — which is exactly how
@@ -317,11 +556,8 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
           value={to}
           onChange={e => setTo(e.target.value)}
           title="Which agent this is for"
-          className={`px-2 py-2 text-sm bg-gray-950 rounded ring-1 outline-none ${
-            to ? 'ring-sky-500/50 text-sky-300' : 'ring-gray-800 text-gray-400'
-          }`}
+          className="px-2 py-2 text-sm bg-gray-950 rounded ring-1 ring-sky-500/50 text-sky-300 outline-none"
         >
-          <option value="">to: everyone</option>
           {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
         </select>
         <input
@@ -334,16 +570,398 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
           }}
-          placeholder={to ? `${placeholder} — ${to} will answer` : `${placeholder} — nobody is interrupted`}
+          placeholder={`${placeholder} — ${to || 'no agent'} will answer`}
           className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
         />
         <button
           onClick={onSend}
-          disabled={!value.trim()}
+          disabled={!value.trim() || !to}
           className="px-4 py-2 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Send
         </button>
+      </div>
+    </div>
+  )
+}
+
+// FileRow is one piece of work product: open it, or ask an agent about it.
+function FileRow({ a, call, onReview, reviewer }: {
+  a: Artifact; call: Call; onReview: () => void; reviewer: string
+}) {
+  const [busy, setBusy] = useState(false)
+
+  const [content, setContent] = useState<string | null>(null)
+  const [truncated, setTruncated] = useState(false)
+
+  // Markdown and text open in a modal, wide, rendered — these are reports, and
+  // reading one in a 24rem side panel is not reading it. HTML and links go to
+  // a tab: a page wants a browser, not a box inside one.
+  const open = async () => {
+    setBusy(true)
+    try {
+      if (a.kind === 'link' && a.url) {
+        window.open(a.url, '_blank', 'noopener')
+        return
+      }
+      const r = await call('artifacts.get', { id: a.id })
+      const body: string = r?.content ?? ''
+      if (isPage(a)) {
+        const blob = new Blob([body], { type: 'text/html;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        window.open(url, '_blank', 'noopener')
+        setTimeout(() => URL.revokeObjectURL(url), 60_000)
+        return
+      }
+      setContent(body)
+      setTruncated(Boolean(r?.truncated))
+    } catch (e) {
+      alert(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      {content !== null && (
+        <ArtifactModal a={a} content={content} truncated={truncated} onClose={() => setContent(null)} />
+      )}
+      <button onClick={open} disabled={busy} className="min-w-0 flex-1 text-left truncate text-sky-300 hover:underline">
+        {a.title}
+      </button>
+      <span className="text-gray-600 shrink-0">{a.kind}</span>
+      <button
+        onClick={onReview}
+        disabled={!reviewer}
+        title={reviewer ? `Soạn sẵn câu nhờ ${reviewer} xem lại — bạn bấm Send` : 'Chọn một agent trước'}
+        className="shrink-0 px-1.5 py-0.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40 disabled:opacity-40"
+      >
+        review
+      </button>
+    </div>
+  )
+}
+
+// NewProject makes a room with a folder behind it. A project rather than a bare
+// room by default, because that is what someone is making when they create a
+// place for a piece of work: somewhere for the files to land and a brief
+// saying what the work is.
+function NewProject({ call, onCreated }: { call: Call; onCreated: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [purpose, setPurpose] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const create = async () => {
+    if (!name.trim() || busy) return
+    setBusy(true)
+    try {
+      await call('channels.create', { name: name.trim(), purpose: purpose.trim() })
+      setName(''); setPurpose(''); setOpen(false); setErr(null)
+      onCreated()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full text-left px-3 py-1.5 mt-2 text-xs text-gray-500 hover:text-sky-300"
+      >
+        + dự án mới
+      </button>
+    )
+  }
+  return (
+    <div className="px-3 py-2 space-y-1.5">
+      <input
+        autoFocus value={name} onChange={e => setName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) create(); if (e.key === 'Escape') setOpen(false) }}
+        placeholder="tên dự án"
+        className="w-full px-2 py-1 text-sm bg-gray-950 rounded ring-1 ring-gray-800 text-gray-200 outline-none"
+      />
+      <input
+        value={purpose} onChange={e => setPurpose(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) create(); if (e.key === 'Escape') setOpen(false) }}
+        placeholder="dự án này để làm gì"
+        className="w-full px-2 py-1 text-xs bg-gray-950 rounded ring-1 ring-gray-800 text-gray-300 outline-none"
+      />
+      {err && <div className="text-[11px] text-red-300">{err}</div>}
+      <div className="flex gap-2">
+        <button
+          onClick={create} disabled={!name.trim() || busy}
+          className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-900 disabled:opacity-40"
+        >{busy ? 'đang tạo…' : 'tạo'}</button>
+        <button onClick={() => setOpen(false)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-300">huỷ</button>
+      </div>
+      <p className="text-[11px] text-gray-600">
+        Tạo kèm một thư mục và file {'AGENTS.md'} — agent đọc nó trước khi làm.
+      </p>
+    </div>
+  )
+}
+
+// BriefEditor edits the file the agents read before working on a project.
+//
+// A textarea over the raw markdown rather than a form of fields: what a project
+// needs said differs per project, and a form would decide that in advance. The
+// file is the source of truth — agents edit it with their own tools too — so
+// this saves the whole document and whoever wrote last wins, the way a shared
+// file in a repository always has.
+function BriefEditor({ call, channelID, onClose }: { call: Call; channelID: string; onClose: () => void }) {
+  const [body, setBody] = useState<string | null>(null)
+  const [path, setPath] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    call('channels.brief', { channel_id: channelID })
+      .then((r: any) => { setBody(r?.body ?? ''); setPath(r?.path ?? '') })
+      .catch((e: any) => setErr(String(e?.message ?? e)))
+  }, [call, channelID])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const save = async () => {
+    if (body === null || busy) return
+    setBusy(true)
+    try {
+      await call('channels.brief', { channel_id: channelID, body })
+      setErr(null); setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
+      <div
+        onClick={e => e.stopPropagation()}
+        className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
+      >
+        <header className="flex items-baseline gap-3 px-5 py-3 border-b border-gray-800">
+          <span className="text-sm text-gray-200 font-medium">AGENTS.md</span>
+          <span className="text-[11px] text-gray-600 font-mono truncate">{path}</span>
+          <button onClick={onClose} className="ml-auto text-xs text-gray-500 hover:text-gray-300">close</button>
+        </header>
+        <div className="flex-1 min-h-0 p-4">
+          {body === null ? (
+            <div className="text-sm text-gray-500">Loading…</div>
+          ) : (
+            <textarea
+              value={body}
+              onChange={e => setBody(e.target.value)}
+              spellCheck={false}
+              className="w-full h-[60vh] px-3 py-2 text-sm font-mono bg-gray-900 rounded ring-1 ring-gray-800 text-gray-200 outline-none focus:ring-gray-600 resize-none"
+            />
+          )}
+        </div>
+        <footer className="flex items-center gap-3 px-5 py-3 border-t border-gray-800">
+          {err && <span className="text-xs text-red-300">{err}</span>}
+          {saved && <span className="text-xs text-emerald-300">đã lưu</span>}
+          <span className="ml-auto text-[11px] text-gray-600">
+            Agent đọc file này trước khi làm việc trong dự án.
+          </span>
+          <button
+            onClick={save} disabled={busy || body === null}
+            className="px-3 py-1.5 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
+          >{busy ? 'đang lưu…' : 'Lưu'}</button>
+        </footer>
+      </div>
+    </div>
+  )
+}
+
+interface ProjectEntry {
+  name: string
+  path: string
+  dir: boolean
+  bytes: number
+  mtime: string
+}
+
+// FileBrowser looks inside a project's folder — the place the work actually
+// lands. Until now the only way to see it was a terminal, which is fine for
+// whoever set the machine up and useless for checking whether an agent wrote
+// the thing it said it wrote.
+function FileBrowser({ call, channelID, root, onClose }: {
+  call: Call; channelID: string; root: string; onClose: () => void
+}) {
+  const [path, setPath] = useState('')
+  const [entries, setEntries] = useState<ProjectEntry[] | null>(null)
+  const [file, setFile] = useState<{ path: string; body: string; truncated: boolean; binary: boolean } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  // Editing is a mode, not the default. A folder full of an agent's work is
+  // something you mostly read; opening every file in a textarea invites a
+  // stray keystroke into source nobody meant to touch.
+  const [draft, setDraft] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    setFile(null)
+    setDraft(null)
+    call('channels.files', { channel_id: channelID, path })
+      .then((r: any) => { setEntries(r?.entries ?? []); setErr(null) })
+      .catch((e: any) => setErr(String(e?.message ?? e)))
+  }, [call, channelID, path])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { file ? setFile(null) : onClose() } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [file, onClose])
+
+  const open = async (e: ProjectEntry) => {
+    if (e.dir) { setPath(e.path); return }
+    try {
+      const r = await call('channels.files', { channel_id: channelID, path: e.path, read: true })
+      setFile({ path: e.path, body: r?.body ?? '', truncated: !!r?.truncated, binary: !!r?.binary })
+      setDraft(null)
+      setErr(null)
+    } catch (x: any) {
+      setErr(String(x?.message ?? x))
+    }
+  }
+
+  const save = async () => {
+    if (draft === null || !file || saving) return
+    setSaving(true)
+    try {
+      const r = await call('channels.files', { channel_id: channelID, path: file.path, body: draft })
+      setFile({ path: file.path, body: r?.body ?? draft, truncated: !!r?.truncated, binary: !!r?.binary })
+      setDraft(null)
+      setErr(null)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Breadcrumbs, so a reader can tell where they are and get back out.
+  const parts = path ? path.split('/') : []
+  const up = () => setPath(parts.slice(0, -1).join('/'))
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
+      <div
+        onClick={e => e.stopPropagation()}
+        className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
+      >
+        <header className="flex items-baseline gap-2 px-5 py-3 border-b border-gray-800 text-sm">
+          <button onClick={() => { setPath(''); setFile(null) }} className="text-gray-200 font-medium hover:text-sky-300">
+            {root.split('/').pop() || 'project'}
+          </button>
+          {parts.map((p, i) => (
+            <span key={i} className="text-gray-500">
+              /{' '}
+              <button
+                onClick={() => { setPath(parts.slice(0, i + 1).join('/')); setFile(null) }}
+                className="hover:text-sky-300"
+              >{p}</button>
+            </span>
+          ))}
+          <span className="ml-auto text-[11px] text-gray-600 font-mono truncate">{root}</span>
+          <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">close</button>
+        </header>
+
+        {err && <div className="px-5 pt-3 text-xs text-red-300">{err}</div>}
+
+        <div className="flex-1 overflow-y-auto">
+          {file ? (
+            <div className="px-6 py-4">
+              <div className="mb-3 flex items-center gap-3">
+                <button onClick={() => { setFile(null); setDraft(null) }} className="text-xs text-gray-500 hover:text-sky-300">
+                  ← quay lại thư mục
+                </button>
+                {!file.binary && draft === null && !file.truncated && (
+                  <button onClick={() => setDraft(file.body)} className="text-xs text-gray-500 hover:text-sky-300">
+                    sửa
+                  </button>
+                )}
+                {/* A file the server had to cut cannot be edited here: saving
+                    what is on screen would delete the part that was not sent. */}
+                {!file.binary && file.truncated && (
+                  <span className="text-xs text-gray-600">quá dài để sửa ở đây</span>
+                )}
+                {draft !== null && (
+                  <>
+                    <button
+                      onClick={save} disabled={saving}
+                      className="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
+                    >{saving ? 'đang lưu…' : 'Lưu'}</button>
+                    <button onClick={() => setDraft(null)} className="text-xs text-gray-500 hover:text-gray-300">huỷ</button>
+                  </>
+                )}
+                {saved && <span className="text-xs text-emerald-300">đã lưu</span>}
+                <span className="ml-auto text-[11px] text-gray-600 font-mono truncate">{file.path}</span>
+              </div>
+              {draft !== null ? (
+                <textarea
+                  value={draft}
+                  onChange={e => setDraft(e.target.value)}
+                  spellCheck={false}
+                  className="w-full h-[60vh] px-3 py-2 text-xs font-mono bg-gray-900 rounded ring-1 ring-gray-800 text-gray-200 outline-none focus:ring-gray-600 resize-none"
+                />
+              ) : (<>
+              {file.binary ? (
+                <p className="text-sm text-gray-500">File nhị phân — không hiển thị được ở đây.</p>
+              ) : file.path.toLowerCase().endsWith('.md') ? (
+                <MessageMarkdown wide>{file.body}</MessageMarkdown>
+              ) : (
+                <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap break-words">{file.body}</pre>
+              )}
+              {file.truncated && (
+                <p className="mt-4 text-xs text-amber-300">File dài hơn phần hiển thị — mở trực tiếp để đọc hết.</p>
+              )}
+              </>)}
+            </div>
+          ) : entries === null ? (
+            <div className="px-6 py-4 text-sm text-gray-500">Loading…</div>
+          ) : entries.length === 0 ? (
+            <div className="px-6 py-4 text-sm text-gray-500">Thư mục trống.</div>
+          ) : (
+            <ul className="px-3 py-2">
+              {path && (
+                <li>
+                  <button onClick={up} className="w-full text-left px-3 py-1.5 text-sm text-gray-500 hover:text-sky-300">
+                    ..
+                  </button>
+                </li>
+              )}
+              {entries.map(e => (
+                <li key={e.path}>
+                  <button
+                    onClick={() => open(e)}
+                    className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-3 hover:bg-gray-900 rounded"
+                  >
+                    <span className={e.dir ? 'text-sky-300' : 'text-gray-200'}>
+                      {e.dir ? `${e.name}/` : e.name}
+                    </span>
+                    {!e.dir && <span className="ml-auto text-[11px] text-gray-600">{e.bytes} B</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   )

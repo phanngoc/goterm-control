@@ -19,6 +19,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
+	"github.com/ngocp/goterm-control/internal/skills"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -42,25 +43,60 @@ type Bot struct {
 // through the same path as Telegram messages (see Handler.RunTurn).
 func (b *Bot) Handler() *Handler { return b.handler }
 
+// Username is the @name of the bot this agent answers on, without the @.
+//
+// Each agent here has its own bot, so "message this one privately" is a
+// different chat per agent. The dashboard needs the name to link to it, and the
+// only place it is reliably known is here — config holds a token.
+func (b *Bot) Username() string {
+	if b == nil || b.api == nil {
+		return ""
+	}
+	return b.api.Self.UserName
+}
+
+// Memory is this agent's own MEMORY.md and daily notes.
+//
+// Exposed because the task runner needs the same one. A second Manager built
+// from the same config would read the same files, but Bootstrap would run
+// twice and a later change to how one is configured would silently apply to
+// only one lane.
+func (b *Bot) Memory() *memory.Manager {
+	if b == nil || b.handler == nil {
+		return nil
+	}
+	return b.handler.memory
+}
+
 // Notify sends a message the gateway composed on its own initiative — a
 // schedule's result, a failure alert — to the people the config trusts. There
 // is no conversation to answer into, so the recipients are
 // security.allowed_user_ids (a private Telegram chat id equals the user id),
 // not whoever wrote last. With no allow-list there is nobody to tell; the line
 // goes to the log instead of to every stranger who ever messaged the bot.
-func (b *Bot) Notify(text string) {
+// Notify pushes an unsolicited line to the owner, and reports whether it got
+// there.
+//
+// The error matters to exactly one caller: the reporter claims a delivery
+// before sending it, so a send that fails silently becomes a result nobody ever
+// sees. Everything else may ignore it.
+func (b *Bot) Notify(text string) error {
 	if b == nil || b.handler == nil {
 		log.Printf("notify (no bot): %s", text)
-		return
+		return fmt.Errorf("bot: no telegram bot to deliver through")
 	}
 	ids := b.cfg.Security.AllowedUserIDs
 	if len(ids) == 0 {
 		log.Printf("notify (no allowed_user_ids to deliver to): %s", text)
-		return
+		return fmt.Errorf("bot: no allowed_user_ids to deliver to")
 	}
+	var firstErr error
 	for _, id := range ids {
-		b.handler.sendText(id, text)
+		if _, err := b.handler.sendTextErr(id, text); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
 // New creates and initialises the bot. db and sessions are shared with the
@@ -130,9 +166,18 @@ func modelAPI(cfg *config.Config) models.ModelAPI {
 // which is what every install without an `accounts:` section does.
 func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *credentials.Pool) chat.Client {
 	api := modelAPI(cfg)
+	// Skills are read on every turn rather than baked in here. Attaching one
+	// to an agent has to take effect on its next turn: a toolkit you can only
+	// change by restarting the gateway is not a toolkit anybody edits.
+	//
+	// Two roots, because there are two kinds. The agent's own skills follow it
+	// between projects; a project's or a repo's skills belong to the work and
+	// apply only while the turn is inside it.
+	workspace := cfg.Claude.Workspace
 	c, err := chat.Resolve(api, chat.Deps{
 		SystemPrompt: cfg.Claude.SystemPrompt,
-		Workspace:    cfg.Claude.Workspace,
+		SystemExtra:  func(turn string) string { return SkillIndex(workspace, turn) },
+		Workspace:    workspace,
 		Executor:     executor,
 		Pool:         pool,
 	})
@@ -295,6 +340,7 @@ func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *sessio
 		titler:           sessionTitler,
 		trace:            rec,
 		agentID:          cfg.Agent.ID,
+		coord:            coordDB,
 		approvalRequests: make(map[string]chan bool),
 		indicator:        indicator,
 		typing:           typing,
@@ -354,4 +400,36 @@ func (b *Bot) Shutdown() {
 	b.engine.Close()
 	b.sessions.SaveNow()
 	log.Println("bot: shutdown complete")
+}
+
+// SkillIndex is the toolkit in front of THIS turn: the agent's own skills, plus
+// whatever the directory it is working in carries.
+//
+// Two roots rather than one because the two are different kinds of knowledge.
+// An agent's skills are about this machine and follow the agent everywhere. A
+// project's — or a source repo's — are about that work: how it is deployed,
+// what its migrations trip over. Carrying the second set into a turn on a
+// different project would be handing the agent a deploy procedure for something
+// it is not touching.
+//
+// The turn's directory wins a name collision: the project's way of doing a
+// thing beats the general one, which is the only reason to have both.
+//
+// Errors are logged and swallowed. A broken skills folder must not take the
+// agent's turn down with it — it can still do everything it could before skills
+// existed.
+func SkillIndex(agentWorkspace, turnWorkspace string) string {
+	var all []skills.Skill
+	for _, root := range []string{agentWorkspace, turnWorkspace} {
+		if root == "" {
+			continue
+		}
+		list, err := skills.Load(root)
+		if err != nil {
+			log.Printf("skills: %v", err)
+			continue
+		}
+		all = skills.Merge(all, list)
+	}
+	return skills.Index(all)
 }

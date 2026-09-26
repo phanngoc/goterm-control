@@ -91,14 +91,25 @@ function AgentCard({ agent, call, onChanged }: { agent: AgentSettings; call: Cal
     }
   }
 
+  // An agent that is down is the one people most want to restart, and the one
+  // that cannot be asked to restart itself. The button is here because the
+  // gateway answering this screen starts it through the service manager.
   if (!agent.reachable) {
     return (
-      <div className="rounded-lg ring-1 ring-gray-800 bg-gray-900/40 p-3">
+      <div className="rounded-lg ring-1 ring-gray-800 bg-gray-900/40 p-3 space-y-2">
         <div className="flex items-baseline gap-2">
           <span className="text-sm text-gray-300">{agent.agent_name || agent.agent_id}</span>
           <span className="text-xs text-amber-300">không liên lạc được</span>
+          <div className="ml-auto">
+            <RestartButton agent={agent} call={call} onChanged={onChanged} label="Khởi động lại" />
+          </div>
         </div>
-        {agent.error && <p className="mt-1 text-xs text-gray-500 font-mono truncate">{agent.error}</p>}
+        {agent.error && <p className="text-xs text-gray-500 font-mono truncate">{agent.error}</p>}
+        {!agent.can_restart && (
+          <p className="text-xs text-gray-500">
+            Gateway đang mở màn này không chạy dưới service manager, nên không bật hộ được.
+          </p>
+        )}
       </div>
     )
   }
@@ -147,6 +158,7 @@ function AgentCard({ agent, call, onChanged }: { agent: AgentSettings; call: Cal
             Cắt việc đang chạy
           </button>
         )}
+        <RestartButton agent={agent} call={call} onChanged={onChanged} label="Khởi động lại" />
       </div>
 
       {changed && target && (
@@ -160,6 +172,63 @@ function AgentCard({ agent, call, onChanged }: { agent: AgentSettings; call: Cal
       {!agent.can_restart && (
         <p className="text-xs text-gray-500">Không chạy dưới service manager — đổi xong phải tự restart.</p>
       )}
+    </div>
+  )
+}
+
+// RestartButton restarts one agent, whether or not it is answering.
+//
+// A running agent refuses while a turn is in flight — cutting live work is a
+// decision, so the refusal is shown and the same button asks again with force
+// rather than deciding on the person's behalf. An agent that is down has
+// nothing to cut, so it simply comes back.
+function RestartButton({ agent, call, onChanged, label }: {
+  agent: AgentSettings; call: Call; onChanged: () => void; label: string
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+
+  const go = async (force: boolean) => {
+    setBusy(true)
+    setErr(null)
+    setNote(null)
+    try {
+      const r = await call('admin.restart', { agent_id: agent.agent_id, ...(force ? { force: true } : {}) })
+      setNote(r?.how === 'started' ? 'Đang bật lại…' : 'Đang khởi động lại…')
+      setTimeout(onChanged, 8000)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // The refusal names the runs it is protecting; that is what turns this into
+  // a second, deliberate press rather than a retry of the same one.
+  const inFlight = !!err && /in flight/.test(err)
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <button
+        onClick={() => go(false)}
+        disabled={busy || !agent.can_restart}
+        title={agent.can_restart ? '' : 'Không có service manager cho agent này'}
+        className="px-3 py-2 text-sm rounded ring-1 ring-gray-700 text-gray-300 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {busy ? 'Đang gửi…' : label}
+      </button>
+      {inFlight && (
+        <button
+          onClick={() => go(true)}
+          disabled={busy}
+          className="px-3 py-2 text-sm rounded ring-1 ring-amber-500/50 text-amber-300 hover:bg-amber-500/10"
+        >
+          Cắt việc đang chạy
+        </button>
+      )}
+      {note && <span className="text-xs text-emerald-300">{note}</span>}
+      {err && <span className="text-xs text-amber-300">{err}</span>}
     </div>
   )
 }

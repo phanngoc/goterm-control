@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/trace"
 )
 
 // Config tunes the loop. Zero values take the defaults noted.
@@ -61,6 +62,7 @@ type Scheduler struct {
 	db  *coord.DB
 	cfg Config
 
+	rec       *trace.Recorder     // nil-safe: nil disables tracing on this path
 	notify    func(text string)   // deliver a line to the owner (Telegram); nil = log only
 	wake      func(t *coord.Task) // ring the runner(s) for a task just created
 	busy      func() bool         // is this agent mid-run? a heartbeat waits for idle
@@ -82,6 +84,14 @@ func New(db *coord.DB, cfg Config) *Scheduler {
 		lastAlert: map[string]time.Time{},
 	}
 }
+
+// SetRecorder gives the scheduler somewhere to write its trace.
+//
+// Only the command path uses it. An `agent` schedule produces an ordinary task,
+// and that task's run already opens a `task` trace — a span here as well would
+// be the same firing recorded twice, in two places that would disagree the
+// first time one of them changed.
+func (s *Scheduler) SetRecorder(rec *trace.Recorder) { s.rec = rec }
 
 // SetNotify installs the delivery path for results and alerts.
 func (s *Scheduler) SetNotify(fn func(text string)) { s.notify = fn }
@@ -217,6 +227,10 @@ func (s *Scheduler) fireAgent(sc *coord.Schedule, now time.Time) {
 		Body:       agentBody(sc, &p),
 		Kind:       coord.KindScheduled,
 		ScheduleID: sc.ID,
+		// The task a clock produces belongs to the clock's project, or the
+		// board would lose track of work the moment it stopped being typed by
+		// hand.
+		ChannelID: sc.ChannelID,
 	})
 	if err != nil {
 		s.failed(sc, now, "create task: "+err.Error())
@@ -262,8 +276,24 @@ func (s *Scheduler) fireCommand(ctx context.Context, sc *coord.Schedule, now tim
 	if p.TimeoutS > 0 {
 		timeout = time.Duration(p.TimeoutS) * time.Second
 	}
+	// A shell command fired at 03:00 that goes wrong used to leave nothing but
+	// schedule_runs.output, cut at 8KB: no waterfall, nothing to filter in the
+	// Traces tab, and no way to line it up against whatever ran before it.
+	span := s.rec.StartTrace("schedule.command", coord.RunTypeCommand, trace.Meta{
+		Tags: trace.Tags("schedule:"+sc.ID, "schedule-name:"+sc.Name),
+	})
+	span.SetInputs(p.Cmd)
+
 	out, code, err := runCommand(ctx, sc, &p, timeout)
 	ended := s.now()
+
+	// The span carries the exit code because "it failed" and "it exited 2" are
+	// different amounts of help at three in the morning.
+	spanErr := err
+	if spanErr == nil && code != 0 {
+		spanErr = fmt.Errorf("exit %d", code)
+	}
+	span.End(out, spanErr)
 	status := coord.ScheduleRunOK
 	if err != nil || code != 0 {
 		status = coord.ScheduleRunFailed

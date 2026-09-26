@@ -56,6 +56,14 @@ const maxEmptyRuns = 2
 // it. An agent that dies mid-task simply stops renewing and the work returns.
 const DefaultLease = 10 * time.Minute
 
+// TaskSessionID is the CLI conversation a task runs in, the same across every
+// run — which is what lets run 2 remember run 1.
+//
+// Here rather than in the runner because two packages need it now: the runner
+// to open it, and the gateway to offer a link to it. A shape spelled out in
+// two places drifts the first time one of them changes.
+func TaskSessionID(taskID string) string { return "task_" + taskID }
+
 // MaxDepth caps how deep a chain of agent-created tasks may go. Two agents
 // that can hand each other work will ping-pong forever without this.
 const MaxDepth = 5
@@ -101,12 +109,20 @@ type Task struct {
 	// v5: set once this task's outcome has been delivered to whoever asked for
 	// it. Empty on a terminal task means a report is still owed.
 	ReportedAt string `json:"reported_at,omitempty"`
+	// FruitlessWaves is how many consecutive fan-outs finished without a
+	// single child completing. Any wave that produces one resets it.
+	FruitlessWaves int `json:"fruitless_waves,omitempty"`
 
 	// v6: the bar this task is judged against, written by whoever scoped it.
 	// Paperclip's rule — a piece of work a reviewer could call "half done" was
 	// never scoped — so the bar travels with the work instead of staying in
 	// the head of the agent that split it up.
 	Acceptance string `json:"acceptance,omitempty"`
+
+	// v8: the project this work belongs to. A board that shows every task on
+	// the machine is a board nobody can read once there is more than one
+	// project. Empty for work that belongs to no project.
+	ChannelID string `json:"channel_id,omitempty"`
 }
 
 // SessionRef names the CLI session a task's work lives in. Both CLIs keep the
@@ -144,7 +160,8 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	priority, title, body, result, trace_id, lease_until, attempts,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-	max_continuations, blocked_on, fail_reason, reported_at, acceptance`
+	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id,
+	fruitless_waves`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -174,6 +191,10 @@ type NewTask struct {
 	MaxContinuations int
 	// Acceptance is how the claimer knows it is done. Required for a sub-task.
 	Acceptance string
+	// ChannelID is the project this work belongs to. Empty for work that
+	// belongs to no project — a one-off from the CLI, or a schedule set up
+	// before projects existed.
+	ChannelID string
 	// Inputs are artifact ids handed down with the work; CreateSubTask links
 	// them with role=input so the child can read them without being told a path.
 	Inputs []string
@@ -207,6 +228,7 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 		ParentID:         n.ParentID,
 		Kind:             n.Kind,
 		ScheduleID:       n.ScheduleID,
+		ChannelID:        n.ChannelID,
 		MaxContinuations: DefaultMaxContinuations,
 		Acceptance:       strings.TrimSpace(n.Acceptance),
 	}
@@ -225,13 +247,13 @@ func (db *DB) CreateTask(n NewTask) (*Task, error) {
 		 title, body, result, trace_id, lease_until, attempts, max_attempts, depth,
 		 created_at, updated_at,
 		 parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
-		 max_continuations, blocked_on, fail_reason, acceptance)
+		 max_continuations, blocked_on, fail_reason, acceptance, channel_id)
 		VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, '', '', ?, 0, ?, ?, ?, ?,
-		        ?, ?, ?, '', '', 0, ?, '', '', ?)`,
+		        ?, ?, ?, '', '', 0, ?, '', '', ?, ?)`,
 		t.ID, t.ContextID, t.CreatedBy, t.AssignedTo, t.State, t.Priority,
 		t.Title, t.Body, ts(t.LeaseUntil), t.MaxAttempts, t.Depth,
 		ts(t.CreatedAt), ts(t.UpdatedAt),
-		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations, t.Acceptance)
+		t.ParentID, t.Kind, t.ScheduleID, t.MaxContinuations, t.Acceptance, t.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
 	}
@@ -400,8 +422,20 @@ func (db *DB) cancelOpenChildren(parentID, now string) ([]string, error) {
 type TaskFilter struct {
 	State   string
 	AgentID string // matches either the creator or the claimer
-	Limit   int
+	// ChannelID scopes the board to one project. The sentinel "-" asks for the
+	// opposite: work that belongs to no project, which would otherwise have
+	// nowhere to be seen once the board defaults to a project.
+	ChannelID string
+	// ContextID scopes the listing to one task tree — one goal and everything
+	// split out of it. Without it a tree could only be read by walking
+	// parent_id by hand, which is why nobody could answer "how far along is
+	// this goal".
+	ContextID string
+	Limit     int
 }
+
+// NoChannel is the ChannelID that means "work belonging to no project".
+const NoChannel = "-"
 
 // ListTasks returns tasks newest first.
 func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
@@ -418,6 +452,19 @@ func (db *DB) ListTasks(f TaskFilter) ([]Task, error) {
 	if f.AgentID != "" {
 		where = append(where, "(created_by = ? OR claimed_by = ? OR assigned_to = ?)")
 		args = append(args, f.AgentID, f.AgentID, f.AgentID)
+	}
+	switch f.ChannelID {
+	case "":
+		// every project, which is what the board showed before projects existed
+	case NoChannel:
+		where = append(where, "channel_id = ''")
+	default:
+		where = append(where, "channel_id = ?")
+		args = append(args, f.ChannelID)
+	}
+	if f.ContextID != "" {
+		where = append(where, "context_id = ?")
+		args = append(args, f.ContextID)
 	}
 	args = append(args, limit)
 
@@ -570,6 +617,40 @@ func (db *DB) answeredCheckpoint(taskID, byAgent, note string) (string, error) {
 		merged += "\n\n"
 	}
 	return merged + "Answer from " + byAgent + ": " + note, nil
+}
+
+// SetTaskChannel files a task under a project, or clears it with "".
+//
+// It exists because a task's project decides WHERE its next run happens: the
+// runner opens the project's folder as the working directory. A task created
+// from a DM has no project, so its work lands in the agent's own directory —
+// and the person who then goes looking for the output in the project folder
+// finds nothing. Filing it is the fix, and it has to be possible after the
+// fact, because that is when anyone notices.
+//
+// Only an unfinished task. Moving a completed one changes where its history
+// says the work happened, which was true somewhere else.
+func (db *DB) SetTaskChannel(taskID, channelID string) error {
+	if channelID != "" {
+		if _, err := db.GetChannel(channelID); err != nil {
+			return err
+		}
+	}
+	res, err := db.conn.Exec(`UPDATE tasks SET channel_id = ?, updated_at = ?
+		WHERE id = ? AND state NOT IN (?, ?, ?, ?)`,
+		channelID, ts(time.Now()), taskID,
+		TaskCompleted, TaskFailed, TaskCanceled, TaskRejected)
+	if err != nil {
+		return fmt.Errorf("file %s under %s: %w", taskID, channelID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		t, err := db.GetTask(taskID)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("coord: task %s is %s — a finished task keeps the project it ran under", taskID, t.State)
+	}
+	return nil
 }
 
 // ReapExhausted moves tasks that have used every attempt into failed. Until
@@ -729,7 +810,8 @@ func scanTask(s scanner) (*Task, error) {
 		&t.State, &t.Priority, &t.Title, &t.Body, &t.Result, &t.TraceID,
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
-		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance); err != nil {
+		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance,
+		&t.ChannelID, &t.FruitlessWaves); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)
@@ -819,4 +901,25 @@ func (db *DB) MarkReported(taskID string, now time.Time) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// UnmarkReported gives a claimed delivery back, for a report that was won and
+// then could not be sent.
+//
+// Winning before sending is what stops three gateways delivering the same
+// result three times, so the claim has to come first. The cost of that order is
+// that a failed send leaves a task marked delivered and never delivered — the
+// marker makes the silence permanent. This is the compensation: put it back and
+// let the next tick, on this gateway or another, try again.
+//
+// Guarded on the timestamp we wrote, so a release can never clear a claim that
+// somebody else has since made.
+func (db *DB) UnmarkReported(taskID string, claimedAt time.Time) error {
+	_, err := db.conn.Exec(
+		`UPDATE tasks SET reported_at = '' WHERE id = ? AND reported_at = ?`,
+		taskID, ts(claimedAt))
+	if err != nil {
+		return fmt.Errorf("release report claim %s: %w", taskID, err)
+	}
+	return nil
 }

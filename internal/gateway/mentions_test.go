@@ -23,22 +23,35 @@ type recordingTurn struct {
 	prompts  []string
 	sessions []string
 	resumed  []string
+	tags     [][]string // the trace tags each turn's session carried
 	reply    string
 	newID    string
+	err      error
+
+	// duringTurn runs against the sink before the reply is written, so a test
+	// can watch what the room sees while the turn is still going.
+	duringTurn func(TurnSink)
 }
 
 func (r *recordingTurn) RunTurn(ctx context.Context, sess *session.Session, chatID int64,
 	modelID, userText string, sink TurnSink) (*execution.RunResult, error) {
+	if r.duringTurn != nil {
+		r.duringTurn(sink)
+	}
 	r.mu.Lock()
 	r.calls++
 	r.prompts = append(r.prompts, userText)
 	r.sessions = append(r.sessions, sess.ID)
 	r.resumed = append(r.resumed, sess.GetSessionID())
+	r.tags = append(r.tags, sess.GetTraceTags())
 	reply, newID := r.reply, r.newID
 	r.mu.Unlock()
 
 	if newID != "" {
 		sess.SetSessionID(newID) // the CLI hands back the session it just wrote
+	}
+	if r.err != nil {
+		return nil, r.err
 	}
 	sink.Write(reply)
 	return &execution.RunResult{SessionID: sess.ID, Status: execution.RunSuccess}, nil
@@ -351,5 +364,708 @@ func TestAddressingNobodyWakesNobody(t *testing.T) {
 	NewMentionWatcher(deps).sweep(context.Background())
 	if turn.count() != 0 {
 		t.Fatal("a line addressed to nobody woke an agent")
+	}
+}
+
+// TestAnAgentBroughtIntoAThreadGetsAllOfIt is the case that matters when you
+// switch who you are talking to mid-conversation: the second agent has no
+// session for this thread, so the prompt is the only thing it will ever know
+// about it.
+func TestAnAgentBroughtIntoAThreadGetsAllOfIt(t *testing.T) {
+	turn := &recordingTurn{reply: "đã đọc", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw tổng hợp kinh tế VN 3 tháng qua",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first agent works in the thread. Its analysis is long — the thing
+	// the old 400-rune cut used to destroy.
+	longAnswer := "GDP quý gần nhất tăng 6.9%. " + strings.Repeat("Chi tiết từng ngành và nguồn số liệu. ", 30)
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw", Body: longAnswer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now the owner switches to the other agent, in the same thread.
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body:   "bạn thấy sao?",
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.count() != 1 {
+		t.Fatalf("the newly named agent did not answer (%d turns)", turn.count())
+	}
+	p := turn.prompts[0]
+	// It must see the question that started the thread...
+	if !strings.Contains(p, "tổng hợp kinh tế VN 3 tháng qua") {
+		t.Error("the thread's opening question is missing from the prompt")
+	}
+	// ...and its colleague's answer, not a truncated stub of it.
+	if !strings.Contains(p, "GDP quý gần nhất tăng 6.9%") {
+		t.Error("the other agent's answer is missing")
+	}
+	if !strings.Contains(p, longAnswer[len(longAnswer)-40:]) {
+		t.Error("the other agent's answer was cut off — a premise the question depends on")
+	}
+	// And it is told plainly that it is new here.
+	if !strings.Contains(p, "not spoken here before") {
+		t.Errorf("the prompt does not say it is new to the thread:\n%s", p)
+	}
+}
+
+// An agent that has spoken here resumes its own session, so it needs what
+// happened while it was away — not the whole thread pasted at it again.
+func TestAReturningAgentGetsOnlyWhatItMissed(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	w := NewMentionWatcher(deps)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 câu hỏi mở đầu", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background()) // bomclaw2 answers once, into the thread
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID, AuthorID: "bomclaw",
+		Body: "một đồng nghiệp bổ sung dữ kiện mới",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "còn giờ thì sao?",
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background())
+
+	if turn.count() != 2 {
+		t.Fatalf("expected two turns, got %d", turn.count())
+	}
+	p := turn.prompts[1]
+	if !strings.Contains(p, "while you were away") {
+		t.Errorf("a returning agent was treated as new:\n%s", p)
+	}
+	if !strings.Contains(p, "một đồng nghiệp bổ sung dữ kiện mới") {
+		t.Error("what happened while it was away is missing")
+	}
+	// Its own earlier line is not pasted back at it: it resumes and remembers.
+	if strings.Count(p, "câu hỏi mở đầu") > 0 {
+		t.Error("the thread was replayed to an agent that already remembers it")
+	}
+}
+
+// TestTheRoomSeesWorkInProgress: a turn that reads six files takes long enough
+// that a silent thread is indistinguishable from a broken one. The progress
+// line is what tells them apart — and it must become the answer, not sit above
+// it, or every reply ends up with a running commentary attached.
+func TestTheRoomSeesWorkInProgress(t *testing.T) {
+	var duringBody string
+	turn := &recordingTurn{reply: "xong rồi, đây là kết quả", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "xem hộ log", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn.duringTurn = func(sink TurnSink) {
+		// A tool reports immediately: which tool it reached for says more than
+		// the half-sentence it has written.
+		sink.NoteTool("Read")
+		sink.NoteTool("Bash")
+		thread, err := cdb.ThreadMessages(root.ID)
+		if err != nil {
+			t.Errorf("thread: %v", err)
+			return
+		}
+		for _, m := range thread {
+			if m.AuthorID == "bomclaw2" {
+				duringBody = m.Body
+			}
+		}
+	}
+
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if duringBody == "" {
+		t.Fatal("the room saw nothing while the agent worked")
+	}
+	if !strings.Contains(duringBody, "đang làm") {
+		t.Errorf("progress line does not say it is working: %q", duringBody)
+	}
+	for _, tool := range []string{"Read", "Bash"} {
+		if !strings.Contains(duringBody, tool) {
+			t.Errorf("progress line does not name %s: %q", tool, duringBody)
+		}
+	}
+
+	// And when it is done, the progress is gone: one message, holding the
+	// answer, in the place the progress line had.
+	thread, err := cdb.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []coord.ChannelMessage
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			mine = append(mine, m)
+		}
+	}
+	if len(mine) != 1 {
+		t.Fatalf("expected one message from the agent, got %d — progress was left behind", len(mine))
+	}
+	if mine[0].Body != "xong rồi, đây là kết quả" {
+		t.Fatalf("the answer did not replace the progress: %q", mine[0].Body)
+	}
+	if strings.Contains(mine[0].Body, "đang làm") {
+		t.Error("the finished reply still carries progress text")
+	}
+}
+
+// A turn that produces nothing must not leave an agent permanently about to
+// speak.
+func TestAnEmptyTurnLeavesNoProgressBehind(t *testing.T) {
+	turn := &recordingTurn{reply: "   "}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "hỏi gì đó", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	thread, err := cdb.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			t.Fatalf("a turn with nothing to say left %q in the thread", m.Body)
+		}
+	}
+}
+
+// TestThePromptNamesThePeers: the roster used to be a paragraph in each config,
+// hand-copied — and it drifted exactly as that shape guarantees. Agent 1 said
+// so out loud in a thread: "bomclaw3 là agent nào thì em vẫn chưa biết".
+// Generated from the table that every gateway writes at startup, it cannot.
+func TestThePromptNamesThePeers(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	// A third agent appears, and nobody edits a config file.
+	if err := cdb.RegisterAgent(coord.Agent{
+		ID: "bomclaw3", DisplayName: "Agent 3", Provider: "opencode",
+		Model: "opencode/muse-spark-1.3-contributor-free", WSAddr: "ws://127.0.0.1:0/ws",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "ai giúp mình việc này", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.count() != 1 {
+		t.Fatalf("expected one turn, got %d", turn.count())
+	}
+	p := turn.prompts[0]
+	for _, want := range []string{"bomclaw", "bomclaw3", "opencode", "muse-spark"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the roster does not mention %q:\n%s", want, p)
+		}
+	}
+	// And it does not introduce the agent to itself.
+	if strings.Contains(p, "**bomclaw2** —") {
+		t.Error("the agent was listed among its own peers")
+	}
+}
+
+// TestTheThreadsOutputIsInThePrompt: an agent asked to review "the report" has
+// a filename at best and a guess at worst. The artifact index gives it an id
+// that survives the file moving, and the next agent brought in gets the same.
+func TestTheThreadsOutputIsInThePrompt(t *testing.T) {
+	turn := &recordingTurn{reply: "đã xem", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "tổng hợp việc làm IT Đà Nẵng",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := cdb.CreateTask(coord.NewTask{CreatedBy: "bomclaw", Title: "tổng hợp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cdb.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	art, err := cdb.PutArtifact(coord.NewArtifact{
+		TaskID: task.ID, Kind: coord.ArtifactDocument, Title: "index.html",
+		Content: []byte("<html>báo cáo</html>"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "review giúp mình", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if turn.count() != 1 {
+		t.Fatalf("expected one turn, got %d", turn.count())
+	}
+	p := turn.prompts[0]
+	if !strings.Contains(p, art.ID) {
+		t.Errorf("the artifact id is not in the prompt:\n%s", p)
+	}
+	if !strings.Contains(p, "index.html") {
+		t.Error("the artifact title is missing")
+	}
+	if !strings.Contains(p, "artifact get") {
+		t.Error("the prompt does not say how to read it")
+	}
+}
+
+// A thread with no task behind it has produced nothing, and must not claim to.
+func TestAThreadWithNoTaskListsNoFiles(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "chào", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	if strings.Contains(turn.prompts[0], "has produced") {
+		t.Error("a thread with no work behind it listed files")
+	}
+}
+
+// TestTheAgentIsToldItCanSchedule: asked to "check the price every five
+// minutes", an agent that has not been told about schedules either refuses or
+// promises to remember — and then does not, because it does not run between
+// turns. The command has existed since P1a; nothing ever said so in a prompt.
+func TestTheAgentIsToldItCanSchedule(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	deps.SchedulesRun = true
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body:   "tạo 1 schedule 5 phút 1 lần cho tôi nắm giá top 10 crypto",
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	p := turn.prompts[0]
+	for _, want := range []string{"schedule add", "--every", "--agent-task"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the prompt does not offer %q:\n%s", want, p)
+		}
+	}
+	// And the part that is easy to get wrong: the task it creates is claimed
+	// by some other agent, which will not have this conversation.
+	if !strings.Contains(p, "will not have this") {
+		t.Error("the prompt does not warn that the claiming agent lacks this context")
+	}
+}
+
+// A gateway that does not fire schedules must say so rather than let an agent
+// promise something nothing will run.
+func TestAGatewayThatDoesNotFireSchedulesSaysSo(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	deps.SchedulesRun = false
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "mỗi sáng gửi tôi tóm tắt", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	p := turn.prompts[0]
+	if !strings.Contains(p, "does not fire schedules") {
+		t.Errorf("the prompt hides that nothing here would run it:\n%s", p)
+	}
+}
+
+// TestShutdownDoesNotEatTheQuestion: a turn killed by a deploy is not an
+// answered question. Marking the mention read would lose it for good — the
+// person would have to notice and ask again.
+func TestShutdownDoesNotEatTheQuestion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	turn := &recordingTurn{reply: "không bao giờ tới"}
+	turn.duringTurn = func(TurnSink) { cancel() }
+	turn.err = context.Canceled
+
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "câu hỏi quan trọng", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(ctx)
+
+	// Still unread: the next gateway will answer it.
+	left, err := cdb.UnreadMentions(coord.MemberAgent, "bomclaw2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 {
+		t.Fatalf("a question interrupted by shutdown was consumed anyway (%d unread)", len(left))
+	}
+	// And no half-finished progress line was left in the room.
+	thread, _ := cdb.ChannelMessages(coord.GeneralChannelID, 10, time.Time{})
+	for _, m := range thread {
+		if strings.HasPrefix(m.Body, coord.ProgressPrefix) {
+			t.Fatal("a progress line outlived the interrupted turn")
+		}
+	}
+}
+
+// TestAnAbandonedTurnStopsWriting: the engine stops WAITING for a turn when
+// its deadline passes, but the turn keeps running in its lane. Its sink was
+// still writing into the room afterwards, so a line this code had already
+// closed came back to life saying "working" — and stayed that way, which is
+// exactly what a thread showed after a three-minute timeout.
+func TestAnAbandonedTurnStopsWriting(t *testing.T) {
+	turn := &recordingTurn{err: context.DeadlineExceeded}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	// The turn keeps a handle on its sink and writes after giving the caller
+	// back its error, the way a lane goroutine does.
+	var escaped TurnSink
+	turn.duringTurn = func(sink TurnSink) { escaped = sink }
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "việc dài", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	// Whatever it says now must not reach the room.
+	if escaped == nil {
+		t.Fatal("the test never got hold of the sink")
+	}
+	escaped.NoteTool("Bash")
+	escaped.Write(strings.Repeat("vẫn đang chạy đây. ", 20))
+
+	thread, err := cdb.ThreadMessages(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range thread {
+		if strings.HasPrefix(m.Body, coord.ProgressPrefix) {
+			t.Fatalf("an abandoned turn revived its progress line: %q", m.Body)
+		}
+		if strings.Contains(m.Body, "vẫn đang chạy") {
+			t.Fatalf("an abandoned turn published text: %q", m.Body)
+		}
+	}
+}
+
+// And a timeout says what to do about it: "deadline exceeded" is not something
+// a person can act on.
+func TestATimeoutSuggestsATask(t *testing.T) {
+	turn := &recordingTurn{err: context.DeadlineExceeded}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "việc dài", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	thread, _ := cdb.ThreadMessages(root.ID)
+	var said string
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			said = m.Body
+		}
+	}
+	if !strings.Contains(said, "task") {
+		t.Errorf("a timeout should point at the lane that can finish it: %q", said)
+	}
+	if strings.Contains(said, "deadline exceeded") {
+		t.Errorf("the raw error is not an instruction: %q", said)
+	}
+}
+
+// An agent working in a project's room should arrive knowing what the project
+// is and where its files live — without being told again in every message.
+func TestThePromptDescribesTheProject(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	proj, err := cdb.CreateProject("Trading", "Bot giao dịch", "bomclaw", t.TempDir(), []coord.Member{
+		{Kind: coord.MemberAgent, ID: "bomclaw2"},
+		{Kind: coord.MemberUser, ID: coord.OwnerUserID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: proj.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "bắt đầu đi", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	p := turn.prompts[0]
+	for _, want := range []string{"Trading", "Bot giao dịch", proj.Workspace, coord.AgentsFile} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the prompt does not carry %q:\n%s", want, p)
+		}
+	}
+}
+
+// A room that is only a room says nothing about projects — #general is where
+// things too small to organise go, and describing it as a project would invite
+// work into it.
+func TestAPlainRoomDescribesNoProject(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "chào", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	if strings.Contains(turn.prompts[0], "Dự án:") {
+		t.Errorf("#general was described as a project:\n%s", turn.prompts[0])
+	}
+}
+
+// TestATurnInAProjectRunsInItsFolder: telling an agent where the project is
+// and then running its tools somewhere else is the same as not telling it.
+func TestATurnInAProjectRunsInItsFolder(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	proj, err := cdb.CreateProject("Trading", "", "bomclaw", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: proj.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "bắt đầu", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	sess := deps.Sessions.GetByID(turn.sessions[0])
+	if sess == nil {
+		t.Fatal("the session was not registered")
+	}
+	if got := sess.GetWorkspace(); got != proj.Workspace {
+		t.Fatalf("the turn ran in %q, the project is at %q", got, proj.Workspace)
+	}
+}
+
+// A room that is not a project must not redirect the agent anywhere.
+func TestATurnInAPlainRoomKeepsTheAgentsWorkspace(t *testing.T) {
+	turn := &recordingTurn{reply: "ok", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "chào", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	sess := deps.Sessions.GetByID(turn.sessions[0])
+	if sess != nil && sess.GetWorkspace() != "" {
+		t.Fatalf("#general redirected the agent to %q", sess.GetWorkspace())
+	}
+}
+
+// A channel reply's trace had a session id and nothing tying it to the room, so
+// from a line in a channel there was no way to open the trace it produced —
+// the first thing anyone wants when a reply comes out wrong.
+func TestAChannelTurnIsTaggedWithItsRoomAndLine(t *testing.T) {
+	turn := &recordingTurn{reply: "xong"}
+	deps, cdb := mentionTestDeps(t, turn)
+	w := NewMentionWatcher(deps)
+
+	m, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorID: "bomclaw",
+		Body: "@bomclaw2 xem giúp cái này",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.sweep(context.Background())
+
+	turn.mu.Lock()
+	if len(turn.tags) == 0 {
+		turn.mu.Unlock()
+		t.Fatal("no turn ran")
+	}
+	tags := turn.tags[0]
+	turn.mu.Unlock()
+	want := map[string]bool{
+		"channel:" + coord.GeneralChannelID: false,
+		"message:" + m.ID:                   false,
+	}
+	for _, tag := range tags {
+		if _, ok := want[tag]; ok {
+			want[tag] = true
+		}
+	}
+	for tag, found := range want {
+		if !found {
+			t.Errorf("the turn is not tagged %q — its trace cannot be found from the room\n"+
+				"or from the line that summoned it. got %v", tag, tags)
+		}
+	}
+}
+
+// The natural entry point is a person asking an agent in a room. If that turn
+// opens a task with no criteria, none of the goal machinery ever fires: the bar
+// is what the agent re-reads between waves and what a peer checks at the end.
+func TestAChannelTurnAsksForCriteriaWhenItOpensWork(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{reply: "ừ"})
+	w := NewMentionWatcher(deps)
+	m, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser,
+		AuthorID: coord.OwnerUserID, Body: "@bomclaw2 dựng cho tôi cái viewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := w.prompt(*m, &coord.ThreadSession{}, m.ID)
+
+	if !strings.Contains(p, "--acceptance") {
+		t.Fatal("a request in a room opens a task with no bar on it, so it finishes when\n" +
+			"somebody says it is finished and nothing else in the goal loop ever runs")
+	}
+	if !strings.Contains(p, "--thread") {
+		t.Error("the task would be detached from the conversation that asked for it")
+	}
+}
+
+// A goal that stops waits for `bomclaw task unblock`, which is a terminal
+// command — but the notification reaches a phone. The owner's natural move is
+// to reply in the thread, and the agent woken by that reply has to know a task
+// is sitting there waiting for exactly those words.
+func TestAThreadWhoseTaskIsBlockedTellsTheAgentToUnblockIt(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{reply: "ừ"})
+	w := NewMentionWatcher(deps)
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser,
+		AuthorID: coord.OwnerUserID, Body: "@bomclaw2 dựng viewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := cdb.CreateTask(coord.NewTask{CreatedBy: "bomclaw2", Title: "dựng viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cdb.BindThreadToTask(root.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// While it is merely running, the prompt says nothing about unblocking.
+	reply, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "dùng domain a.vn nhé",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := w.prompt(*reply, &coord.ThreadSession{}, root.ID); strings.Contains(p, "task unblock") {
+		t.Fatal("a running task was offered up to be unblocked")
+	}
+
+	// Once it stops for a person, the answer in the thread is the way through.
+	c, err := cdb.ClaimTask("bomclaw2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cdb.BlockTask(c.ID, "bomclaw2", c.Attempts, coord.BlockedOnHuman, "dùng domain nào?"); err != nil {
+		t.Fatal(err)
+	}
+	p := w.prompt(*reply, &coord.ThreadSession{}, root.ID)
+	if !strings.Contains(p, "task unblock") {
+		t.Fatal("the agent answering a stuck goal's thread was never told it could free it —\n" +
+			"so the only way through is a terminal, and the notification that reached a phone\n" +
+			"cannot be acted on from there")
+	}
+	if !strings.Contains(p, "dùng domain nào?") {
+		t.Error("the prompt does not say what the task is actually waiting to know")
+	}
+	if !strings.Contains(p, task.ID) {
+		t.Error("the unblock command does not name the task")
 	}
 }
