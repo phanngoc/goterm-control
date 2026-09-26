@@ -28,6 +28,7 @@ type Server struct {
 	httpSrv       *http.Server
 	startedAt     time.Time
 	extra         map[string]http.HandlerFunc // routes added with Handle before Start
+	relay         *Relay                      // set on a dashboard server; see relay.go
 	mu            sync.Mutex
 	// clients maps each open dashboard socket to its write mutex — gorilla
 	// forbids concurrent writes, and Broadcast writes from outside the
@@ -111,15 +112,18 @@ func (s *Server) Start(ctx context.Context) error {
 	// (menu bar tray) avoid the WebSocket handshake. Requires a login
 	// session when auth is enabled, except for direct loopback clients
 	// (the tray); tunnel traffic always carries forwarding headers.
-	mux.HandleFunc("/api/status", s.auth.RequireAuthExceptLocal(func(w http.ResponseWriter, r *http.Request) {
-		res, err := s.handler(r.Context(), "status", nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(res)
-	}))
+	// A dashboard server is no agent and has no status of its own to report.
+	if s.relay == nil {
+		mux.HandleFunc("/api/status", s.auth.RequireAuthExceptLocal(func(w http.ResponseWriter, r *http.Request) {
+			res, err := s.handler(r.Context(), "status", nil)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(res)
+		}))
+	}
 
 	if s.dashboardDir != "" {
 		fs := http.FileServer(http.Dir(s.dashboardDir))
@@ -208,6 +212,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+
+	if s.relay != nil {
+		s.serveRelay(conn, r, writeMu)
+		log.Printf("gateway: client disconnected")
+		return
+	}
 
 	for {
 		_, msg, err := conn.ReadMessage()

@@ -99,6 +99,9 @@ func main() {
 			}
 		}
 		runGateway(os.Args[2:])
+	case "dashboard":
+		runDashboardCommand(os.Args[2:])
+		return
 	case "passwd":
 		runPasswdCmd(os.Args[2:])
 	case "send":
@@ -156,6 +159,7 @@ Commands:
   gateway stop       Stop the installed service
   gateway restart    Restart the installed service
   gateway status     Show service status and health
+  dashboard          Serve the web dashboard in its own process (install/uninstall/restart/status)
   send               Send a message to the agent via gateway
   status             Show gateway status (via WebSocket)
   models             List available models
@@ -327,22 +331,7 @@ func runGateway(args []string) {
 	// admin page and cannot hand work to its peer.
 	var coordDB *coord.DB
 	if cfg.Coord.IsEnabled() {
-		coordDB, err = coord.Open(cfg.Coord.Path)
-		if err == nil && cfg.Coord.ArtifactsDir != "" {
-			coordDB.SetArtifactsDir(cfg.Coord.ArtifactsDir)
-		}
-		if err == nil && cfg.Coord.RunsDir != "" {
-			coordDB.SetRunsDir(cfg.Coord.RunsDir)
-		}
-		if err == nil && cfg.Tasks.MaxPerContext > 0 {
-			coordDB.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
-		}
-		if err == nil && cfg.Tasks.RunsPerGoal != 0 {
-			coordDB.SetRunsPerGoal(cfg.Tasks.RunsPerGoal)
-		}
-		if err == nil && cfg.Tasks.GoalExtensions != 0 {
-			coordDB.SetGoalExtensions(cfg.Tasks.GoalExtensions)
-		}
+		coordDB, err = openCoordDB(cfg)
 		if err != nil {
 			log.Printf("coord: disabled — %v", err)
 			coordDB = nil
@@ -804,6 +793,32 @@ func runGateway(args []string) {
 	}
 	sessions.SaveNow()
 	log.Println("bomclaw: shutdown complete")
+}
+
+// openCoordDB opens the shared database with this config's settings applied.
+// The gateway and the dashboard process both open it, and must agree on where
+// artifacts and run folders live or one would read what the other never wrote.
+func openCoordDB(cfg *config.Config) (*coord.DB, error) {
+	cdb, err := coord.Open(cfg.Coord.Path)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Coord.ArtifactsDir != "" {
+		cdb.SetArtifactsDir(cfg.Coord.ArtifactsDir)
+	}
+	if cfg.Coord.RunsDir != "" {
+		cdb.SetRunsDir(cfg.Coord.RunsDir)
+	}
+	if cfg.Tasks.MaxPerContext > 0 {
+		cdb.SetMaxTasksPerContext(cfg.Tasks.MaxPerContext)
+	}
+	if cfg.Tasks.RunsPerGoal != 0 {
+		cdb.SetRunsPerGoal(cfg.Tasks.RunsPerGoal)
+	}
+	if cfg.Tasks.GoalExtensions != 0 {
+		cdb.SetGoalExtensions(cfg.Tasks.GoalExtensions)
+	}
+	return cdb, nil
 }
 
 // --- send command ---
