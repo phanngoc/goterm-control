@@ -527,8 +527,23 @@ func TestResumingAPausedGatewayDoesNotFloodIt(t *testing.T) {
 	if _, err := db.UpdateChannelGateway(g.ID, ForwardOff, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
+	var ids []string
 	for i := 0; i < 5; i++ {
-		post(t, db, "bomclaw", "nói trong lúc tạm dừng")
+		ids = append(ids, post(t, db, "bomclaw", "nói trong lúc tạm dừng").ID)
+	}
+	// Stamped past the wall clock, the way a coarse clock really does it: five
+	// lines written inside one tick are pushed a nanosecond apart to keep
+	// their order, which lands them AHEAD of what time.Now() reads back. A
+	// resume that takes its cut-off from the clock then sits behind lines that
+	// already exist. Without this the test only fails where the clock is
+	// coarse — it passed on macOS and Linux and failed on Windows, which is a
+	// net that catches nothing four times out of five.
+	frozen := ts(time.Now().Add(time.Second))
+	for _, id := range ids {
+		if _, err := db.conn.Exec(`UPDATE channel_messages SET created_at = ? WHERE id = ?`,
+			frozen, id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if pending := pendingFor(t, db, "bomclaw"); len(pending) != 0 {
 		t.Fatalf("a paused gateway was still queuing: %+v", pending)
