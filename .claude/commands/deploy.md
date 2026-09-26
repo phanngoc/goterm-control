@@ -103,9 +103,21 @@ artifacts into `~/.bomclaw/` and restart.
    ```
    The process command line must show `/Users/ngocp/.bomclaw/bomclaw`.
 
+5b. **Dashboard** (`com.bomclaw.dashboard`, :18780 — the port the tunnel
+   serves). It is its own process so steps 4-5 never take the page down; leave
+   it alone unless the change touches it. New `dashboard/dist` files are served
+   as soon as they are copied — no restart. Restart it only when Go code it runs
+   changed (`internal/gateway/relay.go`, `settings.go`, `admin.go`, `channels.go`,
+   `schedules.go`, `skills.go`, `internal/auth`, `cmd/bomclaw/dashboard.go`), and
+   it is a one-second blip:
+   ```bash
+   launchctl kickstart -k gui/$(id -u)/com.bomclaw.dashboard
+   ```
+   Step 4's `pkill -f "bomclaw gateway"` does not match it, on purpose.
+
 6. **Health check**:
    ```bash
-   for p in 18789 18790 18791; do printf "%s: " $p; curl -s "http://127.0.0.1:$p/health"; echo; done
+   for p in 18780 18789 18790 18791; do printf "%s: " $p; curl -s "http://127.0.0.1:$p/health"; echo; done
    ```
    Note: `bomclaw status` reports "offline" when dashboard auth is enabled
    (it dials /ws unauthenticated) — the health endpoint is the source of truth.
@@ -137,6 +149,11 @@ Report:
 ## Notes
 
 - Service label: `com.bomclaw.gateway` (plist: `~/Library/LaunchAgents/com.bomclaw.gateway.plist`)
+- Dashboard: `com.bomclaw.dashboard` on :18780, logs `~/.goterm/logs/dashboard{,.err}.log`.
+  It answers coord-backed pages itself and relays chat/sessions/status to agent 1,
+  so it stays up through any agent restart. Install once:
+  `~/.bomclaw/bomclaw dashboard install --config ~/.bomclaw/config.yaml --env ~/.bomclaw/.env`,
+  then point `bot.bomclaw.org` in `~/.cloudflared/config.yml` at `http://127.0.0.1:18780`
 - Runtime layout: `~/.bomclaw/{bomclaw,config.yaml,.env,dashboard/dist}`
 - Data/logs stay in `~/.goterm/`; workspace in `~/goterm-workspace` — all outside TCC paths
 - Other agents: `com.bomclaw2.gateway` (config `~/.bomclaw2/`, data `~/.goterm2/`,

@@ -146,16 +146,19 @@ func handleAdminSetModel(deps Deps, params json.RawMessage) (json.RawMessage, er
 // rather than being left out: an agent missing from the list reads as an agent
 // that does not exist.
 func handleAdminSettingsAll(deps Deps) (json.RawMessage, error) {
-	mine, err := handleAdminSettings(deps)
-	if err != nil {
-		return nil, err
+	out := []AgentSettings{}
+	if !deps.Detached {
+		mine, err := handleAdminSettings(deps)
+		if err != nil {
+			return nil, err
+		}
+		var self AgentSettings
+		if err := json.Unmarshal(mine, &self); err != nil {
+			return nil, err
+		}
+		self.Reachable = true
+		out = append(out, self)
 	}
-	var self AgentSettings
-	if err := json.Unmarshal(mine, &self); err != nil {
-		return nil, err
-	}
-	self.Reachable = true
-	out := []AgentSettings{self}
 
 	if deps.Coord != nil {
 		agents, err := deps.Coord.ListAgents()
@@ -164,7 +167,7 @@ func handleAdminSettingsAll(deps Deps) (json.RawMessage, error) {
 		}
 		client := &http.Client{Timeout: 5 * time.Second}
 		for _, a := range agents {
-			if a.ID == deps.AgentID {
+			if isSelf(deps, a.ID) {
 				continue
 			}
 			peer := peerSettings(client, a.ID, a.DisplayName, a.WSAddr)
@@ -181,6 +184,12 @@ func handleAdminSettingsAll(deps Deps) (json.RawMessage, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AgentID < out[j].AgentID })
 	return json.Marshal(out)
+}
+
+// isSelf is whether agentID is the process answering. Never true in the
+// dashboard process, which is no agent.
+func isSelf(deps Deps, agentID string) bool {
+	return !deps.Detached && agentID == deps.AgentID
 }
 
 func peerSettings(client *http.Client, id, name, wsAddr string) AgentSettings {
@@ -222,7 +231,10 @@ func handleAdminSetModelOn(deps Deps, params json.RawMessage) (json.RawMessage, 
 	if err := decodeParams(params, &p); err != nil {
 		return nil, err
 	}
-	if p.AgentID == "" || p.AgentID == deps.AgentID {
+	if p.AgentID == "" && deps.Detached {
+		return nil, fmt.Errorf("agent_id is required")
+	}
+	if p.AgentID == "" || isSelf(deps, p.AgentID) {
 		return handleAdminSetModel(deps, params)
 	}
 	if deps.Coord == nil {
@@ -331,7 +343,10 @@ func handleAdminRestartOn(deps Deps, params json.RawMessage) (json.RawMessage, e
 	if err := decodeParams(params, &p); err != nil {
 		return nil, err
 	}
-	if p.AgentID == "" || p.AgentID == deps.AgentID {
+	if p.AgentID == "" && deps.Detached {
+		return nil, fmt.Errorf("agent_id is required")
+	}
+	if p.AgentID == "" || isSelf(deps, p.AgentID) {
 		return handleAdminRestart(deps, params)
 	}
 	if deps.Coord == nil {

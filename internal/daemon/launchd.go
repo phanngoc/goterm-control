@@ -21,6 +21,24 @@ type launchdService struct {
 	label     string
 	plistPath string
 	logDir    string
+	logName   string // log file stem; empty means "gateway"
+}
+
+// dashboardLabel is the dashboard's LaunchAgent. Its logs sit beside agent 1's
+// in ~/.goterm/logs as dashboard.log and dashboard.err.log.
+const dashboardLabel = "com.bomclaw.dashboard"
+
+func newLaunchdDashboard() (*launchdService, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+	return &launchdService{
+		label:     dashboardLabel,
+		plistPath: filepath.Join(home, "Library", "LaunchAgents", dashboardLabel+".plist"),
+		logDir:    filepath.Join(home, ".goterm", "logs"),
+		logName:   "dashboard",
+	}, nil
 }
 
 func newLaunchdService(agentID string) (*launchdService, error) {
@@ -59,7 +77,11 @@ func (s *launchdService) Install(ctx context.Context, args InstallArgs) error {
 	}
 
 	// 2. Build program arguments
-	progArgs := []string{args.BinaryPath, "gateway"}
+	command := args.Command
+	if command == "" {
+		command = "gateway"
+	}
+	progArgs := []string{args.BinaryPath, command}
 	if args.ConfigPath != "" {
 		progArgs = append(progArgs, "--config", args.ConfigPath)
 	}
@@ -73,13 +95,18 @@ func (s *launchdService) Install(ctx context.Context, args InstallArgs) error {
 		progArgs = append(progArgs, "--port", fmt.Sprintf("%d", args.Port))
 	}
 
+	logName := s.logName
+	if logName == "" {
+		logName = "gateway"
+	}
+
 	// 3. Generate plist
 	plist := buildPlist(plistArgs{
 		Label:       s.label,
 		ProgramArgs: progArgs,
 		Environment: args.Environment,
-		StdoutPath:  filepath.Join(s.logDir, "gateway.log"),
-		StderrPath:  filepath.Join(s.logDir, "gateway.err.log"),
+		StdoutPath:  filepath.Join(s.logDir, logName+".log"),
+		StderrPath:  filepath.Join(s.logDir, logName+".err.log"),
 	})
 
 	// 4. Backup existing plist

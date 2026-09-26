@@ -18,6 +18,9 @@ type InstallArgs struct {
 	Environment map[string]string // extra env vars (HOME, API keys)
 	Description string            // service description
 	Force       bool              // force reinstall
+	// Command is the bomclaw subcommand the service runs. Empty means
+	// "gateway"; the dashboard service sets "dashboard".
+	Command string
 }
 
 // ServiceRuntime holds the live state of a managed service.
@@ -88,6 +91,21 @@ func Resolve(agentID string) (Service, error) {
 		return newSchtasksService(agentID)
 	default:
 		return nil, fmt.Errorf("daemon service not supported on %s", runtime.GOOS)
+	}
+}
+
+// ResolveDashboard returns the Service that runs the dashboard: a process of
+// its own, so restarting an agent — any agent — no longer takes the page down
+// with it. One per machine; it belongs to no agent.
+//
+// Only launchd is implemented. On the other platforms the dashboard runs in
+// the foreground with `bomclaw dashboard`, and this says so.
+func ResolveDashboard() (Service, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return newLaunchdDashboard()
+	default:
+		return nil, fmt.Errorf("dashboard service not supported on %s — run `bomclaw dashboard` under your own supervisor", runtime.GOOS)
 	}
 }
 

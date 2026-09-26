@@ -112,6 +112,12 @@ type Deps struct {
 	// Accounts is the credential pool sessions rotate across. Nil or empty
 	// means the ambient credentials.
 	Accounts *credentials.Pool
+
+	// Detached is set in the dashboard process, which is not an agent: it has
+	// no config of its own to show or change and no service of its own to
+	// restart, so every agent on the settings screen is a peer to it. AgentID
+	// still names the agent the dashboard acts as when it writes a row.
+	Detached bool
 }
 
 // TurnRunner is the slice of *bot.Handler the gateway needs. Declared here so
