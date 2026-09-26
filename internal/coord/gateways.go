@@ -176,7 +176,17 @@ func (db *DB) AddChannelGateway(g ChannelGateway) (ChannelGateway, error) {
 		return ChannelGateway{}, err
 	}
 
-	now := time.Now()
+	// The cut-off has to be later than every line already in the room, not
+	// merely "now". On a clock that moves in milliseconds those are different
+	// things: five lines written in one burst all carry the same instant, a
+	// gateway added immediately after carries that instant too, and
+	// `created_at > since` then hands the new destination the whole burst.
+	//
+	// Windows CI found this the moment message timestamps stopped colliding —
+	// before that the backlog was hidden by the same coarse clock that caused
+	// it, with every line and the cut-off sharing one value and the strict
+	// comparison excluding them all by accident.
+	now := db.nextMessageTime(g.ChannelID)
 	nowTS := ts(now)
 	id := "cg_" + uuid.NewString()
 	_, err := db.conn.Exec(`INSERT INTO channel_gateways

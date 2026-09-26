@@ -627,3 +627,53 @@ func TestMigrationOfABindingKeepsWhatWasAlreadySent(t *testing.T) {
 		t.Fatalf("a second run duplicated the gateway: %+v %v", gws, err)
 	}
 }
+
+// A destination added straight after a burst must not receive the burst.
+//
+// The cut-off has to be later than every line already in the room, not merely
+// "now" — on a clock that moves in milliseconds those are different things.
+// Five lines written in one burst all carry the same instant; a gateway added
+// immediately after carries that instant too; and `created_at > since` hands
+// the whole burst to the new destination.
+//
+// Windows CI found this the moment message timestamps stopped colliding. Before
+// that the backlog was hidden by the same coarse clock that caused it: every
+// line and the cut-off shared one value, and the strict comparison excluded
+// them all by accident. The test writes the collision by hand so it does not
+// need a coarse clock to show up.
+func TestADestinationAddedAfterABurstDoesNotReceiveIt(t *testing.T) {
+	db := testDB(t)
+	botAgents(t, db, "bomclaw")
+
+	var ids []string
+	for i := 0; i < 5; i++ {
+		ids = append(ids, post(t, db, "bomclaw", "dòng cũ").ID)
+	}
+	// One instant for the whole burst, and one the wall clock has not reached:
+	// that is what a coarse clock looks like from inside AddChannelGateway,
+	// and what a peer whose clock runs a moment ahead looks like at any speed.
+	frozen := ts(time.Now().Add(time.Second))
+	for _, id := range ids {
+		if _, err := db.conn.Exec(`UPDATE channel_messages SET created_at = ? WHERE id = ?`,
+			frozen, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g, err := db.AddChannelGateway(ChannelGateway{
+		ChannelID: GeneralChannelID, Kind: GatewayWebhook, AgentID: "bomclaw",
+		Target: "https://example.test/hook", Mode: ForwardAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Since.After(parseTS(frozen)) {
+		t.Fatalf("cut-off %v is not after the burst at %v", g.Since, parseTS(frozen))
+	}
+	for _, f := range pendingFor(t, db, "bomclaw") {
+		if f.GatewayID == g.ID {
+			t.Fatalf("a destination added after the burst was handed it: %q\n"+
+				"somebody's phone receives a week of a room the moment it is bound", f.Body)
+		}
+	}
+}
