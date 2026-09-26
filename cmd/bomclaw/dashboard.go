@@ -111,7 +111,11 @@ func runDashboard(args []string) {
 		return homeAgentAddr(coordDB, cfg.Agent.ID, *agentURL), nil
 	}
 
+	previews := gateway.NewPreviewManager(coordDB)
+	defer previews.StopAll()
+
 	deps := gateway.Deps{
+		Preview:      previews,
 		Coord:        coordDB,
 		AgentID:      cfg.Agent.ID,
 		AgentName:    cfg.Agent.Name,
@@ -137,6 +141,8 @@ func runDashboard(args []string) {
 	// The editor's terminal. Its own auth check (a login, never the loopback
 	// exemption) lives in the handler: it hands out a shell.
 	srv.Handle(gateway.TerminalPath, gateway.TerminalHandler(coordDB, authMgr))
+	// Project dev servers, proxied — see internal/gateway/preview.go.
+	srv.Handle(gateway.PreviewPrefix, previews.Handler(authMgr))
 
 	if err := daemon.KillStaleListeners(*port); err != nil {
 		log.Printf("warning: stale PID cleanup: %v", err)

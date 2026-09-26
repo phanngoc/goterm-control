@@ -230,3 +230,28 @@ func TestAFolderWithBothIsASkillNotACategory(t *testing.T) {
 		t.Fatalf("a skill's own support folder was read as a category: %+v", got)
 	}
 }
+
+// A bundled skill whose frontmatter does not parse is a skill no agent is ever
+// told about: the index is built from name and description alone.
+func TestEveryBundledSkillLoadsWithADescription(t *testing.T) {
+	ws := t.TempDir()
+	if _, err := EnsureDefaults(ws); err != nil {
+		t.Fatal(err)
+	}
+	list, err := Load(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range list {
+		got[s.Name] = s.Description
+	}
+	for _, want := range []string{"artifacts", "browser", "channels", "preview"} {
+		if strings.TrimSpace(got[want]) == "" {
+			t.Errorf("bundled skill %q missing or has no description (loaded: %v)", want, got)
+		}
+	}
+	if !strings.Contains(got["preview"], "Preview button") {
+		t.Errorf("preview description = %q", got["preview"])
+	}
+}

@@ -118,6 +118,10 @@ type Deps struct {
 	// restart, so every agent on the settings screen is a peer to it. AgentID
 	// still names the agent the dashboard acts as when it writes a row.
 	Detached bool
+
+	// Preview runs and proxies project dev servers. Only the dashboard
+	// process has one; an agent's gateway answers preview.* with that.
+	Preview *PreviewManager
 }
 
 // TurnRunner is the slice of *bot.Handler the gateway needs. Declared here so
@@ -277,6 +281,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleScheduleDelete(deps, params)
 		case "schedules.run":
 			return handleScheduleRun(deps, params)
+		case "preview.status", "preview.start", "preview.stop", "preview.logs":
+			return handlePreview(deps, method, params)
 		case "tasks.poke":
 			if deps.PokeTasks != nil {
 				deps.PokeTasks()

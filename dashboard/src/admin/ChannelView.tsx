@@ -312,6 +312,19 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             </a>
           )}
           {current?.workspace && (
+            // The running project — its dev server, from bomclaw.json — beside
+            // its code, on the editor's own page.
+            <a
+              href={`/files/${encodeURIComponent(current.id)}?preview=1`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Chạy dự án (bomclaw.json) và xem bên cạnh code"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
+            >
+              Preview ▸
+            </a>
+          )}
+          {current?.workspace && (
             <button
               onClick={() => setBriefFor(current.id)}
               title={current.workspace}

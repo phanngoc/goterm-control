@@ -37,7 +37,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // above: one address per room, so a room can be linked and reloaded.
   const [adminChannel, setAdminChannel] = useState<string>('')
   // The editor on a page of its own: /files/<channel>/<path>#L<line>.
-  const [filesRoute, setFilesRoute] = useState<{ channelId: string; filePath?: string; line?: number } | null>(null)
+  const [filesRoute, setFilesRoute] = useState<{ channelId: string; filePath?: string; line?: number; preview?: boolean } | null>(null)
   const [filesRoot, setFilesRoot] = useState('')
 
   // Another channel wrote to a session — Telegram, or an agent that claimed a
@@ -72,7 +72,10 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       if (r.adminPane) setAdminPane(r.adminPane)
       setAdminTask(r.taskId ?? '')
       if (r.tab === 'files') {
-        setFilesRoute({ channelId: r.channelId!, filePath: r.filePath, line: lineFromHash(location.hash) })
+        setFilesRoute({
+          channelId: r.channelId!, filePath: r.filePath, line: lineFromHash(location.hash),
+          preview: new URLSearchParams(location.search).has('preview'),
+        })
         return
       }
       // Only when the address names one. A bare /admin/messages leaves the
@@ -175,7 +178,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         <ProjectEditor
           key={filesRoute.channelId}
           call={call} channelID={filesRoute.channelId} root={filesRoot}
-          standalone initialFile={filesRoute.filePath} initialLine={filesRoute.line}
+          standalone initialFile={filesRoute.filePath} initialLine={filesRoute.line} initialPreview={filesRoute.preview}
           onClose={() => {
             setAdminChannel(filesRoute.channelId)
             setAdminPane('messages')

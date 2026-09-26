@@ -95,6 +95,11 @@ var DetachedMethods = map[string]bool{
 	"schedules.toggle": true,
 	"schedules.delete": true,
 	"schedules.run":    true,
+
+	"preview.status": true,
+	"preview.start":  true,
+	"preview.stop":   true,
+	"preview.logs":   true,
 }
 
 // SetRelay turns this server into a dashboard server. Call before Start.
