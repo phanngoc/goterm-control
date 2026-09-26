@@ -66,6 +66,28 @@ func handleAdminSettings(deps Deps) (json.RawMessage, error) {
 	})
 }
 
+// restartAfterReply kills this process a moment after the caller has been
+// answered, because the reply cannot survive the process sending it.
+//
+// Returning first is not enough on its own: the handler returns, and only then
+// does the reply get written to the socket. A restart racing that write loses
+// it. For the person at the dashboard that is a spinner that never resolves;
+// for a peer carrying out a restart on this agent's behalf it is worse — a
+// dropped connection is indistinguishable from an agent that was never
+// listening, so the peer would conclude this gateway is down and start it
+// again, killing the process that had just come up.
+//
+// The pause is short enough that nobody waits on it and long enough that a
+// loopback write has finished many times over.
+func restartAfterReply(deps Deps) {
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if err := deps.Restart(); err != nil {
+			log.Printf("settings: restart failed: %v", err)
+		}
+	}()
+}
+
 type setModelParams struct {
 	Model string `json:"model"`
 	// Force skips the busy check. The screen sets it only after the person has
@@ -102,13 +124,7 @@ func handleAdminSetModel(deps Deps, params json.RawMessage) (json.RawMessage, er
 			"note": "config written, but this gateway has no service manager — restart it yourself for the change to take",
 		})
 	}
-	// Answer before the restart: the reply cannot survive the process it is
-	// being sent from.
-	go func() {
-		if err := deps.Restart(); err != nil {
-			log.Printf("settings: restart failed: %v", err)
-		}
-	}()
+	restartAfterReply(deps)
 	return json.Marshal(map[string]any{"written": true, "restarted": true})
 }
 
@@ -305,12 +321,7 @@ func handleAdminRestart(deps Deps, params json.RawMessage) (json.RawMessage, err
 		return nil, fmt.Errorf("%s is not under a service manager — restart it yourself", deps.AgentID)
 	}
 	log.Printf("settings: restarting %s on request", deps.AgentID)
-	// Answer before the restart: the reply cannot survive the process sending it.
-	go func() {
-		if err := deps.Restart(); err != nil {
-			log.Printf("settings: restart failed: %v", err)
-		}
-	}()
+	restartAfterReply(deps)
 	return json.Marshal(map[string]any{"agent_id": deps.AgentID, "restarted": true, "how": "asked"})
 }
 
