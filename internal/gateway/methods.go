@@ -60,6 +60,15 @@ type Deps struct {
 	// screen says so rather than editing a file nothing will reload.
 	Restart func() error
 
+	// ReviveAgent starts ANOTHER agent's gateway service from this process.
+	// Restart above can only speak for this agent, and the moment someone
+	// reaches for a restart button is usually the moment the agent they mean
+	// is not answering — so the request has to be carried out by a process
+	// that is still up. Every agent on this machine is a service in the same
+	// user's manager, which is what makes that possible. Nil when this
+	// gateway has no service manager to ask.
+	ReviveAgent func(agentID string) error
+
 	// OwnerChatID is the Telegram conversation that belongs to the owner, so a
 	// screen can bind a room to their phone without anyone typing a chat id.
 	// There is only one owner, and a number typed by hand is a number that can
@@ -186,6 +195,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleAdminSettingsAll(deps)
 		case "admin.set_model":
 			return handleAdminSetModelOn(deps, params)
+		case "admin.restart":
+			return handleAdminRestartOn(deps, params)
 		case "admin.overview":
 			return handleAdminOverview(deps)
 		case "traces.list":

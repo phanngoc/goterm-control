@@ -591,6 +591,7 @@ func runGateway(args []string) {
 		ProjectsDir:   cfg.Coord.ProjectsDir,
 		ConfigPath:    absPath(*configPath),
 		Restart:       restartSelf(cfg.Agent.ID),
+		ReviveAgent:   reviveAgent,
 	}
 	if tgBot != nil {
 		// Dashboard messages run through the bot's turn engine, so both
@@ -751,6 +752,7 @@ func runGateway(args []string) {
 		srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
 		srv.Handle("/api/settings", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/settings/model", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
+		srv.Handle("/api/settings/restart", authMgr.RequireAuthExceptLocal(gateway.RestartHandler(deps)))
 		srv.Handle("/api/tasks/poke", authMgr.RequireAuthExceptLocal(gateway.PokeHandler(func() {
 			runner.Poke()
 			mentions.Poke()
@@ -1666,6 +1668,16 @@ func restartSelf(agentID string) func() error {
 		defer cancel()
 		return svc.Restart(ctx)
 	}
+}
+
+// reviveAgent starts another agent's gateway from this process, for the
+// settings screen's restart button. It is separate from restartSelf because
+// the case it exists for is the one restartSelf cannot serve: the agent that
+// is not answering is not running a handler that could restart it.
+func reviveAgent(agentID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return daemon.Revive(ctx, agentID)
 }
 
 // ownerChat is the Telegram conversation that belongs to the owner. A private
