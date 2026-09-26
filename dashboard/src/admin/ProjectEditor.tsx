@@ -8,6 +8,46 @@ import { filesPath } from '../lib/route'
 // xterm loads only when a terminal is first opened.
 const TerminalPanel = lazy(() => import('./TerminalPanel'))
 const PreviewPanel = lazy(() => import('./PreviewPanel'))
+const AgentPanel = lazy(() => import('./AgentPanel'))
+
+// usePersisted is useState remembered in this browser, so the editor opens the
+// way it was left — which panels, how big. Storage can be unavailable (private
+// windows); the editor then simply starts from the defaults.
+function usePersisted<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [v, setV] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem('editor.' + key)
+      return raw === null ? initial : (JSON.parse(raw) as T)
+    } catch {
+      return initial
+    }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('editor.' + key, JSON.stringify(v)) } catch {}
+  }, [key, v])
+  return [v, setV]
+}
+
+// A column resize by dragging its left edge.
+function dragWidth(e: React.PointerEvent, width: number, set: (w: number) => void) {
+  e.preventDefault()
+  const startX = e.clientX
+  const move = (ev: PointerEvent) => set(Math.max(280, Math.min(window.innerWidth - 320, width + (startX - ev.clientX))))
+  const up = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
+// Toggle icons for the title bar, drawn like VS Code's layout controls.
+const Icon = {
+  sidebar: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1" /><path d="M5.5 2.5v11" /></svg>,
+  panel: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1" /><path d="M1.5 9.5h13" /></svg>,
+  preview: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1" /><path d="M9.5 2.5v11M5 6.5l2 1.5-2 1.5" /></svg>,
+  agent: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" /><path d="M5.5 7h5" /></svg>,
+}
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -70,33 +110,41 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const [cursor, setCursor] = useState({ line: 1, col: 1 })
   const [lang, setLang] = useState('')
   const [live, setLive] = useState('') // the active buffer, for the markdown preview
-  const [sidebar, setSidebar] = useState(true)
+  const [sidebar, setSidebar] = usePersisted('sidebar', !narrow())
   const [view, setView] = useState<'explorer' | 'search'>('explorer')
   const [quickOpen, setQuickOpen] = useState(false)
   const [searchFocus, setSearchFocus] = useState(0)
   // The terminal panel: mounted on first open and kept mounted after, so
   // hiding it does not end the shells in it.
-  const [termOpen, setTermOpen] = useState(false)
-  const [termMounted, setTermMounted] = useState(false)
+  const [termOpen, setTermOpen] = usePersisted('terminal', false)
+  const [termMounted, setTermMounted] = useState(termOpen)
   const [termMax, setTermMax] = useState(false)
-  const [termHeight, setTermHeight] = useState(() => Math.round(window.innerHeight * 0.35))
-  // The running project, beside the code.
-  const [previewOpen, setPreviewOpen] = useState(!!initialPreview)
-  const [previewWidth, setPreviewWidth] = useState(() => Math.round(window.innerWidth * 0.45))
-  const startPreviewDrag = (e: React.PointerEvent) => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startW = previewWidth
-    const move = (ev: PointerEvent) => {
-      setPreviewWidth(Math.max(280, Math.min(window.innerWidth - 320, startW + (startX - ev.clientX))))
-    }
-    const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
+  const [termHeight, setTermHeight] = usePersisted('terminalHeight', Math.round(window.innerHeight * 0.35))
+  // The running project, and the agents, beside the code — each its own
+  // column, each shown or hidden on its own.
+  const [previewOpen, setPreviewOpen] = usePersisted('preview', !!initialPreview)
+  const [previewWidth, setPreviewWidth] = usePersisted('previewWidth', Math.round(window.innerWidth * 0.4))
+  const [agentOpen, setAgentOpen] = usePersisted('agent', false)
+  const [agentWidth, setAgentWidth] = usePersisted('agentWidth', 380)
+  // On a phone one column fits: the agent, else the preview, else the code.
+  const phone = narrow()
+  // The code keeps at least MIN_MAIN px: when the side columns asked for more
+  // than the window has, they give way in proportion rather than squeezing the
+  // editor into a strip.
+  const [vw, setVw] = useState(window.innerWidth)
+  useEffect(() => {
+    const on = () => setVw(window.innerWidth)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  const MIN_MAIN = 360
+  const room = vw - (sidebar ? 256 : 0) - MIN_MAIN
+  const asked = (previewOpen ? previewWidth : 0) + (agentOpen ? agentWidth : 0)
+  const fit = asked > room && asked > 0 ? Math.max(room, 0) / asked : 1
+  const previewW = Math.max(260, Math.round(previewWidth * fit))
+  const agentW = Math.max(300, Math.round(agentWidth * fit))
+  const showMain = !phone || (!previewOpen && !agentOpen)
+  const showPreviewCol = previewOpen && (!phone || !agentOpen)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   // A search hit waits here until its file's model is in the editor.
   const pendingReveal = useRef<{ path: string; at: Reveal } | null>(null)
@@ -121,6 +169,9 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   }, [call, channelID])
 
   useEffect(() => { loadDir('') }, [loadDir])
+
+  // ?preview=1 is a request to see the project running, whatever was left last time.
+  useEffect(() => { if (initialPreview) setPreviewOpen(true) }, [initialPreview]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A link to a file opens it, with the tree unfolded down to it so you can see
   // where it sits. Once only: the link is where you arrived, not where you are.
@@ -284,6 +335,13 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
       // (history, flow control…); only the Cmd variants are the editor's.
       if (!e.metaKey && (e.target as HTMLElement)?.closest?.('.xterm')) return
       const k = e.key.toLowerCase()
+      if (e.metaKey || e.ctrlKey) {
+        // Layout: ⌘B explorer, ⌘J terminal, ⌘⇧V preview, ⌘⇧I agent.
+        if (k === 'b' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); layoutRef.current.sidebar(); return }
+        if (k === 'j' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); toggleTermRef.current(); return }
+        if (k === 'v' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); layoutRef.current.preview(); return }
+        if (k === 'i' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); layoutRef.current.agent(); return }
+      }
       if (k === 's' && !e.shiftKey) { e.preventDefault(); saveRef.current() }
       else if (k === 'p' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); findFileRef.current() }
       else if (k === 'f' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); findInFilesRef.current() }
@@ -301,6 +359,28 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   }
   const toggleTermRef = useRef(toggleTerm)
   toggleTermRef.current = toggleTerm
+  const layoutRef = useRef({ sidebar: () => {}, preview: () => {}, agent: () => {} })
+  layoutRef.current = {
+    sidebar: () => setSidebar(v => !v),
+    preview: () => setPreviewOpen(!previewOpen),
+    agent: () => setAgentOpen(v => !v),
+  }
+
+  // What the agent panel offers to send along: the open file, the cursor
+  // line, and whatever is selected.
+  const getContext = () => {
+    const ed = editorRef.current
+    const path = activeRef.current
+    if (!ed || !path) return null
+    const model = ed.getModel()
+    const sel = ed.getSelection()
+    return {
+      path,
+      line: ed.getPosition()?.lineNumber ?? 1,
+      language: model?.getLanguageId() ?? '',
+      selection: model && sel && !sel.isEmpty() ? model.getValueInRange(sel) : '',
+    }
+  }
 
   // Dragging the bar above the terminal resizes it, within reason.
   const startDrag = (e: React.PointerEvent) => {
@@ -517,28 +597,35 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
       )}
       {/* Title bar */}
       <header className="flex items-center gap-3 h-10 px-3 border-b border-black/40 bg-[#181818] text-sm shrink-0">
-        <button onClick={() => setSidebar(s => !s)} title="Ẩn/hiện cây thư mục" className="text-gray-400 hover:text-white">☰</button>
-        <span className="font-medium text-gray-100">{project}</span>
-        <span className="hidden md:inline text-[11px] text-gray-500 font-mono truncate">{root}</span>
-        <a href={projectURL('')} target="_blank" rel="noopener noreferrer" title="Mở trang của dự án (board, báo cáo…)" className="ml-auto text-xs text-gray-400 hover:text-sky-300">Mở ↗</a>
+        <span className="font-medium text-gray-100 shrink-0">{project}</span>
+        <span className="flex-1 min-w-0 text-[11px] text-gray-500 font-mono truncate hidden md:block">{root}</span>
+        <span className="flex-1 md:hidden" />
         {standalone ? (
           <button
             onClick={() => navigator.clipboard?.writeText(location.origin + here)}
             title="Chép link tới file và dòng đang mở"
-            className="text-xs text-gray-400 hover:text-sky-300"
+            className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-sky-300"
           >chép link</button>
         ) : (
           <a href={here} target="_blank" rel="noopener noreferrer" title="Mở editor ở tab riêng, tại file và dòng đang mở" className="text-xs text-gray-400 hover:text-sky-300">Tab riêng ↗</a>
         )}
-        <button
-          onClick={() => setPreviewOpen(o => !o)} title="Chạy và xem dự án (bomclaw.json)"
-          className={`text-xs ${previewOpen ? 'text-sky-300' : 'text-gray-400 hover:text-white'}`}
-        >Preview</button>
-        <button
-          onClick={toggleTerm} title="Terminal trong thư mục dự án (Ctrl+`)"
-          className={`text-xs ${termOpen ? 'text-sky-300' : 'text-gray-400 hover:text-white'}`}
-        >Terminal</button>
-        <button onClick={close} className="text-xs text-gray-400 hover:text-white">{standalone ? 'về phòng chat' : 'đóng'}</button>
+        {/* Panels, shown and hidden independently — VS Code's layout controls. */}
+        <span className="shrink-0 flex items-center gap-0.5 rounded bg-black/20 p-0.5">
+          {([
+            ['sidebar', sidebar, layoutRef.current.sidebar, 'Explorer / Search (⌘B)', 'Files'],
+            ['panel', termOpen, toggleTerm, 'Terminal (⌘J · Ctrl+`)', 'Terminal'],
+            ['preview', previewOpen, layoutRef.current.preview, 'Preview — chạy dự án (⌘⇧V)', 'Preview'],
+            ['agent', agentOpen, layoutRef.current.agent, 'Agent — hỏi agent theo phiên (⌘⇧I)', 'Agent'],
+          ] as const).map(([icon, on, toggle, title, label]) => (
+            <button
+              key={icon} onClick={() => toggle()} title={title} aria-pressed={on}
+              className={`flex items-center gap-1 px-1.5 h-6 rounded text-xs ${on ? 'bg-[#2d2d2d] text-sky-300' : 'text-gray-400 hover:text-white'}`}
+            >
+              {Icon[icon]}<span className="hidden lg:inline">{label}</span>
+            </button>
+          ))}
+        </span>
+        <button onClick={close} className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-white">{standalone ? 'về phòng chat' : 'đóng'}</button>
       </header>
 
       {err && (
@@ -583,7 +670,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
         )}
 
         {/* Editor area */}
-        <main className="flex-1 min-w-0 flex flex-col" hidden={previewOpen && narrow()}>
+        <main className="flex-1 min-w-0 flex flex-col" hidden={!showMain}>
           {/* Tabs */}
           <div className="flex items-stretch h-9 bg-[#181818] overflow-x-auto shrink-0">
             {tabs.map(t => (
@@ -702,14 +789,26 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           </footer>
         </main>
 
-        {previewOpen && (
+        {showPreviewCol && (
           <>
-            {!narrow() && (
-              <div onPointerDown={startPreviewDrag} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
+            {!phone && (
+              <div onPointerDown={e => dragWidth(e, previewWidth, setPreviewWidth)} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
             )}
-            <div className="shrink-0 min-w-0" style={narrow() ? { width: '100%' } : { width: previewWidth }}>
+            <div className="shrink-0 min-w-0" style={phone ? { width: '100%' } : { width: previewW }}>
               <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở preview…</div>}>
                 <PreviewPanel call={call} channelID={channelID} onClose={() => setPreviewOpen(false)} />
+              </Suspense>
+            </div>
+          </>
+        )}
+        {agentOpen && (
+          <>
+            {!phone && (
+              <div onPointerDown={e => dragWidth(e, agentWidth, setAgentWidth)} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
+            )}
+            <div className="shrink-0 min-w-0" style={phone ? { width: '100%' } : { width: agentW }}>
+              <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở…</div>}>
+                <AgentPanel call={call} channelID={channelID} getContext={getContext} onClose={() => setAgentOpen(false)} />
               </Suspense>
             </div>
           </>
