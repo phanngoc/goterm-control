@@ -628,29 +628,54 @@ func (db *DB) answeredCheckpoint(taskID, byAgent, note string) (string, error) {
 // finds nothing. Filing it is the fix, and it has to be possible after the
 // fact, because that is when anyone notices.
 //
-// Only an unfinished task. Moving a completed one changes where its history
-// says the work happened, which was true somewhere else.
+// A finished task can be filed too. Refusing it kept the record literal at the
+// cost of the one thing filing is for: "where did that work go" gets asked
+// after the run ends, not during, and a task nobody can file is a task nobody
+// finds again. The honesty is kept a different way — the move is written into
+// the event log, so the history still says the run happened somewhere else.
+//
+// A finished task's updated_at is left alone: finished work stops moving, and
+// other code reads that timestamp as when it stopped (the dashboard closes a
+// task's side-talk window with it).
 func (db *DB) SetTaskChannel(taskID, channelID string) error {
 	if channelID != "" {
 		if _, err := db.GetChannel(channelID); err != nil {
 			return err
 		}
 	}
-	res, err := db.conn.Exec(`UPDATE tasks SET channel_id = ?, updated_at = ?
-		WHERE id = ? AND state NOT IN (?, ?, ?, ?)`,
-		channelID, ts(time.Now()), taskID,
-		TaskCompleted, TaskFailed, TaskCanceled, TaskRejected)
+	t, err := db.GetTask(taskID)
 	if err != nil {
+		return err
+	}
+	if t.ChannelID == channelID {
+		return nil
+	}
+	q := `UPDATE tasks SET channel_id = ?, updated_at = ? WHERE id = ?`
+	args := []any{channelID, ts(time.Now()), taskID}
+	if isTerminal(t.State) {
+		q = `UPDATE tasks SET channel_id = ? WHERE id = ?`
+		args = []any{channelID, taskID}
+	}
+	if _, err := db.conn.Exec(q, args...); err != nil {
 		return fmt.Errorf("file %s under %s: %w", taskID, channelID, err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		t, err := db.GetTask(taskID)
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("coord: task %s is %s — a finished task keeps the project it ran under", taskID, t.State)
+	if isTerminal(t.State) {
+		_ = db.appendEvent(taskID, "system", t.State, t.State, filedAfterTheFact(t.ChannelID, channelID))
 	}
 	return nil
+}
+
+// filedAfterTheFact says what changed and warns that the run predates it, so
+// the event log does not read as if the work happened in the new project.
+func filedAfterTheFact(from, to string) string {
+	switch {
+	case to == "":
+		return "taken out of project " + from + " after it finished; the run itself happened under " + from
+	case from == "":
+		return "filed under project " + to + " after it finished; the run itself happened outside any project"
+	default:
+		return "moved to project " + to + " after it finished; the run itself happened under " + from
+	}
 }
 
 // ReapExhausted moves tasks that have used every attempt into failed. Until

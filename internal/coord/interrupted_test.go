@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,7 +159,9 @@ func TestFilingATaskUnderAProject(t *testing.T) {
 	}
 }
 
-func TestAFinishedTaskKeepsTheProjectItRanUnder(t *testing.T) {
+// "Where did that work go" gets asked after the run ends, so a finished task
+// has to be fileable; the history stays honest through the event log instead.
+func TestAFinishedTaskCanStillBeFiled(t *testing.T) {
 	db := testDB(t)
 	registerTestAgents(t, db, "bomclaw")
 	task, err := db.CreateTask(NewTask{CreatedBy: "bomclaw", Title: "xong rồi"})
@@ -171,8 +174,41 @@ func TestAFinishedTaskKeepsTheProjectItRanUnder(t *testing.T) {
 	if err := db.CancelTask(task.ID, "bomclaw"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetTaskChannel(task.ID, GeneralChannelID); err == nil {
-		t.Error("moved a finished task, so its history now names a project the work never ran in")
+	before, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.SetTaskChannel(task.ID, GeneralChannelID); err != nil {
+		t.Fatalf("a finished task could not be filed, so nobody can find it again: %v", err)
+	}
+	after, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ChannelID != GeneralChannelID {
+		t.Fatalf("channel = %q after filing", after.ChannelID)
+	}
+	// Finished work stops moving, and other code reads updated_at as when it
+	// stopped — the dashboard closes a task's side-talk window with it.
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Error("filing a finished task moved its updated_at, which other code reads as when it stopped")
+	}
+	// The honesty is kept in the log rather than by refusing: the history still
+	// says the run happened somewhere else.
+	events, err := db.TaskEvents(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var filed bool
+	for _, e := range events {
+		if strings.Contains(e.Note, "filed") || strings.Contains(e.Note, GeneralChannelID) {
+			filed = true
+		}
+	}
+	if !filed {
+		t.Error("the move was not written into the event log, so the record now reads as if the\n" +
+			"work had always been in this project")
 	}
 }
 
