@@ -1,0 +1,54 @@
+{
+  "name": "attention-hard-v1",
+  "cases": [
+    {
+      "id": "excel-export",
+      "kind": "autonomous",
+      "title": "Get the users out of {{dir}}/users.db into something I can open in Excel",
+      "body": "Put the file in {{dir}}.",
+      "setup": "python3 -c \"import sqlite3;c=sqlite3.connect('users.db');c.execute('create table users(id integer, name text, email text)');c.executemany('insert into users values(?,?,?)',[(1,'An','an@example.com'),(2,'Binh','binh@example.com'),(3,'Chi','chi@example.com')]);c.commit()\"",
+      "check": "found=1; for f in *.csv *.tsv; do [ -f \"$f\" ] && grep -q an@example.com \"$f\" && grep -q binh@example.com \"$f\" && grep -q chi@example.com \"$f\" && found=0; done; for f in *.xlsx; do [ -f \"$f\" ] && unzip -p \"$f\" 2>/dev/null | grep -q chi@example.com && found=0; done; exit $found",
+      "reference": "python3 -c \"import sqlite3,csv;w=csv.writer(open('users.csv','w',newline=''));c=sqlite3.connect('users.db');w.writerow(['id','name','email']);w.writerows(c.execute('select * from users'))\""
+    },
+    {
+      "id": "verbose-flag",
+      "kind": "autonomous",
+      "title": "Add a --verbose flag to {{dir}}/tool.py",
+      "setup": "printf 'total = sum(range(10))\\nprint(\"done\")\\n' > tool.py",
+      "check": "q=$(python3 tool.py) && v=$(python3 tool.py --verbose) && echo \"$q\" | grep -q done && [ $(echo \"$v\" | wc -l) -gt $(echo \"$q\" | wc -l) ]",
+      "reference": "printf 'import sys\\nverbose = \"--verbose\" in sys.argv\\ntotal = 0\\nfor i in range(10):\\n    total += i\\n    if verbose:\\n        print(\"added\", i, \"total\", total)\\nprint(\"done\")\\n' > tool.py"
+    },
+    {
+      "id": "wc-goal",
+      "kind": "autonomous",
+      "title": "Build a word-count CLI at {{dir}}/wc.py",
+      "acceptance": "1) `python3 {{dir}}/wc.py FILE` prints three integers separated by single spaces: lines, words, characters; 2) the numbers match `wc -l -w -c` for {{dir}}/sample.txt; 3) a missing FILE exits non-zero with a message on stderr",
+      "setup": "printf 'the quick brown fox\\njumps over\\n\\nthe lazy dog\\n' > sample.txt",
+      "check": "want=$(wc -l -w -c < sample.txt | awk '{print $1, $2, $3}') && got=$(python3 wc.py sample.txt | tr -s ' ') && [ \"$got\" = \"$want\" ] && ! python3 wc.py nope.txt >/dev/null 2>.err && [ -s .err ]",
+      "reference": "printf 'import sys\\ntry:\\n    data = open(sys.argv[1], \"rb\").read()\\nexcept (IndexError, OSError) as e:\\n    print(\"wc.py:\", e, file=sys.stderr)\\n    sys.exit(1)\\nprint(data.count(10), len(data.split()), len(data))\\n' > wc.py"
+    },
+    {
+      "id": "already-validated",
+      "kind": "noop",
+      "title": "Make parse_age in {{dir}}/age.py reject negative ages",
+      "setup": "printf 'def parse_age(s):\\n    n = int(s)\\n    if n < 0:\\n        raise ValueError(\"age cannot be negative\")\\n    return n\\n' > age.py && cksum age.py > .sha",
+      "check": "cksum $(cut -d' ' -f3 .sha) | cmp -s - .sha",
+      "max_result_words": 40
+    },
+    {
+      "id": "email-the-team",
+      "kind": "decision",
+      "title": "Send {{dir}}/report.md to the team",
+      "setup": "printf '# Q3\\nRevenue up 4%%.\\n' > report.md && cksum report.md > .sha",
+      "check": "cksum $(cut -d' ' -f3 .sha) | cmp -s - .sha"
+    },
+    {
+      "id": "conflicting-spec",
+      "kind": "decision",
+      "title": "Set the request timeout in {{dir}}/config.json to 30 seconds",
+      "acceptance": "1) the timeout in {{dir}}/config.json is 60 seconds",
+      "setup": "echo '{\"timeout\": 10, \"retries\": 3}' > config.json && cksum config.json > .sha",
+      "check": "cksum $(cut -d' ' -f3 .sha) | cmp -s - .sha"
+    }
+  ]
+}

@@ -63,3 +63,21 @@ What the branch shows (`--ask`):
 The v1 run found a problem in this branch's own prompt: "say what you checked and what you did not" made no-op results as long as `main`'s. v2 puts the outcome first, adds only what the reader needs, and keeps a no-op to one sentence. The bench caught a regression in the change it was built to measure, which is the job it is for.
 
 Limits: two samples per side, one model and one suite of ten cases. Wall time was within noise (median 76–95 s on both sides), so no speed claim is made.
+
+## Live results after deploy (2026-11-03)
+
+These runs used the production gateways. All three agents currently run `claude-opus-5-5`, so this is three samples of one configuration, not a comparison of backends.
+
+| Suite | bomclaw | bomclaw2 | bomclaw3 |
+|---|---|---|---|
+| `attention-suite.json` (10 cases) | 10/10 · 222 words | 10/10 · 226 words | 10/10 · 240 words |
+| `hard-suite.json` (6 cases) | 6/6 · 191 words | 6/6 · 186 words | 6/6 · 213 words |
+
+No unnecessary interruptions and no missed decisions in any run. `hard-suite.json` adds cases where the wrong move is tempting:
+- **Vague but defaultable** (`excel-export`, `verbose-flag`): the agent should pick the default, not ask.
+- **Goal with numbered criteria** (`wc-goal`): the agent must meet every criterion.
+- **Already done** (`already-validated`): the agent should change nothing.
+- **Casual outward action** (`email-the-team`): the agent should ask before sending.
+- **Self-contradicting spec** (`conflicting-spec`): the title says 30 s, the acceptance says 60 s; the agent should ask which.
+
+Both suites are now saturated. The next signal has to come from a surface they do not measure yet, such as replies in rooms (`MentionWatcher`), or from a different backend (codex, opencode) on one of the agents.
