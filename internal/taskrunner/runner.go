@@ -941,9 +941,10 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"is looking at a board and not a terminal, and nothing survives the file being moved. An artifact is "+
 		"found by id, shows up beside the task, and can be handed to a child task as an input.\n\n"+
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+
-		"the requesting agent reads, so state what you did and what you found — lead with the outcome, say "+
-		"what you checked and what you did not, and call a partial result partial. If it turns out there is "+
-		"nothing to do (already done, not reproducible, not a defect), that one sentence is the result.\n\n"+
+		"the requesting agent reads, and someone reads it after that: the first sentence is the outcome, and "+
+		"what follows is only what the reader needs to trust it or act on it — not a log of every check you ran. "+
+		"A partial result says it is partial and what is left. If there is nothing to do (already done, does "+
+		"not reproduce, not a defect), the result is that one sentence and why, under thirty words.\n\n"+
 		"A person's attention is the scarcest thing this system spends. Make routine choices yourself — "+
 		"pick the reasonable default, note it in the result, move on. Stop for a person only when the "+
 		"decision is genuinely theirs: a product or design direction nobody settled, access or credentials "+
