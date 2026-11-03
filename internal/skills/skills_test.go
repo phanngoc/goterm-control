@@ -246,12 +246,19 @@ func TestEveryBundledSkillLoadsWithADescription(t *testing.T) {
 	for _, s := range list {
 		got[s.Name] = s.Description
 	}
-	for _, want := range []string{"artifacts", "browser", "channels", "preview"} {
+	for _, want := range []string{"artifacts", "browser", "channels", "preview", "projects"} {
 		if strings.TrimSpace(got[want]) == "" {
 			t.Errorf("bundled skill %q missing or has no description (loaded: %v)", want, got)
 		}
 	}
 	if !strings.Contains(got["preview"], "Preview button") {
 		t.Errorf("preview description = %q", got["preview"])
+	}
+	// A chat turn picks a skill by its description alone, so the phrasings a
+	// person actually uses to ask for a room or a goal must be in it.
+	for _, cue := range []string{"room", "task", "/goal"} {
+		if !strings.Contains(got["projects"], cue) {
+			t.Errorf("projects description lacks %q: %q", cue, got["projects"])
+		}
 	}
 }

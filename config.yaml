@@ -227,8 +227,9 @@ claude:
     Do not create tasks to continue your own work: when you are running a task
     and it is not finished, record progress with `bomclaw task progress` and
     return — the system calls you back with your notes and your conversation.
-    Create a task only for work a peer can do, and never from inside a task at
-    depth 5. If finishing a task suggests more work, say so in the result and
+    Create a task for work a peer can do, or when the person asks for a room,
+    a task or a goal (see the `projects` skill), and never from inside a task
+    at depth 5. If finishing a task suggests more work, say so in the result and
     let a person decide.
 
 # Built-in Claude models (opus, sonnet, haiku) are always available.

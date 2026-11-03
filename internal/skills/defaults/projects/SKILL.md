@@ -1,0 +1,87 @@
+---
+name: projects
+description: 'Open rooms and tasks when the person asks, so the work shows up in Messages and on the Tasks board. Use when: the person says "make a room/project/channel", "track this", "open a task/goal", gives a multi-step goal (incl. a `/goal ...` line), or asks to archive/rename/bind a room. NOT for: a quick question answered in this turn.'
+---
+
+# projects
+
+The person steers you from Telegram and expects to manage rooms and tasks just
+by asking. A chat turn by itself leaves no trace in Messages or on the Tasks
+board. Only rooms (`bomclaw ch`) and tasks (`bomclaw task`) show up there. If you
+answer a big request only in chat, the work cannot be seen from the dashboard.
+That has happened here: a whole Shopee tool was built and shipped in a DM, and
+the dashboard showed none of it.
+
+When the person asks for a room, a project, a task or a goal, do it with the
+commands below. Do not tell them to use the dashboard instead.
+
+## Rooms
+
+```
+bomclaw ch new <name> --purpose "<one line>"    # project room + folder ~/goterm-projects/<name>
+bomclaw ch new <name> --no-workspace            # a room with no folder (like #general)
+bomclaw ch new <name> --members bomclaw2        # add peers now (you and the owner are always in)
+bomclaw ch list [--all]                         # existing rooms: check before creating a duplicate
+bomclaw ch post <channel> "<text>"              # say something in the room
+bomclaw ch bind <channel> --mode all|mentions   # make the room also speak to Telegram
+bomclaw ch archive <channel>                    # hide it; nothing in it is lost
+```
+
+`ch new` prints the channel id (`ch_<name>`), the folder, and the brief file
+(`AGENTS.md`). The brief is what every later run in that project reads first.
+Write the goal, the decisions made so far, and where the existing files are.
+
+Name rooms in short lowercase kebab-case (`shopee-deals`). Run `ch list --all`
+first; reuse a room that already covers the work.
+
+## Tasks and goals
+
+```
+bomclaw task new --title "<short>" --body "<self-contained>" \
+    --channel ch_<name> --acceptance "<what makes this done>" --to <you>
+bomclaw task list [--state S] [--mine]
+bomclaw task show --id <id>      # runs, checkpoint, history
+bomclaw task tree --id <id>      # a goal: what is left, what it cost
+bomclaw task cancel --id <id>    # only when the person says stop
+```
+
+- `--channel` puts the task on that project's board. Without it, the task
+  belongs to no project.
+- `--acceptance` turns a task into a goal: the bar it is judged against. When
+  the person gives one ("xong khi…", "done when…"), copy it. When they don't,
+  write a concrete, checkable one and tell them what you wrote.
+- `--to <you>` (your own id, `$BOMCLAW_AGENT_ID`) keeps the work with the
+  agent that has the context. Leave `--to` out only when the person wants any
+  agent to take it, and use `--to <peer>` when they name a peer.
+- The body must stand alone. The run that picks it up does not see this chat,
+  so put the context in the body and in the room's brief.
+
+## A task runs in the background, not in this chat
+
+Once created, a task is claimed by a task runner. The runner works in the
+project folder and reports on the board. So after you open a task, stop doing
+that work in this chat, or it gets done twice. Reply with:
+
+- the room id and the task id,
+- the acceptance you set,
+- where to watch it: Admin → Messages → the room, and Admin → Tasks.
+
+When the person only wants it recorded ("track this", "để lên board") and you
+are already partway through in chat, open the room, write the brief with what
+is already done and where it lives, and open the task for what remains. Do not
+move files that a running site or job depends on without asking.
+
+## Mapping requests to commands
+
+| The person says | You do |
+|---|---|
+| "tạo phòng/dự án X", "make a project for X" | `ch new x --purpose …` → write the brief → reply with the id |
+| "/goal …", "mục tiêu là …", a multi-step build | room (reuse or new) + `task new --channel … --acceptance …` |
+| "track this", "đưa việc này lên board" | room + brief of what is done + task for what is left |
+| "giao cho agent 2" | `task new … --to bomclaw2` |
+| "báo vào Telegram" for a room | `ch bind <channel> --mode all` |
+| "dừng/huỷ task …" | `task cancel --id …` |
+| "đóng phòng X" | `ch archive ch_x` |
+
+Confirm before archiving a room or cancelling a task the person did not name
+exactly. Everything else on this page is cheap to undo, so just do it.
