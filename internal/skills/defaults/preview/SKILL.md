@@ -14,6 +14,20 @@ button work, and keep it working as the project changes.
 If there is no `bomclaw.json`, the button says the project declares no preview.
 That is the state to never leave a project with something to show in.
 
+## The commands
+
+```
+bomclaw preview show  ch_<name>    # what bomclaw.json says, and what the files suggest
+bomclaw preview init  ch_<name>    # write it: guessed (Vite, Next, wrangler, index.html) or from flags
+bomclaw preview init  ch_<name> --command "…$HOST…$PORT…" --setup "npm install" --cwd web --base keep
+bomclaw preview init  ch_<name> --static board
+bomclaw preview check ch_<name>    # run it as the button will; PASS or FAIL with the server's output
+```
+
+`init` refuses to replace a declared preview without `--force`, and runs
+`check` right after writing. A guess is a starting point: if `check` fails,
+fix the file (or pass flags) and run `check` again until it says PASS.
+
 ## The file
 
 `bomclaw.json`, at the project root (the folder the room's Files button opens):
@@ -74,26 +88,23 @@ else to configure. With `strip`, in-app links must not start with `/`.
 
 ## Check it before you say it works
 
-Run exactly what the button will run, with the variables it will set, and
-fetch the page through the base path:
-
 ```
-cd <project>/<cwd>
-export PORT=5199 HOST=127.0.0.1 BASE_PATH=/preview/<channel>/
-<setup> && <command> &        # the command from bomclaw.json
-sleep 5
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5199/preview/<channel>/   # base: keep
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5199/                     # base: strip
-kill %1
+bomclaw preview check ch_<name>
 ```
 
-200 — and the HTML's `<script src>` / `<link href>` either start with
-`$BASE_PATH` or are relative. A page whose assets start with `/assets/` will
-load blank in the preview even though the curl above said 200.
+It runs `setup` and `command` in a login shell with the same `$PORT`, `$HOST`
+and `$BASE_PATH` the dashboard sets, waits for the port, fetches the page the
+way the proxy will (under `$BASE_PATH` for `keep`, at `/` for `strip`), and
+fails on a 4xx/5xx or on `src`/`href` values that would escape the base
+(`/assets/app.js` with `strip`). It stops the server when done. Only say the
+preview works after it prints PASS, and paste the PASS line in your reply.
+
+It cannot see what JavaScript fetches at runtime: `fetch('/api/x')` in a
+bundle still breaks under `strip`. Keep API calls relative too.
 
 ## Keep it true
 
-- Create `bomclaw.json` when the project first has something to look at, not at the end.
+- Create `bomclaw.json` when the project first has something to look at, not at the end. `bomclaw ch new` reminds you; the panel's "Nhờ agent thiết lập" button sends you here.
 - When you change how it runs (new framework, moved folder, new port flag), change `bomclaw.json` in the same piece of work.
 - Mention it in the project's `AGENTS.md` ("Preview: `bomclaw.json` runs the Vite app in `web/`") so the next agent does not guess.
 - Nothing to show — a CLI, a library, a data pipeline? Then say so and point the preview at the output a person would look at, e.g. `{"preview": {"static": "reports"}}` with an `index.html` listing the latest report. A pipeline that produces a board has a board to preview.

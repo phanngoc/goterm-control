@@ -31,6 +31,14 @@ bomclaw ch archive <channel>                    # hide it; nothing in it is lost
 (`AGENTS.md`). The brief is what every later run in that project reads first.
 Write the goal, the decisions made so far, and where the existing files are.
 
+If the project will have anything a person can look at (a site, a board, an
+app, a report page), give it a Preview as part of setting it up: follow the
+`preview` skill, `bomclaw preview init ch_<name>`, and stop at PASS from
+`bomclaw preview check ch_<name>`. An empty folder has nothing to detect yet;
+then put "preview check passes" in the first task's acceptance instead.
+When the code lives somewhere else, the Preview runs from a copy in the project
+folder (a clone, or the built files), never from a production checkout.
+
 Name rooms in short lowercase kebab-case (`shopee-deals`). Run `ch list --all`
 first; reuse a room that already covers the work.
 
@@ -75,7 +83,8 @@ move files that a running site or job depends on without asking.
 
 | The person says | You do |
 |---|---|
-| "tạo phòng/dự án X", "make a project for X" | `ch new x --purpose …` → write the brief → reply with the id |
+| "tạo phòng/dự án X", "make a project for X" | `ch new x --purpose …` → write the brief → preview (if it has something to show) → reply with the id |
+| "làm preview", "chạy thử dự án trên dashboard" | `preview` skill: `preview init` → `preview check` until PASS |
 | "/goal …", "mục tiêu là …", a multi-step build | room (reuse or new) + `task new --channel … --acceptance …` |
 | "track this", "đưa việc này lên board" | room + brief of what is done + task for what is left |
 | "giao cho agent 2" | `task new … --to bomclaw2` |

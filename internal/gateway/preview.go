@@ -116,6 +116,11 @@ func NewPreviewManager(cdb *coord.DB) *PreviewManager {
 
 // basePath is the address a channel's preview lives at.
 func basePath(channelID string) string {
+	return PreviewBasePath(channelID)
+}
+
+// PreviewBasePath is the address a channel's preview is served under.
+func PreviewBasePath(channelID string) string {
 	return PreviewPrefix + url.PathEscape(channelID) + "/"
 }
 
@@ -133,6 +138,12 @@ func (m *PreviewManager) spec(channelID string) (*PreviewSpec, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParsePreviewManifest(raw)
+}
+
+// ParsePreviewManifest reads bomclaw.json's bytes. nil, nil means the file
+// declares no preview.
+func ParsePreviewManifest(raw []byte) (*PreviewSpec, error) {
 	var mf struct {
 		Preview *PreviewSpec `json:"preview"`
 	}
@@ -145,6 +156,9 @@ func (m *PreviewManager) spec(channelID string) (*PreviewSpec, error) {
 	s := mf.Preview
 	if s.Command == "" && s.Static == "" {
 		return nil, fmt.Errorf("%s: preview needs a command or a static folder", PreviewManifest)
+	}
+	if s.Command != "" && s.Static != "" {
+		return nil, fmt.Errorf("%s: preview has both a command and a static folder; keep one", PreviewManifest)
 	}
 	if s.Base != "" && s.Base != "keep" && s.Base != "strip" {
 		return nil, fmt.Errorf("%s: preview.base is \"keep\" or \"strip\", not %q", PreviewManifest, s.Base)
@@ -212,32 +226,9 @@ func (m *PreviewManager) Start(channelID string) (PreviewStatus, error) {
 	if err != nil {
 		return PreviewStatus{}, err
 	}
-	script := spec.Command
-	if spec.Setup != "" {
-		script = spec.Setup + " && " + spec.Command
-	}
-	sh := os.Getenv("SHELL")
-	if sh == "" {
-		sh = "/bin/sh"
-	}
-	// A login shell for the same reason as the terminal: under launchd this
-	// process has almost no PATH, and node lives wherever the profile says.
-	cmd := exec.Command(sh, "-lc", script)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"PORT="+strconv.Itoa(port),
-		"HOST=127.0.0.1",
-		"BASE_PATH="+basePath(channelID),
-		"BROWSER=none", // create-react-app and friends open a browser otherwise
-		"BOMCLAW_PREVIEW=1",
-		"BOMCLAW_PROJECT="+channelID,
-	)
-	for k, v := range spec.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd, script := PreviewCommand(spec, dir, channelID, port)
 	logs := &ringLog{max: previewLogBytes}
 	cmd.Stdout, cmd.Stderr = logs, logs
-	setProcessGroup(cmd)
 	fmt.Fprintf(logs, "$ %s\n  (cwd %s, PORT=%d, BASE_PATH=%s)\n", script, dir, port, basePath(channelID))
 	if err := cmd.Start(); err != nil {
 		return PreviewStatus{}, err
@@ -286,6 +277,38 @@ func (m *PreviewManager) Start(channelID string) (PreviewStatus, error) {
 		run.mu.Unlock()
 	}()
 	return m.Status(channelID), nil
+}
+
+// PreviewCommand is the process a preview runs: setup then command, in a login
+// shell in dir, with the variables the preview skill promises. The dashboard
+// and `bomclaw preview check` both build it here, so a check runs exactly what
+// the button will.
+func PreviewCommand(spec *PreviewSpec, dir, channelID string, port int) (*exec.Cmd, string) {
+	script := spec.Command
+	if spec.Setup != "" {
+		script = spec.Setup + " && " + spec.Command
+	}
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	// A login shell for the same reason as the terminal: under launchd this
+	// process has almost no PATH, and node lives wherever the profile says.
+	cmd := exec.Command(sh, "-lc", script)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"PORT="+strconv.Itoa(port),
+		"HOST=127.0.0.1",
+		"BASE_PATH="+basePath(channelID),
+		"BROWSER=none", // create-react-app and friends open a browser otherwise
+		"BOMCLAW_PREVIEW=1",
+		"BOMCLAW_PROJECT="+channelID,
+	)
+	for k, v := range spec.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	setProcessGroup(cmd)
+	return cmd, script
 }
 
 // Stop ends a channel's dev server and everything it started.

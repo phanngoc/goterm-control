@@ -83,7 +83,9 @@ func seedAgentsFile(workspace string, c *Channel, purpose string) error {
 	b.WriteString("## Vai trò\n\n_Agent nào lo mảng nào. Ghi cả điểm yếu, không chỉ điểm mạnh —\n" +
 		"định tuyến theo điểm mạnh mà bỏ qua điểm yếu thì được câu trả lời nhanh và sai._\n\n")
 	b.WriteString("## Quy ước\n\n_Những thứ một người mới vào phải biết mà không đọc được từ code:\n" +
-		"nhánh git, cách chạy, chỗ không được đụng vào._\n")
+		"nhánh git, cách chạy, chỗ không được đụng vào._\n\n")
+	b.WriteString("## Preview\n\n_Nút Preview chạy theo `bomclaw.json` (skill `preview`). Ghi ở đây nó chạy gì, ví dụ\n" +
+		"\"Vite app trong `web/`\". Thiết lập: `bomclaw preview init " + c.ID + "`; kiểm tra: `bomclaw preview check " + c.ID + "`._\n")
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
