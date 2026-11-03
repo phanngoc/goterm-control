@@ -941,8 +941,17 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"is looking at a board and not a terminal, and nothing survives the file being moved. An artifact is "+
 		"found by id, shows up beside the task, and can be handed to a child task as an input.\n\n"+
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+
-		"the requesting agent reads, so state what you did and what you found. If you cannot proceed without "+
-		"a person: `bomclaw task block --id %s --on human --note \"<exactly what you need>\"` and stop.\n\n"+
+		"the requesting agent reads, and someone reads it after that: the first sentence is the outcome, and "+
+		"what follows is only what the reader needs to trust it or act on it — not a log of every check you ran. "+
+		"A partial result says it is partial and what is left. If there is nothing to do (already done, does "+
+		"not reproduce, not a defect), the result is that one sentence and why, under thirty words.\n\n"+
+		"A person's attention is the scarcest thing this system spends. Make routine choices yourself — "+
+		"pick the reasonable default, note it in the result, move on. Stop for a person only when the "+
+		"decision is genuinely theirs: a product or design direction nobody settled, access or credentials "+
+		"you do not have, or an action that is irreversible or speaks for them outside this machine. Then:\n\n"+
+		"    bomclaw task block --id %s --on human --ask \"<one concrete question>\" --note \"<where it stands, the evidence, options>\"\n\n"+
+		"and stop. --ask is the only line the person is shown, on their phone: one question they can "+
+		"answer in a sentence, not a report. The note is for the run that resumes.\n\n"+
 		"%s"+
 		"The final reply is the deliverable, not a plan — do not ask follow-up questions, there is nobody "+
 		"waiting to answer them; use `task block` instead.",

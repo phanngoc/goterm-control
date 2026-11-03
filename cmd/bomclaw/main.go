@@ -21,6 +21,7 @@ import (
 
 	"github.com/ngocp/goterm-control/internal/agent"
 	"github.com/ngocp/goterm-control/internal/auth"
+	"github.com/ngocp/goterm-control/internal/bench"
 	"github.com/ngocp/goterm-control/internal/bot"
 	"github.com/ngocp/goterm-control/internal/browserbridge"
 	"github.com/ngocp/goterm-control/internal/channel"
@@ -128,6 +129,8 @@ func main() {
 		runArtifact(os.Args[2:])
 	case "agents":
 		runAgents(os.Args[2:])
+	case "bench":
+		runBench(os.Args[2:])
 	case "models":
 		runModels(os.Args[2:])
 	case "chat":
@@ -167,6 +170,7 @@ Commands:
   browser            Drive the user's browser via the Browser Bridge extension
   accounts           Show the credential pool and which accounts are healthy
   agents             List agents registered in the shared database
+  bench              Measure the agents: value delivered against a person's attention
   task               Create, claim and finish work shared between agents
   schedule           Timed work: run a task or a command on a cron, interval or one-shot
   heartbeat          This agent's scratchpad and its periodic look at it
@@ -252,6 +256,14 @@ func runGateway(args []string) {
 	// silently attributed to agent 1.
 	if err := os.Setenv("BOMCLAW_AGENT_ID", cfg.Agent.ID); err != nil {
 		log.Printf("gateway: could not export BOMCLAW_AGENT_ID: %v", err)
+	}
+	// And the database itself. Without this a gateway with a non-default
+	// coord.path had agents whose `task done` / `task block` landed in the
+	// default database, where the task does not exist.
+	if cfg.Coord.Path != "" {
+		if err := os.Setenv("BOMCLAW_COORD_DB", cfg.Coord.Path); err != nil {
+			log.Printf("gateway: could not export BOMCLAW_COORD_DB: %v", err)
+		}
 	}
 	// Same reason for artifacts: `bomclaw artifact put` run from the agent's
 	// shell opens the shared database directly and would otherwise write under
@@ -472,6 +484,12 @@ func runGateway(args []string) {
 		// The whole point of running unattended is that the one moment it
 		// needs you, it reaches you.
 		runner.SetStuckListener(func(t coord.Task) {
+			// A bench case that asks is the measurement, not a summons: the
+			// bench reads the question and cancels it. Paging the owner for
+			// it would spend the attention being measured.
+			if t.CreatedBy == bench.Creator {
+				return
+			}
 			if tgBot != nil {
 				_ = tgBot.Notify(stuckMessage(&t))
 			}
@@ -1712,21 +1730,10 @@ func ownerChat(cfg *config.Config) int64 {
 // done by then, and the one command that starts it again — typed on a phone,
 // at whatever hour it stopped.
 func stuckMessage(t *coord.Task) string {
-	why := "it is waiting on a decision"
-	if note := strings.TrimSpace(lastLine(t.Checkpoint)); note != "" {
-		why = note
+	ask := coord.AttentionQuestion(t)
+	if ask == "" {
+		ask = "it is waiting on a decision"
 	}
-	return fmt.Sprintf("⏸ *%s* stopped and needs you\n\n%s\n\nStart it again:\n"+
-		"`bomclaw task unblock --id %s --note \"<your answer>\"`\n"+
-		"Or look first: `bomclaw task tree --id %s`", t.Title, why, t.ID, t.ID)
-}
-
-// lastLine is the most recent thing written into a checkpoint — the reason the
-// task stopped, rather than the whole history of how it got there.
-func lastLine(checkpoint string) string {
-	parts := strings.Split(strings.TrimSpace(checkpoint), "\n\n")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
+	return fmt.Sprintf("⏸ *%s* needs you\n\n%s\n\nAnswer with:\n"+
+		"`bomclaw task unblock --id %s --note \"<your answer>\"`", t.Title, ask, t.ID)
 }

@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 12
+const schemaVersion = 13
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -57,7 +57,15 @@ type DB struct {
 
 // DefaultPath is where the shared database lives when config says nothing.
 // It sits outside every agent's own data dir on purpose — no agent owns it.
+//
+// $BOMCLAW_COORD_DB overrides it. A gateway exports its own coord.path under
+// that name, so the `bomclaw task …` an agent runs from its shell writes to the
+// database its gateway reads — not to the default one, which for a gateway
+// configured elsewhere is some other machine's queue.
 func DefaultPath() string {
+	if p := strings.TrimSpace(os.Getenv("BOMCLAW_COORD_DB")); p != "" {
+		return p
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".goterm-shared", "data", "coord.db")
 }
@@ -594,6 +602,18 @@ var v12TaskColumns = []struct{ name, decl string }{
 	{"fruitless_waves", "INTEGER NOT NULL DEFAULT 0"},
 }
 
+// v13TaskColumns: the one question a task stopped to ask a person.
+//
+// It used to be inferred: whoever showed a blocked task to a person printed the
+// last paragraph of its note, and hoped that was the question. A note written
+// question-first and evidence-after showed the person the evidence and not what
+// they were being asked. A column of its own is the structured form — the
+// question reaches the person exactly as the agent wrote it, and the note keeps
+// the evidence for the next run.
+var v13TaskColumns = []struct{ name, decl string }{
+	{"question", "TEXT NOT NULL DEFAULT ''"},
+}
+
 var v10AgentColumns = []struct{ name, decl string }{
 	{"telegram_bot", "TEXT NOT NULL DEFAULT ''"},
 }
@@ -698,6 +718,11 @@ func (db *DB) migrate() error {
 		}
 	}
 	for _, c := range v12TaskColumns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v13TaskColumns {
 		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
 			return err
 		}
