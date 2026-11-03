@@ -433,3 +433,35 @@ type fakeOutage struct{}
 func (fakeOutage) Error() string { return "telegram: bad gateway" }
 
 var errFakeOutage = fakeOutage{}
+
+// A cancel is a person stopping the work. Telling them so costs their
+// attention and gives them nothing — but the report must still be marked, or
+// the next tick would consider it again forever.
+func TestACancelIsNotAnnouncedToWhoeverCanceledIt(t *testing.T) {
+	db := openDB(t)
+	task, err := db.CreateTask(coord.NewTask{CreatedBy: "a2", AssignedTo: "a1", Title: "crawl listings"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ClaimTask("a1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CancelTaskTree(task.ID, "a2"); err != nil {
+		t.Fatal(err)
+	}
+
+	var got collector
+	r := New(db, Config{AgentID: "a2"})
+	r.SetNotify(got.add)
+	r.Tick()
+	if lines := got.all(); len(lines) != 0 {
+		t.Fatalf("a cancel was announced: %v", lines)
+	}
+	pending, err := db.PendingReports("a2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("the cancel is still owed a report: %v", pending)
+	}
+}

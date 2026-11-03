@@ -158,6 +158,17 @@ func (r *Reporter) Tick() {
 	for i := range pending {
 		task := pending[i]
 
+		// A cancel is a person stopping the work, from the CLI or the board
+		// (`task cancel` is the only door, and it is theirs). Telling them
+		// what they just did costs their attention and gives them nothing, so
+		// it is marked delivered without a message. The board still shows it.
+		if task.State == coord.TaskCanceled {
+			if _, err := r.db.MarkReported(task.ID, r.now()); err != nil {
+				log.Printf("reporter: %v", err)
+			}
+			continue
+		}
+
 		// Win the delivery before sending, never after. The other order would
 		// send twice from two gateways and mark once.
 		claimedAt := r.now()

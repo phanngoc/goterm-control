@@ -302,16 +302,21 @@ func runTask(args []string) {
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
 		id := fs.String("id", "", "Task id (required)")
 		on := fs.String("on", coord.BlockedOnHuman, "What it waits for: human | children")
-		note := fs.String("note", "", "What you need (required for --on human)")
+		note := fs.String("note", "", "Where the work stands and the evidence behind the ask (kept for the next run)")
+		ask := fs.String("ask", "", "The one question the person must answer (--on human); shown to them as written")
 		attempts := fs.Int("attempts", 0, "The attempts value from claim (default: read from the task)")
 		fs.Parse(rest)
+		if *on == coord.BlockedOnHuman && strings.TrimSpace(*ask) == "" && strings.TrimSpace(*note) == "" {
+			fmt.Fprintln(os.Stderr, "task block: --on human needs --ask \"<one question>\" (and usually --note)")
+			os.Exit(2)
+		}
 
 		db := openCoord(*dbPath)
 		defer db.Close()
 		if *attempts == 0 {
 			*attempts = currentAttempts(db, *id, "task block")
 		}
-		if err := db.BlockTask(*id, requireAgent(*agent), *attempts, *on, *note); err != nil {
+		if err := db.BlockTaskAsking(*id, requireAgent(*agent), *attempts, *on, *note, *ask); err != nil {
 			fmt.Fprintf(os.Stderr, "task block: %v\n", err)
 			os.Exit(1)
 		}
@@ -609,7 +614,7 @@ func taskUsage() {
   fail   --id ID [--result R] [--attempts N]                give up on it
   cancel --id ID                                            (person) stop it, and every unfinished child with it
   progress --id ID --note "..."                             record how far you got (fed to the next run)
-  block  --id ID --on human|children [--note "..."]         park it until answered / children finish
+  block  --id ID --on human|children [--ask "<question>"] [--note "..."]  park it until answered / children finish
   answer --id ID --note "..."                               (person) unblock with an answer
   resume --id ID [--more N]                                 (person) reopen a task the system gave up on
   list   [--state S] [--mine] [--limit N]                   see the queue

@@ -112,6 +112,10 @@ type Task struct {
 	// FruitlessWaves is how many consecutive fan-outs finished without a
 	// single child completing. Any wave that produces one resets it.
 	FruitlessWaves int `json:"fruitless_waves,omitempty"`
+	// v13: what a task blocked on a person is asking them — one question,
+	// shown to them as written. Empty unless blocked on human; cleared when the
+	// task is unblocked. AttentionQuestion is how callers read it.
+	Question string `json:"question,omitempty"`
 
 	// v6: the bar this task is judged against, written by whoever scoped it.
 	// Paperclip's rule — a piece of work a reviewer could call "half done" was
@@ -161,7 +165,7 @@ const taskCols = `id, context_id, created_by, assigned_to, claimed_by, state,
 	max_attempts, depth, created_at, updated_at,
 	parent_id, kind, schedule_id, checkpoint, session_ref, continuations,
 	max_continuations, blocked_on, fail_reason, reported_at, acceptance, channel_id,
-	fruitless_waves`
+	fruitless_waves, question`
 
 // TaskEvent is an append-only record of one state transition.
 type TaskEvent struct {
@@ -366,7 +370,7 @@ func (db *DB) CancelTask(taskID, byAgent string) error {
 // FinishRun sees the terminal state and records the run against it.
 func (db *DB) CancelTaskTree(taskID, byAgent string) ([]string, error) {
 	now := ts(time.Now())
-	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', updated_at = ?
+	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', question = '', updated_at = ?
 		WHERE id = ? AND state IN (?, ?, ?, ?)`,
 		TaskCanceled, now, taskID, TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked)
 	if err != nil {
@@ -400,7 +404,7 @@ func (db *DB) CancelTaskTree(taskID, byAgent string) ([]string, error) {
 }
 
 func (db *DB) cancelOpenChildren(parentID, now string) ([]string, error) {
-	rows, err := db.conn.Query(`UPDATE tasks SET state = ?, blocked_on = '', updated_at = ?
+	rows, err := db.conn.Query(`UPDATE tasks SET state = ?, blocked_on = '', question = '', updated_at = ?
 		WHERE parent_id = ? AND state IN (?, ?, ?, ?) RETURNING id`,
 		TaskCanceled, now, parentID, TaskSubmitted, TaskWorking, TaskInputRequired, TaskBlocked)
 	if err != nil {
@@ -549,16 +553,28 @@ func (db *DB) SetSessionRef(taskID, agentID string, attempts int, ref SessionRef
 // then ends and FinishRun records it as blocked without touching the task
 // again. Fenced like every other write from a holder.
 func (db *DB) BlockTask(taskID, agentID string, attempts int, on, note string) error {
+	return db.BlockTaskAsking(taskID, agentID, attempts, on, note, "")
+}
+
+// BlockTaskAsking is BlockTask with the question a person is being asked kept
+// apart from the note. The note is evidence for the next run; the question is
+// the one line the person is shown. Only a block on a human asks anything, so
+// a question on any other block is dropped rather than shown to nobody.
+func (db *DB) BlockTaskAsking(taskID, agentID string, attempts int, on, note, question string) error {
 	switch on {
 	case BlockedOnChildren, BlockedOnHuman:
 	default:
 		return fmt.Errorf("coord: blocked_on must be %q or %q", BlockedOnChildren, BlockedOnHuman)
 	}
+	question = strings.TrimSpace(question)
+	if on != BlockedOnHuman {
+		question = ""
+	}
 	now := time.Now()
 	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = ?, lease_until = ?,
-			checkpoint = CASE WHEN ? != '' THEN ? ELSE checkpoint END, updated_at = ?
+			checkpoint = CASE WHEN ? != '' THEN ? ELSE checkpoint END, question = ?, updated_at = ?
 		WHERE id = ? AND claimed_by = ? AND attempts = ? AND state = ?`,
-		TaskBlocked, on, ts(now), note, note, ts(now), taskID, agentID, attempts, TaskWorking)
+		TaskBlocked, on, ts(now), note, note, question, ts(now), taskID, agentID, attempts, TaskWorking)
 	if err != nil {
 		return fmt.Errorf("block task: %w", err)
 	}
@@ -589,7 +605,7 @@ func (db *DB) UnblockTask(taskID, byAgent, note string) error {
 
 	now := time.Now()
 	res, err := db.conn.Exec(`UPDATE tasks SET state = ?, blocked_on = '', checkpoint = ?,
-			lease_until = ?, updated_at = ?
+			question = '', lease_until = ?, updated_at = ?
 		WHERE id = ? AND state = ?`,
 		TaskSubmitted, checkpoint, ts(now), ts(now), taskID, TaskBlocked)
 	if err != nil {
@@ -616,7 +632,28 @@ func (db *DB) answeredCheckpoint(taskID, byAgent, note string) (string, error) {
 	if merged != "" {
 		merged += "\n\n"
 	}
+	// The question goes with its answer. It lives in its own column, which the
+	// unblock clears, so this is the only place the next run can still read
+	// what it was that the person was answering.
+	if q := strings.TrimSpace(t.Question); q != "" {
+		return merged + "Question: " + q + "\nAnswer from " + byAgent + ": " + note, nil
+	}
 	return merged + "Answer from " + byAgent + ": " + note, nil
+}
+
+// AttentionQuestion is what a task blocked on a person is asking them: the
+// question it wrote with `task block --ask`, or — for a block that predates
+// that flag or did not use it — the last paragraph of its note, which is where
+// a note written evidence-first puts the ask.
+func AttentionQuestion(t *Task) string {
+	if t == nil {
+		return ""
+	}
+	if q := strings.TrimSpace(t.Question); q != "" {
+		return q
+	}
+	parts := strings.Split(strings.TrimSpace(t.Checkpoint), "\n\n")
+	return strings.TrimSpace(parts[len(parts)-1])
 }
 
 // SetTaskChannel files a task under a project, or clears it with "".
@@ -836,7 +873,7 @@ func scanTask(s scanner) (*Task, error) {
 		&lease, &t.Attempts, &t.MaxAttempts, &t.Depth, &created, &updated,
 		&t.ParentID, &t.Kind, &t.ScheduleID, &t.Checkpoint, &t.SessionRef, &t.Continuations,
 		&t.MaxContinuations, &t.BlockedOn, &t.FailReason, &t.ReportedAt, &t.Acceptance,
-		&t.ChannelID, &t.FruitlessWaves); err != nil {
+		&t.ChannelID, &t.FruitlessWaves, &t.Question); err != nil {
 		return nil, err
 	}
 	t.LeaseUntil = parseTS(lease)

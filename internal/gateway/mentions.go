@@ -376,6 +376,9 @@ func (w *MentionWatcher) prompt(m coord.ChannelMessage, mem *coord.ThreadSession
 	b.WriteString("Reply in plain prose. What you write is posted into that thread as your " +
 		"message — it is not spoken to a user in a chat window, and nobody sees a preamble " +
 		"about what you are about to do.\n")
+	b.WriteString("Each line in this room costs whoever reads it. Lead with the answer or the result; " +
+		"skip restating the question, progress narration and offers of further help. Ask a person " +
+		"something only when you cannot reasonably choose yourself, and then ask one concrete question.\n")
 	b.WriteString("Name an agent with @ only when you actually need it to act: @ is a doorbell " +
 		"and wakes that agent.\n")
 	fmt.Fprintf(&b, "Anything you produce that outlives this message — a report, a patch, a "+
@@ -471,17 +474,7 @@ func (w *MentionWatcher) blockedTask(m coord.ChannelMessage) string {
 		"The note becomes the next run's starting point, so carry what they actually said rather "+
 		"than your reading of it. If it does not answer the question, say what is still needed "+
 		"and leave the task alone.\n",
-		task.Title, task.ID, strings.TrimSpace(lastParagraph(task.Checkpoint)), task.ID)
-}
-
-// lastParagraph is the most recent thing written into a checkpoint — why it
-// stopped, not the whole history of getting there.
-func lastParagraph(checkpoint string) string {
-	parts := strings.Split(strings.TrimSpace(checkpoint), "\n\n")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
+		task.Title, task.ID, coord.AttentionQuestion(task), task.ID)
 }
 
 func (w *MentionWatcher) threadArtifacts(m coord.ChannelMessage) string {
