@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -14,6 +15,11 @@ const suitePath = "../../bench/attention-suite.json"
 // and — for a case where the right move is to change nothing — accepts the
 // untouched state and rejects one that was tampered with.
 func TestTheShippedSuiteChecksAreSound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Cases are POSIX shell plus python3, run with `sh -c`: the bench
+		// targets the macOS/Linux agents, and Git Bash on CI is not that.
+		t.Skip("bench cases are POSIX shell scripts")
+	}
 	s, err := LoadSuite(suitePath)
 	if err != nil {
 		t.Fatal(err)
