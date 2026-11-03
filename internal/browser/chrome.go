@@ -77,6 +77,11 @@ func Launch(ctx context.Context) (*Chrome, error) {
 		"--hide-crash-restore-bubble",
 		"--password-store=basic",
 		"--disable-dev-shm-usage",
+		// A site asking for the camera, microphone or location gets "no"
+		// without a bubble. Asking would make Chrome ask macOS, under the
+		// gateway's identity, and that is a dialog the person at the machine
+		// has to answer for a page they never opened (2026-11-03, 14:37).
+		"--deny-permission-prompts",
 	}
 
 	c.cmd = exec.CommandContext(ctx, exe, args...)

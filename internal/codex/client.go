@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,6 +24,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -126,7 +126,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	args := buildArgs(modelID, threadID, isNewThread)
 
-	cmd := exec.CommandContext(ctx, codexBin, args...)
+	cmd := fsguard.CommandContext(ctx, codexBin, args...)
 	execution.Detach(cmd)
 	// codex has always inherited the ambient environment; the account layers
 	// CODEX_HOME on top so each login keeps its own threads.

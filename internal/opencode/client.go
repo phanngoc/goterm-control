@@ -16,13 +16,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -110,7 +110,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		prompt = c.firstTurnPrompt(userText, memoryContext, chat.WorkspaceFor(sess, c.workspace))
 	}
 
-	cmd := exec.CommandContext(ctx, opencodeBin, buildArgs(modelID, sessionID, isNew)...)
+	cmd := fsguard.CommandContext(ctx, opencodeBin, buildArgs(modelID, sessionID, isNew)...)
 	execution.Detach(cmd)
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
 	// See claude/client.go: per-run variables, appended last so a session's

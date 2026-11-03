@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -180,7 +180,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)
 
-	cmd := exec.CommandContext(ctx, claudeBin, args...)
+	cmd := fsguard.CommandContext(ctx, claudeBin, args...)
 	// Its own process group, so cancelling this turn — or shutting the
 	// gateway down — reaches whatever the CLI went on to spawn as well.
 	execution.Detach(cmd)
