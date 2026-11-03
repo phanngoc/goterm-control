@@ -17,7 +17,7 @@
 
 importScripts("page.js");
 
-const CLIENT = "bomclaw-bridge/0.2.0";
+const CLIENT = "bomclaw-bridge/0.2.1";
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30000;
 const LOG_MAX = 40;
@@ -31,11 +31,19 @@ let activity = [];
 
 // --- lifecycle ---
 
+// A service worker start fires the top-level call AND onStartup/onInstalled;
+// restoring twice would open two sockets per agent. Restore once per worker.
+let restored = null;
 chrome.runtime.onStartup.addListener(() => restoreAgents());
 chrome.runtime.onInstalled.addListener(() => restoreAgents());
 restoreAgents();
 
-async function restoreAgents() {
+function restoreAgents() {
+  if (!restored) restored = doRestoreAgents();
+  return restored;
+}
+
+async function doRestoreAgents() {
   const cfg = await storageGet(["agents", "url", "token", "autoConnect"]);
   let list = Array.isArray(cfg.agents) ? cfg.agents : [];
 
@@ -111,20 +119,45 @@ function connect(url) {
     broadcastStatus();
     return;
   }
+  // Never hold two sockets to one agent. The gateway keeps one browser per
+  // agent and closes the older socket with 4002; if that older socket's
+  // onclose then reconnects, the new socket replaces the current one, whose
+  // onclose reconnects too — a loop that flaps once a second forever. Close
+  // the previous socket first and detach it so its close is not mistaken for
+  // the current connection dropping.
+  if (a.ws) {
+    const old = a.ws;
+    a.ws = null;
+    old.onopen = old.onmessage = old.onclose = old.onerror = null;
+    try { old.close(1000, "reconnecting"); } catch (e) {}
+  }
+  let ws;
   try {
-    a.ws = new WebSocket(a.url);
+    ws = new WebSocket(a.url);
   } catch (e) {
     scheduleReconnect(a, "bad endpoint: " + e.message);
     return;
   }
-  a.ws.onopen = () => {
+  a.ws = ws;
+  ws.onopen = () => {
     a.lastError = "";
     send(a, { type: "hello", token: a.token, client: CLIENT, browser: navigator.userAgent });
   };
-  a.ws.onmessage = (ev) => onFrame(a, ev.data);
-  a.ws.onclose = (ev) => {
+  ws.onmessage = (ev) => { if (a.ws === ws) onFrame(a, ev.data); };
+  ws.onclose = (ev) => {
+    if (a.ws !== ws) return; // a superseded socket; the current one owns the state
+    a.ws = null;
     a.connected = false;
     broadcastStatus();
+    if (ev.code === 4002) {
+      // Another browser (or profile) paired with this agent and took the
+      // slot. Reconnecting would just take it back and start a tug of war.
+      a.lastError = "Another browser took over this agent. Press Connect to take it back.";
+      a.wantConnected = false;
+      persistAgents();
+      broadcastStatus();
+      return;
+    }
     if (ev.code === 4001) {
       a.lastError = "The gateway rejected the pairing token. Copy a fresh one from `bomclaw browser token`.";
       a.wantConnected = false; // a wrong token will not fix itself
@@ -134,7 +167,7 @@ function connect(url) {
     }
     if (a.wantConnected) scheduleReconnect(a, ev.reason || ("closed (" + ev.code + ")"));
   };
-  a.ws.onerror = () => { /* onclose carries the useful signal */ };
+  ws.onerror = () => { /* onclose carries the useful signal */ };
   persistAgents();
 }
 
