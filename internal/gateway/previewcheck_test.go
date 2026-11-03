@@ -1,8 +1,9 @@
 package gateway
 
 import (
+	"net"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -34,7 +35,9 @@ func TestDetectKnowsTheStacksItIsSureOf(t *testing.T) {
 		{"vite with pnpm", map[string]string{
 			"package.json":   `{"scripts":{"dev":"vite"},"devDependencies":{"vite":"^5"}}`,
 			"pnpm-lock.yaml": "",
-		}, func(s *PreviewSpec) bool { return s.Setup == "pnpm install" && strings.HasPrefix(s.Command, "pnpm run dev") }},
+		}, func(s *PreviewSpec) bool {
+			return s.Setup == "pnpm install" && strings.HasPrefix(s.Command, "pnpm run dev")
+		}},
 		{"wrangler strips", map[string]string{
 			"package.json": `{"devDependencies":{"wrangler":"^3"}}`,
 		}, func(s *PreviewSpec) bool { return s.Base == "strip" && strings.Contains(s.Command, "wrangler dev") }},
@@ -104,19 +107,39 @@ func TestBadRefsRespectsTheBase(t *testing.T) {
 	}
 }
 
+// TestHelperServe is not a test: it is the dev server the check below starts,
+// run from this test binary so it needs nothing installed (python3 on the
+// macOS runners never listened within 20s). It serves the folder it is run in,
+// at /, on $HOST:$PORT, the way a server that ignores the base would.
+func TestHelperServe(t *testing.T) {
+	if os.Getenv("BOMCLAW_TEST_SERVE") == "" {
+		t.Skip("helper process for TestServerCheckRunsWhatTheButtonRuns")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(os.Getenv("HOST"), os.Getenv("PORT")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = http.Serve(ln, http.FileServer(http.Dir(".")))
+}
+
 // The check is only worth trusting if it runs a real server the way the
-// dashboard does: python3's http.server answers at /, so "strip" passes and
-// "keep" — the server never heard of the base — fails with a 404.
+// dashboard does: the helper answers at /, so "strip" passes and "keep" — the
+// server never heard of the base — fails with a 404.
 func TestServerCheckRunsWhatTheButtonRuns(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("login-shell preview commands are POSIX")
 	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("no python3")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "site/index.html"), `<script src="app.js"></script>`)
-	spec := &PreviewSpec{Command: "python3 -m http.server $PORT --bind $HOST", Cwd: "site", Base: "strip"}
+	spec := &PreviewSpec{
+		Command: "exec '" + self + "' -test.run='^TestHelperServe$'",
+		Cwd:     "site", Base: "strip",
+		Env: map[string]string{"BOMCLAW_TEST_SERVE": "1"},
+	}
 	if r := CheckPreview(t.Context(), dir, "ch_x", spec, 20*time.Second); !r.OK {
 		t.Fatalf("strip failed: %v\n%s", r.Problems, r.Logs)
 	}
