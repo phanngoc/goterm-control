@@ -2,12 +2,24 @@ package fsguard
 
 import (
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 )
 
+// posixOnly skips path-resolution tests on Windows. The guard exists only on
+// macOS — Configure turns it off everywhere else — and these cases are written
+// in the POSIX paths it actually resolves there.
+func posixOnly(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the guard is macOS-only; these cases use POSIX paths")
+	}
+}
+
 func TestDefaultsResolveUnderHome(t *testing.T) {
+	posixOnly(t)
 	got := Resolve(Options{Home: "/Users/x"})
 	for _, want := range []string{"/Users/x/Music", "/Users/x/Downloads", "/Users/x/Library/Mobile Documents"} {
 		if !slices.Contains(got, want) {
@@ -21,6 +33,7 @@ func TestDefaultsResolveUnderHome(t *testing.T) {
 }
 
 func TestAllowTakesAPathAndEverythingUnderItOff(t *testing.T) {
+	posixOnly(t)
 	got := Resolve(Options{Home: "/Users/x", Allow: []string{"~/Downloads", "~/Library"}})
 	for _, p := range got {
 		if p == "/Users/x/Downloads" || strings.HasPrefix(p, "/Users/x/Library/") {
@@ -33,6 +46,7 @@ func TestAllowTakesAPathAndEverythingUnderItOff(t *testing.T) {
 }
 
 func TestDenyAddsAndNeverTakesHomeOrRoot(t *testing.T) {
+	posixOnly(t)
 	got := Resolve(Options{Home: "/Users/x", Deny: []string{"~/secret", "/Volumes/USB", "~", "/", "  "}})
 	if !slices.Contains(got, "/Users/x/secret") || !slices.Contains(got, "/Volumes/USB") {
 		t.Errorf("extra deny paths missing: %v", got)
