@@ -15,6 +15,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
@@ -176,7 +177,7 @@ func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *c
 	workspace := cfg.Claude.Workspace
 	c, err := chat.Resolve(api, chat.Deps{
 		SystemPrompt: cfg.Claude.SystemPrompt,
-		SystemExtra:  func(turn string) string { return SkillIndex(workspace, turn) },
+		SystemExtra:  func(turn string) string { return SkillIndex(workspace, turn) + fsguard.PromptNote() },
 		Workspace:    workspace,
 		Executor:     executor,
 		Pool:         pool,

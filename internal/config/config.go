@@ -299,8 +299,24 @@ type IndicatorConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedUserIDs []int64 `yaml:"allowed_user_ids"`
+	AllowedUserIDs []int64       `yaml:"allowed_user_ids"`
+	FSGuard        FSGuardConfig `yaml:"fs_guard"`
 }
+
+// FSGuardConfig fences the agents' CLIs off the folders macOS guards with TCC,
+// so a stray `find ~` never stops on a permission dialog. See internal/fsguard.
+type FSGuardConfig struct {
+	// Enabled defaults to on: unset means on, so every existing config gets
+	// the guard without an edit. macOS only; elsewhere it does nothing.
+	Enabled *bool `yaml:"enabled"`
+	// Allow takes paths off the default list, e.g. ["~/Downloads"].
+	Allow []string `yaml:"allow"`
+	// Deny adds paths to it, e.g. ["/Volumes"].
+	Deny []string `yaml:"deny"`
+}
+
+// On reports whether the guard should run; unset counts as on.
+func (g FSGuardConfig) On() bool { return g.Enabled == nil || *g.Enabled }
 
 type ToolsConfig struct {
 	ShellTimeout   int      `yaml:"shell_timeout"`

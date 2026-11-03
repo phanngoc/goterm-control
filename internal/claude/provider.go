@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ngocp/goterm-control/internal/chat"
+	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/models"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -67,7 +67,7 @@ func (p *CLIProvider) Stream(ctx context.Context, params agent.StreamParams) (<-
 	// TCC-protected folders (same rule as the bot path in client.go).
 	args = append(args, "--append-system-prompt", params.SystemPrompt+fsGuardPrompt)
 
-	cmd := exec.CommandContext(ctx, claudeBin, args...)
+	cmd := fsguard.CommandContext(ctx, claudeBin, args...)
 	// Run in the workspace so its .claude/settings.json deny rules apply and
 	// searches root there instead of the launchd cwd ("/").
 	_ = os.MkdirAll(p.workspace, 0755)

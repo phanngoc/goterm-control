@@ -30,6 +30,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/daemon"
 	"github.com/ngocp/goterm-control/internal/execution"
+	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/reporter"
@@ -237,6 +238,7 @@ func runGateway(args []string) {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	configureFSGuard(cfg, true)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1063,6 +1065,7 @@ func runChat(args []string) {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	configureFSGuard(cfg, false)
 
 	resolver := models.NewResolver(cfg.Models.Default, cfg.Models.Custom)
 	chatProvider := buildProvider(cfg, resolver)
@@ -1736,4 +1739,22 @@ func stuckMessage(t *coord.Task) string {
 	}
 	return fmt.Sprintf("⏸ *%s* needs you\n\n%s\n\nAnswer with:\n"+
 		"`bomclaw task unblock --id %s --note \"<your answer>\"`", t.Title, ask, t.ID)
+}
+
+// configureFSGuard fences every CLI this process starts off the folders macOS
+// guards with TCC (internal/fsguard). It has to run before the first turn:
+// the guard applies to commands started after it, not to ones already running.
+func configureFSGuard(cfg *config.Config, announce bool) {
+	g := cfg.Security.FSGuard
+	home, _ := os.UserHomeDir()
+	fsguard.Configure(fsguard.Options{Enabled: g.On(), Home: home, Deny: g.Deny, Allow: g.Allow})
+	if !announce {
+		return
+	}
+	if paths := fsguard.Paths(); len(paths) > 0 {
+		log.Printf("fs guard: agents' CLIs run sandboxed away from %d folders (%s …); security.fs_guard to change",
+			len(paths), strings.Join(paths[:min(3, len(paths))], ", "))
+	} else {
+		log.Printf("fs guard: off")
+	}
 }
