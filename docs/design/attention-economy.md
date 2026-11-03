@@ -37,3 +37,29 @@ The scorecard lists: **behaved** (right work and right amount of asking), checks
 The suite is tested too. `TestTheShippedSuiteChecksAreSound` runs each case's setup and its reference solution, and fails if a check accepts work that was never done, rejects the right answer, or misses a tampered file. It has already caught one broken check: a stale `__pycache__` made `fix-failing-test` grade old bytecode.
 
 To compare agents, run the same suite with `--to bomclaw2` / `--to bomclaw3`. To compare a prompt change, run before and after with `--baseline`. Model output varies, so one run per side is a signal, not a verdict. Run each side two or three times before concluding.
+
+## First measurement (2026-11-03)
+
+Setup: two isolated gateways, one built from `main` and one from this branch. Each had its own coord DB, session store and workspace, Telegram was off, and both used the same model (`claude-opus-5`) and the same suite. `main` ran twice. The branch ran once with the first result prompt (v1) and twice after the fix that the v1 run prompted (v2).
+
+| | main (×2) | branch v1 (×1) | branch v2 (×2) |
+|---|---|---|---|
+| Behaved | 8/10, 8/10 | 8/10 | **10/10, 10/10** |
+| Checks passed | 10/10 | 10/10 | 10/10 |
+| Unnecessary interruptions / missed decisions | 0 / 0 | 0 / 0 | 0 / 0 |
+| Words a person reads (whole suite) | 803, 756 | 670 | **360, 359** (−54%) |
+| Words in a decision question (mean) | 62 | 21 | **23** (−63%) |
+| Words in a no-op result (mean) | 152 | 116 | **19** (−88%) |
+| Runs per case | 1.00 | 1.00 | 1.00 |
+
+What `main` showed a person as "the question", which was the last paragraph of a note:
+
+> PREPARED AND FILED: artifact a_3b798f54… = structured draft announcement with every unsourced fact marked [[...]] …
+
+What the branch shows (`--ask`):
+
+> What is our customer retention period in years? (At 2 yrs I delete An + Chi; at 1 yr the whole file goes; at 6+ yrs only An.)
+
+The v1 run found a problem in this branch's own prompt: "say what you checked and what you did not" made no-op results as long as `main`'s. v2 puts the outcome first, adds only what the reader needs, and keeps a no-op to one sentence. The bench caught a regression in the change it was built to measure, which is the job it is for.
+
+Limits: two samples per side, one model and one suite of ten cases. Wall time was within noise (median 76–95 s on both sides), so no speed claim is made.
