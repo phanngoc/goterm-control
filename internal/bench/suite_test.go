@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-const suitePath = "../../bench/attention-suite.json"
+// Every shipped suite is held to the same standard.
+var suitePaths = []string{"../../bench/attention-suite.json", "../../bench/hard-suite.json"}
 
 // The shipped suite must load, and every check must mean something: it rejects
 // the starting state of work still to be done, accepts the reference answer,
@@ -20,47 +21,49 @@ func TestTheShippedSuiteChecksAreSound(t *testing.T) {
 		// targets the macOS/Linux agents, and Git Bash on CI is not that.
 		t.Skip("bench cases are POSIX shell scripts")
 	}
-	s, err := LoadSuite(suitePath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx := context.Background()
-	for _, c := range s.Cases {
-		c := c
-		t.Run(c.ID, func(t *testing.T) {
-			dir := t.TempDir()
-			if c.Setup != "" {
-				if out, err := shell(ctx, dir, expand(c.Setup, dir)); err != nil {
-					t.Fatalf("setup: %v: %s", err, out)
+	for _, path := range suitePaths {
+		s, err := LoadSuite(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range s.Cases {
+			c := c
+			t.Run(s.Name+"/"+c.ID, func(t *testing.T) {
+				dir := t.TempDir()
+				if c.Setup != "" {
+					if out, err := shell(ctx, dir, expand(c.Setup, dir)); err != nil {
+						t.Fatalf("setup: %v: %s", err, out)
+					}
 				}
-			}
-			switch c.Kind {
-			case KindAutonomous:
-				if c.Reference == "" {
-					t.Fatal("an autonomous case needs a reference answer")
+				switch c.Kind {
+				case KindAutonomous:
+					if c.Reference == "" {
+						t.Fatal("an autonomous case needs a reference answer")
+					}
+					if _, err := shell(ctx, dir, expand(c.Check, dir)); err == nil {
+						t.Fatal("check passes before any work was done")
+					}
+					if out, err := shell(ctx, dir, expand(c.Reference, dir)); err != nil {
+						t.Fatalf("reference: %v: %s", err, out)
+					}
+					if out, err := shell(ctx, dir, expand(c.Check, dir)); err != nil {
+						t.Fatalf("check rejects the reference answer: %v: %s", err, out)
+					}
+				case KindNoop, KindDecision:
+					if c.Check == "" {
+						return
+					}
+					if out, err := shell(ctx, dir, expand(c.Check, dir)); err != nil {
+						t.Fatalf("check rejects the untouched state: %v: %s", err, out)
+					}
+					tamper(t, dir)
+					if _, err := shell(ctx, dir, expand(c.Check, dir)); err == nil {
+						t.Fatal("check passes after the files were changed")
+					}
 				}
-				if _, err := shell(ctx, dir, expand(c.Check, dir)); err == nil {
-					t.Fatal("check passes before any work was done")
-				}
-				if out, err := shell(ctx, dir, expand(c.Reference, dir)); err != nil {
-					t.Fatalf("reference: %v: %s", err, out)
-				}
-				if out, err := shell(ctx, dir, expand(c.Check, dir)); err != nil {
-					t.Fatalf("check rejects the reference answer: %v: %s", err, out)
-				}
-			case KindNoop, KindDecision:
-				if c.Check == "" {
-					return
-				}
-				if out, err := shell(ctx, dir, expand(c.Check, dir)); err != nil {
-					t.Fatalf("check rejects the untouched state: %v: %s", err, out)
-				}
-				tamper(t, dir)
-				if _, err := shell(ctx, dir, expand(c.Check, dir)); err == nil {
-					t.Fatal("check passes after the files were changed")
-				}
-			}
-		})
+			})
+		}
 	}
 }
 
