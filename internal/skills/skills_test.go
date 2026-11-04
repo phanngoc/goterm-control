@@ -246,7 +246,7 @@ func TestEveryBundledSkillLoadsWithADescription(t *testing.T) {
 	for _, s := range list {
 		got[s.Name] = s.Description
 	}
-	for _, want := range []string{"artifacts", "browser", "channels", "preview", "projects"} {
+	for _, want := range []string{"artifacts", "browser", "channels", "plugins", "preview", "projects"} {
 		if strings.TrimSpace(got[want]) == "" {
 			t.Errorf("bundled skill %q missing or has no description (loaded: %v)", want, got)
 		}

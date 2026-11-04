@@ -9,6 +9,7 @@ import (
 
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/models"
+	"github.com/ngocp/goterm-control/internal/plugins"
 	"github.com/ngocp/goterm-control/internal/tools"
 )
 
@@ -43,9 +44,14 @@ type Deps struct {
 	// project may carry skills of its own. Passing the agent's workspace here
 	// would mean a project's skills were never visible to work done inside it.
 	SystemExtra func(workspace string) string
-	Workspace   string
-	Executor    *tools.Executor   // claude runs tools in-process; others may ignore it
-	Pool        *credentials.Pool // nil means the ambient credentials
+	// Plugins is the toolkit for a turn run in that directory: what goes on
+	// the CLI's PATH and environment and which MCP servers it starts. Like
+	// SystemExtra it is evaluated per turn, so enabling, configuring or
+	// installing a plugin takes effect on the next one. Nil means none.
+	Plugins   func(workspace string) *plugins.Kit
+	Workspace string
+	Executor  *tools.Executor   // claude runs tools in-process; others may ignore it
+	Pool      *credentials.Pool // nil means the ambient credentials
 }
 
 var (

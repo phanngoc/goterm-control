@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ngocp/goterm-control/internal/plugins"
+
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -40,8 +42,10 @@ type Client struct {
 	systemPrompt string
 	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
 	systemExtra func(workspace string) string
-	workspace   string // working directory for the CLI subprocess
-	pool        *credentials.Pool
+	// plugins is re-read every turn too; see chat.Deps.Plugins.
+	plugins   func(workspace string) *plugins.Kit
+	workspace string // working directory for the CLI subprocess
+	pool      *credentials.Pool
 }
 
 // New creates a Claude client backed by the claude CLI subprocess.
@@ -197,7 +201,8 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// history is.
 	defer func() { c.recordOutcome(acct, err) }()
 
-	args := buildArgs(modelID, sessionID, isNewSession, systemPrompt)
+	kit := c.kit(chat.WorkspaceFor(sess, c.workspace))
+	args := withMCPConfig(buildArgs(modelID, sessionID, isNewSession, systemPrompt), kit.ClaudeMCPConfig())
 
 	cmd := fsguard.CommandContext(ctx, claudeBin, args...)
 	// Its own process group, so cancelling this turn — or shutting the
@@ -231,6 +236,8 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	if os.Getenv("CLAUDE_CODE_ENABLE_TODO_TOOLS") == "" {
 		cmd.Env = append(cmd.Env, "CLAUDE_CODE_ENABLE_TODO_TOOLS=1")
 	}
+	// Plugins before the session's own variables, so a run's value still wins.
+	cmd.Env = kit.ApplyEnv(cmd.Env)
 	cmd.Env = append(cmd.Env, sess.GetEnv()...)
 
 	stdout, err := cmd.StdoutPipe()
@@ -539,6 +546,7 @@ func init() {
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
 		c.SetSystemExtra(d.SystemExtra)
+		c.plugins = d.Plugins
 		return c
 	})
 }
@@ -554,4 +562,25 @@ func (c *Client) prompt(workspace string) string {
 		return c.systemPrompt
 	}
 	return c.systemPrompt + c.systemExtra(workspace)
+}
+
+// kit is this turn's plugin toolkit, or nil when the agent has none wired.
+// Every Kit method accepts nil, so callers need no check.
+func (c *Client) kit(workspace string) *plugins.Kit {
+	if c.plugins == nil {
+		return nil
+	}
+	return c.plugins(workspace)
+}
+
+// withMCPConfig swaps the empty --mcp-config for the plugins' servers. The
+// --strict-mcp-config beside it stays: only plugin servers ever reach the
+// agent, never the operator's own.
+func withMCPConfig(args []string, config string) []string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--mcp-config" {
+			args[i+1] = config
+		}
+	}
+	return args
 }

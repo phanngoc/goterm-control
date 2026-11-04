@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ngocp/goterm-control/internal/plugins"
+
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -41,8 +43,10 @@ type Client struct {
 	systemPrompt string
 	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
 	systemExtra func(workspace string) string
-	pool        *credentials.Pool
-	workspace   string // working directory for the CLI subprocess
+	// plugins is re-read every turn too; see chat.Deps.Plugins.
+	plugins   func(workspace string) *plugins.Kit
+	pool      *credentials.Pool
+	workspace string // working directory for the CLI subprocess
 }
 
 // New creates a Codex client backed by the codex CLI subprocess.
@@ -124,13 +128,15 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		prompt = c.firstTurnPrompt(userText, memoryContext, chat.WorkspaceFor(sess, c.workspace))
 	}
 
-	args := buildArgs(modelID, threadID, isNewThread)
+	kit := c.kit(chat.WorkspaceFor(sess, c.workspace))
+	args := withConfig(buildArgs(modelID, threadID, isNewThread), kit.CodexArgs())
 
 	cmd := fsguard.CommandContext(ctx, codexBin, args...)
 	execution.Detach(cmd)
 	// codex has always inherited the ambient environment; the account layers
 	// CODEX_HOME on top so each login keeps its own threads.
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
+	cmd.Env = kit.ApplyEnv(cmd.Env)
 	// See claude/client.go: per-run variables, appended last so a session's
 	// own value wins over the gateway's.
 	cmd.Env = append(cmd.Env, sess.GetEnv()...)
@@ -460,6 +466,7 @@ func init() {
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
 		c.SetSystemExtra(d.SystemExtra)
+		c.plugins = d.Plugins
 		return c
 	})
 }
@@ -475,4 +482,24 @@ func (c *Client) prompt(workspace string) string {
 		return c.systemPrompt
 	}
 	return c.systemPrompt + c.systemExtra(workspace)
+}
+
+// kit is this turn's plugin toolkit, or nil when the agent has none wired.
+// Every Kit method accepts nil, so callers need no check.
+func (c *Client) kit(workspace string) *plugins.Kit {
+	if c.plugins == nil {
+		return nil
+	}
+	return c.plugins(workspace)
+}
+
+// withConfig puts `-c` overrides before the trailing "-" that tells codex to
+// read the prompt from stdin; anything after it would be taken as prompt.
+func withConfig(args, overrides []string) []string {
+	if len(overrides) == 0 {
+		return args
+	}
+	last := len(args) - 1
+	out := append(append(append([]string{}, args[:last]...), overrides...), args[last:]...)
+	return out
 }

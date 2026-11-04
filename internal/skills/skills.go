@@ -270,3 +270,19 @@ func cut(s string, max int) string {
 	}
 	return strings.TrimSpace(string(r[:max])) + "…"
 }
+
+// LoadDir reads the skills in one folder laid out the way a workspace's
+// skills/ is — one directory per skill, categories one level deep — plus a
+// SKILL.md sitting directly in it. Exported for plugins, which carry skills of
+// their own and must read them exactly the way a workspace's are read, or a
+// skill moved into a plugin would quietly change shape.
+func LoadDir(root string) ([]Skill, error) {
+	list, err := loadRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	if s, ok := read(root, filepath.Base(root), ""); ok {
+		list = Merge(list, []Skill{s})
+	}
+	return list, nil
+}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ngocp/goterm-control/internal/plugins"
+
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ngocp/goterm-control/internal/agent"
 	anthropicClient "github.com/ngocp/goterm-control/internal/anthropic"
@@ -20,7 +22,6 @@ import (
 	"github.com/ngocp/goterm-control/internal/models"
 	"github.com/ngocp/goterm-control/internal/msgqueue"
 	"github.com/ngocp/goterm-control/internal/session"
-	"github.com/ngocp/goterm-control/internal/skills"
 	"github.com/ngocp/goterm-control/internal/storage"
 	"github.com/ngocp/goterm-control/internal/titler"
 	"github.com/ngocp/goterm-control/internal/tools"
@@ -178,6 +179,7 @@ func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *c
 	c, err := chat.Resolve(api, chat.Deps{
 		SystemPrompt: cfg.Claude.SystemPrompt,
 		SystemExtra:  func(turn string) string { return SkillIndex(workspace, turn) + fsguard.PromptNote() },
+		Plugins:      func(turn string) *plugins.Kit { return plugins.Load(workspace, turn) },
 		Workspace:    workspace,
 		Executor:     executor,
 		Pool:         pool,
@@ -420,17 +422,8 @@ func (b *Bot) Shutdown() {
 // agent's turn down with it — it can still do everything it could before skills
 // existed.
 func SkillIndex(agentWorkspace, turnWorkspace string) string {
-	var all []skills.Skill
-	for _, root := range []string{agentWorkspace, turnWorkspace} {
-		if root == "" {
-			continue
-		}
-		list, err := skills.Load(root)
-		if err != nil {
-			log.Printf("skills: %v", err)
-			continue
-		}
-		all = skills.Merge(all, list)
-	}
-	return skills.Index(all)
+	// Every skill is a plugin now (a bare skill folder is one with a single
+	// contribution), so this is the plugin kit's prompt: the same skill index
+	// as before, plus what code-carrying plugins bring and which are waiting.
+	return plugins.Load(agentWorkspace, turnWorkspace).Prompt()
 }
