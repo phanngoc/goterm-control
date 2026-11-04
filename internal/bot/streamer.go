@@ -149,6 +149,22 @@ func (s *Streamer) NoteTool(name string) {
 	s.dirty = true
 }
 
+// NoteThinking adds the model's thinking (summarized by the CLI) to the
+// reasoning lane, the 💭 message above the answer. An empty chunk ends a
+// thinking block.
+func (s *Streamer) NoteThinking(chunk string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if chunk == "" {
+		if s.reasonBuf.Len() > 0 && !strings.HasSuffix(s.reasonBuf.String(), "\n\n") {
+			s.reasonBuf.WriteString("\n\n")
+		}
+		return
+	}
+	s.reasonBuf.WriteString(chunk)
+	s.reasonDirty = true
+}
+
 // Flush forces an immediate edit.
 func (s *Streamer) Flush() {
 	s.flush()
@@ -496,11 +512,17 @@ func (s *Streamer) CurrentText() string {
 // On first call, it takes over the placeholder message (⏳ Thinking...).
 // The answer lane then creates a new message when it has content.
 func (s *Streamer) flushReasonLane(text string) {
+	// The newest thinking is the one worth reading: past the message limit,
+	// keep the tail. Cut as text, before it becomes HTML, so no tag is split.
+	const keep = 3000
+	if r := []rune(text); len(r) > keep {
+		text = "…" + string(r[len(r)-keep:])
+	}
 	html := "💭 <i>" + markdownToTelegramHTML(text) + "</i>"
 	if len(html) > maxTelegramMsg {
-		runes := []rune(html)
-		if len(runes) > maxTelegramMsg-20 {
-			html = string(runes[:maxTelegramMsg-20]) + "...</i>"
+		html = "💭 <i>" + stripHTML(markdownToTelegramHTML(text)) + "</i>"
+		if r := []rune(html); len(r) > maxTelegramMsg {
+			html = "💭 <i>…" + string(r[len(r)-maxTelegramMsg+20:])
 		}
 	}
 

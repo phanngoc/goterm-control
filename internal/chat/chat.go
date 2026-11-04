@@ -20,6 +20,10 @@ type StreamCallbacks struct {
 	OnText       func(chunk string)
 	OnToolCall   func(name string, inputJSON string)
 	OnToolResult func(name string, result tools.ToolResult)
+	// OnThinking streams the model's thinking as the CLI reports it: Claude's
+	// summarized thinking deltas, codex's reasoning items. An empty chunk
+	// marks the end of one thinking block. Nil to ignore.
+	OnThinking func(chunk string)
 }
 
 // Client is one turn of conversation against a CLI-backed model.
@@ -57,6 +61,25 @@ type TurnSink interface {
 	SendPhoto(path, caption string)
 	// Finalize marks the reply complete.
 	Finalize()
+}
+
+// ThinkingSink is a TurnSink that also shows what the model is thinking while
+// it works. Optional: a sink without it simply does not show thinking.
+type ThinkingSink interface {
+	NoteThinking(chunk string)
+}
+
+// Todo is one line of the model's own plan, as its TodoWrite tool states it.
+type Todo struct {
+	Content    string `json:"content"`
+	Status     string `json:"status"` // pending | in_progress | completed
+	ActiveForm string `json:"activeForm,omitempty"`
+}
+
+// TodoSink is a TurnSink that shows the model's plan: what is done, what it
+// is on now, what is left. Called with the whole list each time it changes.
+type TodoSink interface {
+	NoteTodos(todos []Todo)
 }
 
 // ExtractScreenshotPath finds the .png/.jpg path in a screencapture command so

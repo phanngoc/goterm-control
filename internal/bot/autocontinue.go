@@ -3,6 +3,8 @@ package bot
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/ngocp/goterm-control/internal/chat"
 )
 
 // Auto-continue lets the agent loop survive Claude stopping with `end_turn`
@@ -31,6 +33,14 @@ func parseTodoWriteInput(inputJSON string) []todoItem {
 		return nil
 	}
 	return input.Todos
+}
+
+func toChatTodos(in []todoItem) []chat.Todo {
+	out := make([]chat.Todo, len(in))
+	for i, t := range in {
+		out[i] = chat.Todo{Content: t.Content, Status: t.Status, ActiveForm: t.ActiveForm}
+	}
+	return out
 }
 
 // pendingTodos returns the content strings of items still pending or in_progress.

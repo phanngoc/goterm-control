@@ -118,6 +118,22 @@ type streamEvent struct {
 	IsError   bool        `json:"is_error,omitempty"`
 	Errors    []string    `json:"errors,omitempty"`
 	Usage     *cliUsage   `json:"usage,omitempty"`
+	// Event is set on "stream_event" lines (--include-partial-messages).
+	Event *cliStreamEvent `json:"event,omitempty"`
+}
+
+// cliStreamEvent is the raw API event the CLI forwards with
+// --include-partial-messages. Only thinking deltas are read from it: text
+// still arrives whole, per block, through the "assistant" lines.
+type cliStreamEvent struct {
+	Type  string `json:"type"`
+	Delta *struct {
+		Type     string `json:"type"`
+		Thinking string `json:"thinking,omitempty"`
+	} `json:"delta,omitempty"`
+	ContentBlock *struct {
+		Type string `json:"type"`
+	} `json:"content_block,omitempty"`
 }
 
 // cliUsage is the usage object on the final "result" event.
@@ -265,6 +281,20 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		}
 
 		switch ev.Type {
+		case "stream_event":
+			if ev.Event == nil || cb.OnThinking == nil {
+				continue
+			}
+			switch {
+			case ev.Event.Type == "content_block_delta" && ev.Event.Delta != nil &&
+				ev.Event.Delta.Type == "thinking_delta" && ev.Event.Delta.Thinking != "":
+				cb.OnThinking(ev.Event.Delta.Thinking)
+			case ev.Event.Type == "content_block_stop":
+				// A thinking block ended: break the paragraph so the next
+				// block does not run on from the last word of this one.
+				cb.OnThinking("")
+			}
+
 		case "system":
 			if ev.SessionID != "" && isNewSession {
 				sess.SetSessionID(ev.SessionID)
@@ -370,6 +400,19 @@ const fsGuardPrompt = "\n\n## File access\n" +
 	"- Avoid recursive searches rooted at the home directory (~); root them at the " +
 	"workspace or a specific project directory instead.\n"
 
+// thinkingDisplay is the CLI's --thinking-display value. BOMCLAW_THINKING_DISPLAY
+// overrides it; "off" leaves the flag out, for a CLI too old to know it.
+func thinkingDisplay() string {
+	switch v := strings.TrimSpace(os.Getenv("BOMCLAW_THINKING_DISPLAY")); v {
+	case "":
+		return "summarized"
+	case "off", "none":
+		return ""
+	default:
+		return v
+	}
+}
+
 // buildArgs constructs the claude CLI argument list.
 func buildArgs(model, sessionID string, isNew bool, systemPrompt string) []string {
 	args := []string{
@@ -390,6 +433,13 @@ func buildArgs(model, sessionID string, isNew bool, systemPrompt string) []strin
 		// a logged-out browser and reports the site as inaccessible. Scoped to
 		// the subprocess: the operator's own sessions keep every skill.
 		"--disable-slash-commands",
+	}
+	// Thinking text: without this the CLI streams thinking blocks with an empty
+	// body (a signature only), so the room saw nothing until the answer. With
+	// "summarized" each thinking_delta carries a readable summary of the
+	// reasoning, which is what lets a person watch the turn think.
+	if d := thinkingDisplay(); d != "" {
+		args = append(args, "--thinking-display", d)
 	}
 
 	if !isNew {

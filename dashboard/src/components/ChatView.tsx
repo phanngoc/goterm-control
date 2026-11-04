@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useStore, ChatMessage } from '../stores/store'
+import { useStore, ChatMessage, TodoItem } from '../stores/store'
 import { eventsToMessages } from '../lib/transcript'
 import MessageMarkdown from './MessageMarkdown'
 import ChatInput, { type ChatInputHandle } from './ChatInput'
@@ -8,6 +8,8 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
   const messages = useStore(s => s.messages)
   const addMessage = useStore(s => s.addMessage)
   const setMessages = useStore(s => s.setMessages)
+  const streamingThinking = useStore(s => s.streamingThinking)
+  const streamingTodos = useStore(s => s.streamingTodos)
   const sending = useStore(s => s.sending)
   const setSending = useStore(s => s.setSending)
   const activeSessionId = useStore(s => s.activeSessionId)
@@ -95,16 +97,12 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
           <div className="flex gap-2 items-start">
             <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-xs shrink-0">N</div>
             <div className="max-w-[80%] px-3 py-2 rounded-xl bg-gray-800 text-gray-200 text-sm">
-              {streamingTools.length > 0 && (
-                <div className="text-xs text-gray-400 mb-1">
-                  🔧 {compactTools(streamingTools)}
-                </div>
-              )}
+              <TurnProgress thinking={streamingThinking} tools={streamingTools} todos={streamingTodos} />
               {streamingText ? (
                 <MessageMarkdown>{streamingText}</MessageMarkdown>
-              ) : (
+              ) : !streamingThinking && streamingTools.length === 0 ? (
                 <span className="animate-pulse text-gray-400">Thinking...</span>
-              )}
+              ) : null}
             </div>
           </div>
         )}
@@ -188,4 +186,55 @@ function compactTools(tools: string[]): string {
   const remaining = groups.slice(5).reduce((sum, g) => sum + g.count, 0)
   if (remaining > 0) shown.push(`+${remaining} more`)
   return shown.join(' → ')
+}
+
+// TurnProgress is the turn while it runs, laid out like Claude Code's: the
+// newest thinking dimmed, the steps taken with the running one last, and the
+// model's own plan with what is done and what is left. It is what keeps a long
+// turn from looking like silence.
+function TurnProgress({ thinking, tools, todos }: { thinking: string; tools: string[]; todos: TodoItem[] }) {
+  const [open, setOpen] = useState(false)
+  const paras = thinking.trim().split(/\n\n+/).filter(Boolean)
+  const latest = paras[paras.length - 1] ?? ''
+  const shown = tools.slice(-6)
+  const hidden = tools.length - shown.length
+  const done = todos.filter(t => t.status === 'completed').length
+  if (!latest && tools.length === 0 && todos.length === 0) return null
+  return (
+    <div className="mb-2 space-y-2 text-xs">
+      {latest && (
+        <button type="button" onClick={() => setOpen(v => !v)}
+          className="block w-full text-left border-l-2 border-gray-600 pl-2 italic text-gray-400 hover:text-gray-300">
+          <span className="not-italic">💭 </span>
+          {open ? <span className="whitespace-pre-wrap">{thinking.trim()}</span> : <span className="line-clamp-3">{latest}</span>}
+          {paras.length > 1 && <span className="not-italic text-gray-500"> {open ? '· thu gọn' : `· ${paras.length} đoạn`}</span>}
+        </button>
+      )}
+      {tools.length > 0 && (
+        <ul className="space-y-0.5 font-mono text-[11px] text-gray-400">
+          {hidden > 0 && <li className="text-gray-500">… {hidden} bước trước</li>}
+          {shown.map((t, i) => {
+            const running = i === shown.length - 1
+            return (
+              <li key={hidden + i} className={`truncate ${running ? 'text-sky-300' : ''}`}>
+                {running ? <span className="inline-block animate-pulse">▸</span> : '✓'} {t}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {todos.length > 0 && (
+        <div className="rounded-md bg-gray-900/60 px-2 py-1.5">
+          <div className="mb-1 text-[11px] text-gray-400">Kế hoạch · {done}/{todos.length} xong</div>
+          <ul className="space-y-0.5">
+            {todos.map((t, i) => (
+              <li key={i} className={t.status === 'completed' ? 'text-gray-500 line-through' : t.status === 'in_progress' ? 'text-gray-100 font-medium' : 'text-gray-400'}>
+                {t.status === 'completed' ? '☑' : t.status === 'in_progress' ? '◐' : '☐'} {t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
 }
