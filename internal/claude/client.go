@@ -224,6 +224,13 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	// Whatever this particular run needs the CLI to know — the task it is
 	// inside, and the project that task belongs to. Appended last so a
 	// session's own value wins over the gateway's.
+	// The plan tools. Print mode offers none by default — no TodoWrite, no
+	// TaskCreate — so an agent had no way to say what is left, and a room had
+	// nothing to show between "started" and "done". This turns on the task
+	// tools; the turn engine reads them into the progress line.
+	if os.Getenv("CLAUDE_CODE_ENABLE_TODO_TOOLS") == "" {
+		cmd.Env = append(cmd.Env, "CLAUDE_CODE_ENABLE_TODO_TOOLS=1")
+	}
 	cmd.Env = append(cmd.Env, sess.GetEnv()...)
 
 	stdout, err := cmd.StdoutPipe()

@@ -790,6 +790,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 	// has fully exited by the time we read between SendMessage calls, but we
 	// still take the lock for consistency with the other shared state).
 	var latestTodos []todoItem
+	var plan planTracker
 
 	cb := chat.StreamCallbacks{
 		OnText: func(chunk string) {
@@ -803,21 +804,25 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			addEvent(transcript.Event{Type: transcript.EventToolCall, ToolName: name, ToolInput: inputJSON})
 			pushTool(name, inputJSON)
 			label := chat.ToolLabel(name, inputJSON)
-			// Compact tool progress with short snippet: Bash(cd stock_d) → Read(main.go)
-			streamer.NoteTool(label)
+			// Compact tool progress with short snippet: Bash(cd stock_d) → Read(main.go).
+			// A plan edit is shown as the plan, not as a step of the work.
+			if !isPlanTool(name) {
+				streamer.NoteTool(label)
+			}
 			// Mirror to session so /status can show what's running right now.
 			sess.NoteTool(label)
-			// Snapshot the latest TodoWrite state for the auto-continue check.
-			if name == "TodoWrite" {
-				if todos := parseTodoWriteInput(inputJSON); todos != nil {
-					textMu.Lock()
-					latestTodos = todos
-					textMu.Unlock()
-					// The plan is what tells a person how far along the turn
-					// is; a sink that can show it gets every revision.
-					if ts, ok := streamer.(chat.TodoSink); ok {
-						ts.NoteTodos(toChatTodos(todos))
-					}
+			// Snapshot the plan for the auto-continue check, and show it: the
+			// plan is what tells a person how far along the turn is.
+			textMu.Lock()
+			changed := plan.call(name, inputJSON)
+			todos := plan.todos()
+			if changed {
+				latestTodos = todos
+			}
+			textMu.Unlock()
+			if changed {
+				if ts, ok := streamer.(chat.TodoSink); ok {
+					ts.NoteTodos(toChatTodos(todos))
 				}
 			}
 		},
@@ -830,6 +835,9 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			// Log to transcript only — tool results not shown to user
 			addEvent(transcript.Event{Type: transcript.EventToolResult, ToolName: name, Content: toolResult.Output, IsError: toolResult.IsError})
 			popTool(name, toolResult)
+			textMu.Lock()
+			plan.result(name, toolResult.Output)
+			textMu.Unlock()
 
 			// Exception: screenshots still sent as photos
 			if toolResult.IsImage {
