@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
@@ -382,13 +382,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               className="ml-auto text-xs text-gray-500 hover:text-gray-300"
             >close</button>
           </header>
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {thread.map((m, i) => (
-              <div key={m.id} className={i === 0 ? '' : 'pl-3 border-l border-gray-800'}>
-                <Line m={m} selfID={selfID} compact onOpenTask={onOpenTask} />
-              </div>
-            ))}
-          </div>
+          <ThreadPane thread={thread} rootID={threadRoot} selfID={selfID} onOpenTask={onOpenTask} />
           {files.length > 0 && (
             <div className="border-t border-gray-800 px-3 py-2 space-y-1">
               <div className="text-[11px] uppercase tracking-wide text-gray-500">Files</div>
@@ -408,6 +402,130 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             placeholder="Reply in thread"
           />
         </aside>
+      )}
+    </div>
+  )
+}
+
+// plainPreview is a reply's markdown as one plain line, for the two-line
+// preview under a message: "⏳ _đang làm_ · 5s > _💭 x_" reads as noise there.
+function plainPreview(s?: string): string {
+  return (s ?? '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/[*_`~]+/g, '')
+    .replace(/^\s*[-•]\s+/gm, '· ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// THREAD_TAIL is how many replies a long thread shows before "show older":
+// a thread an agent has worked in for an afternoon runs to hundreds of lines,
+// and rendering them all is slow and buries the line you came to read.
+const THREAD_TAIL = 30
+
+// ThreadPane is the open thread, read from the newest end like a chat: it
+// lands on the latest message, follows new ones while you are at the bottom,
+// and leaves you alone while you scroll back. A long thread shows its root
+// and the last THREAD_TAIL replies, with a button for the rest.
+function ThreadPane({ thread, rootID, selfID, onOpenTask }: {
+  thread: ChannelMessage[]; rootID: string; selfID: string; onOpenTask?: (taskID: string) => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const atEnd = useRef(true)
+  const lastID = useRef('')
+  const keepFrom = useRef<number | null>(null) // scrollHeight before older lines were added
+  const [showAll, setShowAll] = useState(false)
+  const [unseen, setUnseen] = useState(false)
+
+  // A different thread starts at its newest line, collapsed. Tracked by hand
+  // rather than in an effect: an effect on rootID runs after the layout
+  // effect below, and reset "first open" one update too late — so the next
+  // poll yanked a reader at the top back down.
+  const openRoot = useRef('')
+  if (openRoot.current !== rootID) {
+    openRoot.current = rootID
+    atEnd.current = true
+    lastID.current = ''
+    if (showAll) setShowAll(false)
+  }
+
+  const root = thread[0]
+  const replies = thread.slice(1)
+  const hidden = showAll ? 0 : Math.max(0, replies.length - THREAD_TAIL)
+  const shown = hidden ? replies.slice(hidden) : replies
+
+  const toEnd = () => {
+    const el = box.current
+    if (el) el.scrollTop = el.scrollHeight
+    atEnd.current = true
+    setUnseen(false)
+  }
+
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    // Older lines were just put above: keep the line you were reading where
+    // it was instead of jumping.
+    if (keepFrom.current !== null) {
+      el.scrollTop += el.scrollHeight - keepFrom.current
+      keepFrom.current = null
+      return
+    }
+    const last = thread[thread.length - 1]
+    const isNew = !!last && last.id !== lastID.current
+    const first = lastID.current === ''
+    lastID.current = last?.id ?? ''
+    // Follow the end while you are at it — a progress line growing counts,
+    // so the newest words stay in view — and always after your own message.
+    if (first || atEnd.current || (isNew && last.author_kind === 'user')) {
+      toEnd()
+    } else if (isNew) {
+      setUnseen(true)
+    }
+  }, [thread, showAll])
+
+  const loadAll = () => {
+    keepFrom.current = box.current?.scrollHeight ?? null
+    setShowAll(true)
+  }
+
+  return (
+    <div className="relative flex-1 min-h-0">
+      <div
+        ref={box}
+        onScroll={e => {
+          const el = e.currentTarget
+          atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+          if (atEnd.current) setUnseen(false)
+        }}
+        // The position is kept by hand when older lines arrive; the browser's
+        // own scroll anchoring would apply it a second time, and only
+        // sometimes (never at the very top).
+        style={{ overflowAnchor: 'none' }}
+        className="h-full overflow-y-auto p-3 space-y-3"
+      >
+        {root && <Line m={root} selfID={selfID} compact onOpenTask={onOpenTask} />}
+        {hidden > 0 && (
+          <button
+            onClick={loadAll}
+            className="w-full rounded-md border border-dashed border-gray-700 py-1.5 text-xs text-gray-400 hover:border-gray-500 hover:text-gray-200"
+          >
+            Hiện {hidden} tin cũ hơn · tải toàn bộ thread
+          </button>
+        )}
+        {shown.map(m => (
+          <div key={m.id} className="pl-3 border-l border-gray-800">
+            <Line m={m} selfID={selfID} compact onOpenTask={onOpenTask} />
+          </div>
+        ))}
+      </div>
+      {unseen && (
+        <button
+          onClick={toEnd}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-sky-600 px-3 py-1 text-xs text-white shadow-lg hover:bg-sky-500"
+        >
+          ↓ tin mới nhất
+        </button>
       )}
     </div>
   )
@@ -506,7 +624,7 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
               {m.replies} repl{m.replies === 1 ? 'y' : 'ies'} →
             </span>
           </div>
-          <div className="text-xs text-gray-300 line-clamp-2 break-words">{m.last_reply_text}</div>
+          <div className="text-xs text-gray-300 line-clamp-2 break-words">{plainPreview(m.last_reply_text)}</div>
         </button>
       )}
       {!compact && !m.replies && (
