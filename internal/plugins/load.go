@@ -39,6 +39,10 @@ const (
 	// ScopeProject is the folder a turn runs in, usually somebody's repo:
 	// skills and prompt always, code only when the agent trusts it.
 	ScopeProject Scope = "project"
+	// ScopeInstalled is a plugin fetched from elsewhere into the agent's own
+	// folder (it carries a SourceFile). Same rule as a project plugin: it is
+	// someone else's code until the owner says otherwise.
+	ScopeInstalled Scope = "installed"
 )
 
 // Plugin is one plugin as resolved for one turn.
@@ -151,7 +155,11 @@ func Load(agentWorkspace, turnWorkspace string) *Kit {
 			if _, err := os.Stat(filepath.Join(dir, File)); err != nil {
 				continue // a folder with no manifest is just a folder
 			}
-			add(open(dir, r.scope, st))
+			scope := r.scope
+			if _, err := os.Stat(filepath.Join(dir, SourceFile)); err == nil && scope == ScopeAgent {
+				scope = ScopeInstalled
+			}
+			add(open(dir, scope, st))
 		}
 	}
 
@@ -252,7 +260,9 @@ func resolve(list []*Plugin, st State) {
 			continue
 		}
 		p.Reasons = append(p.Reasons, unmet(p)...)
-		if p.Scope == ScopeProject && p.Kind == KindPlugin && !st.trusted(p.Name) && p.runsCode() {
+		// A bin folder counts even when nothing in it looks runnable today:
+		// it goes on PATH all the same, and what is runnable is up to the OS.
+		if p.Scope != ScopeAgent && p.Kind == KindPlugin && !st.trusted(p.Name) && (p.runsCode() || p.BinDir != "") {
 			p.Untrusted = true
 		}
 		if len(p.Reasons) > 0 && !onlySoft(p) {
@@ -412,7 +422,7 @@ func executables(dir string) []string {
 		if err != nil {
 			continue
 		}
-		if runtime.GOOS == "windows" || info.Mode()&0o111 != 0 {
+		if runnable(e.Name(), info.Mode()) {
 			out = append(out, e.Name())
 		}
 	}
@@ -435,4 +445,25 @@ func absOrEmpty(dir string) string {
 		return abs
 	}
 	return dir
+}
+
+// runnable says whether a file in bin/ is a command. On Windows there is no
+// executable bit — what makes a file runnable from PATH is an extension in
+// PATHEXT, so that is the test; anything else (a README, a .py the command
+// wraps) would be offered to the agent as a command that cannot run.
+func runnable(name string, mode os.FileMode) bool {
+	if runtime.GOOS != "windows" {
+		return mode&0o111 != 0
+	}
+	exts := os.Getenv("PATHEXT")
+	if exts == "" {
+		exts = ".COM;.EXE;.BAT;.CMD"
+	}
+	ext := strings.ToUpper(filepath.Ext(name))
+	for _, e := range strings.Split(exts, ";") {
+		if ext != "" && strings.EqualFold(strings.TrimSpace(e), ext) {
+			return true
+		}
+	}
+	return false
 }

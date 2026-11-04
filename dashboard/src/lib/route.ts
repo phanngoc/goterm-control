@@ -10,9 +10,9 @@
 // easier to test than to debug through a browser.
 
 export type Tab = 'sessions' | 'chat' | 'status' | 'admin' | 'files'
-export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'skills' | 'settings'
+export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'skills' | 'plugins' | 'settings'
 
-export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'skills', 'settings']
+export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'skills', 'plugins', 'settings']
 
 export interface Route {
   tab: Tab

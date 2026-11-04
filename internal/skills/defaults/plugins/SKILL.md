@@ -33,6 +33,7 @@ bomclaw plugins show <name>         # status, and the exact reason if not active
 bomclaw plugins config <name> key=value
 bomclaw plugins list                # everything, with status
 bomclaw plugins prompt              # what you will see on your next turn
+bomclaw plugins install <git-url>   # fetch someone's plugin (--ref, --path); update / uninstall
 ```
 
 Use `${plugin_dir}` for paths inside the plugin and `${config.key}` for
@@ -53,10 +54,12 @@ settings. Write secrets as `config` fields with `secret: true` (or
 
 - Before writing new code, check `bomclaw plugins list`. The tool may already
   exist, or be pending.
-- A plugin found in a repository (`.agents/plugins/`) teaches you right away
-  (skills, prompt), but its commands and MCP servers stay off until a person
-  runs `bomclaw plugins trust <name>`. Do not trust one yourself: that is the
-  owner's decision about running someone else's code.
+- A plugin found in a repository (`.agents/plugins/`) or installed from a URL
+  teaches you right away (skills, prompt), but its commands and MCP servers
+  stay off until a person runs `bomclaw plugins trust <name>` or clicks *tin
+  cậy* in the dashboard's Plugins pane. Do not trust one yourself: that is the
+  owner's decision about running someone else's code. Updating it withdraws
+  the trust again.
 - Plugin commands are added at the END of PATH. They cannot replace `git`, so
   give them names that do not collide.
 - One job per plugin. Use `provides: [capability]` and `inject: [capability]`

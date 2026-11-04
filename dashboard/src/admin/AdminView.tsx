@@ -8,6 +8,7 @@ import NotesPane from './NotesPane'
 import SettingsPane from './SettingsPane'
 import SchedulesPane from './SchedulesPane'
 import SkillsPane from './SkillsPane'
+import PluginsPane from './PluginsPane'
 import EconomicsPane from './EconomicsPane'
 import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
@@ -24,6 +25,7 @@ const LABELS: Record<Pane, string> = {
   notes: 'Notes',
   messages: 'Messages',
   skills: 'Skills',
+  plugins: 'Plugins',
   settings: 'Settings',
 }
 
@@ -131,6 +133,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
         {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
         {pane === 'notes' && <NotesPane call={call} />}
         {pane === 'skills' && <SkillsPane call={call} />}
+        {pane === 'plugins' && <PluginsPane call={call} />}
         {pane === 'settings' && <SettingsPane call={call} />}
         {pane === 'messages' && (
           <ChannelView
