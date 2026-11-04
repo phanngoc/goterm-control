@@ -166,7 +166,21 @@ export default function PluginFiles({ call, agent, name, onClose }: {
               ) : file.binary ? (
                 <div className="p-6 text-sm text-gray-500">File nhị phân — không hiển thị được ở đây.</div>
               ) : isMarkdown && rendered ? (
-                <div className="h-full overflow-y-auto px-6 py-4"><MessageMarkdown wide>{file.body}</MessageMarkdown></div>
+                <div className="h-full overflow-y-auto px-6 py-4">
+                  {(() => {
+                    // A SKILL.md opens with YAML frontmatter; as markdown it
+                    // would render as a heading. Shown as what it is instead.
+                    const { front, body } = splitFrontmatter(file.body)
+                    return (
+                      <>
+                        {front && (
+                          <pre className="mb-4 px-3 py-2 text-[11px] text-gray-400 bg-gray-900 rounded ring-1 ring-gray-800 whitespace-pre-wrap font-mono">{front}</pre>
+                        )}
+                        <MessageMarkdown wide>{body}</MessageMarkdown>
+                      </>
+                    )
+                  })()}
+                </div>
               ) : (
                 <Editor
                   path={`/plugins/${agent}/${name}/${open}`}
@@ -196,4 +210,11 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`
   return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+// splitFrontmatter separates a leading `---` YAML block from the markdown.
+function splitFrontmatter(text: string): { front: string; body: string } {
+  const m = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text)
+  if (!m) return { front: '', body: text }
+  return { front: m[1], body: text.slice(m[0].length) }
 }
