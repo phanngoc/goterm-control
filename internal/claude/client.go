@@ -203,6 +203,12 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 
 	kit := c.kit(chat.WorkspaceFor(sess, c.workspace))
 	args := withMCPConfig(buildArgs(modelID, sessionID, isNewSession, systemPrompt), kit.ClaudeMCPConfig())
+	// Plugin hooks, when any plugin has them: claude runs `bomclaw hook`
+	// around each tool call. Absent otherwise, so nothing changes for a turn
+	// without hooks.
+	if s := kit.ClaudeSettings(); s != "" {
+		args = append(args, "--settings", s)
+	}
 
 	cmd := fsguard.CommandContext(ctx, claudeBin, args...)
 	// Its own process group, so cancelling this turn — or shutting the

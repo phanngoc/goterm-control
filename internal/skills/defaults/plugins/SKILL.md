@@ -24,6 +24,7 @@ on your next turn. Nothing restarts.
 | `prompt:`                   | a few always-on lines (keep them short)              |
 | `config:`                   | validated settings → `$BOMCLAW_<PLUGIN>_<KEY>`       |
 | `env:`                      | variables in every turn                              |
+| `hooks: {pre_tool, post_tool}` | a command run around your tool calls; may refuse one |
 
 This works the same on claude, codex and opencode.
 
@@ -42,6 +43,24 @@ bomclaw plugins install <git-url>   # fetch someone's plugin (--ref, --path); up
 Use `${plugin_dir}` for paths inside the plugin and `${config.key}` for
 settings. Write secrets as `config` fields with `secret: true` (or
 `env: SOME_VAR` to read an existing variable), never in the manifest itself.
+
+## Hooks
+
+```yaml
+hooks:
+  pre_tool:
+    - match: bash                  # regex on the tool: bash, edit, write, read, … (or the CLI's own name)
+      run: ${plugin_dir}/guard.sh  # gets JSON on stdin: {event, tool, raw_tool, input, cwd, backend, plugin}
+      timeout: 10                  # seconds (max 120)
+      fail_closed: false           # true = refuse the call if the hook itself breaks
+  post_tool:
+    - run: ${plugin_dir}/audit.sh  # also gets "output"; cannot change anything
+```
+
+A pre_tool hook refuses a call by exiting 2 with the reason on stderr, or by
+printing `{"decision":"deny","reason":"…"}`. You then see that reason as the
+tool's error. Do not try to get around a refusal: it is a rule someone set.
+Every decision is logged in `.bomclaw/hooks.log` in your workspace.
 
 ## Status
 

@@ -129,7 +129,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	}
 
 	kit := c.kit(chat.WorkspaceFor(sess, c.workspace))
-	args := withConfig(buildArgs(modelID, threadID, isNewThread), kit.CodexArgs())
+	args := withConfig(buildArgs(modelID, threadID, isNewThread), append(kit.CodexArgs(), kit.CodexHookArgs()...))
 
 	cmd := fsguard.CommandContext(ctx, codexBin, args...)
 	execution.Detach(cmd)
@@ -378,7 +378,12 @@ func (c *Client) handleCompletedItem(it *threadItem, pending map[string]string, 
 
 	case "error":
 		// Item-level errors are warnings (e.g. model metadata missing); the
-		// turn continues, so log rather than abort.
+		// turn continues, so log rather than abort. The hook-trust notice is
+		// the one we asked for (plugins.CodexHookArgs) on every turn with
+		// hooks — logging it would bury the warnings that mean something.
+		if strings.Contains(it.Message, "--dangerously-bypass-hook-trust") {
+			return
+		}
 		log.Printf("codex item error: %s", it.Message)
 	}
 }

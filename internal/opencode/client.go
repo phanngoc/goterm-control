@@ -126,7 +126,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 		if os.Getenv("OPENCODE_CONFIG_CONTENT") == "" {
 			cmd.Env = append(cmd.Env, "OPENCODE_CONFIG_CONTENT="+cfg)
 		} else {
-			log.Printf("opencode: OPENCODE_CONFIG_CONTENT is already set; plugin MCP servers left out")
+			log.Printf("opencode: OPENCODE_CONFIG_CONTENT is already set; plugin MCP servers and hooks left out")
 		}
 	}
 	// See claude/client.go: per-run variables, appended last so a session's

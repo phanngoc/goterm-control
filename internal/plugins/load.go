@@ -66,6 +66,7 @@ type Plugin struct {
 	Values     map[string]string    `json:"-"` // resolved config, secrets included
 	Servers    map[string]MCPServer `json:"-"` // expanded MCP servers
 	EnvVars    map[string]string    `json:"-"` // expanded env
+	HookList   []Hook               `json:"-"` // expanded hooks
 	PromptText string               `json:"-"`
 }
 
@@ -211,6 +212,7 @@ func open(dir string, scope Scope, st State) *Plugin {
 	for name, s := range m.MCP {
 		p.Servers[name] = expandServer(s, expand)
 	}
+	p.HookList = hooksOf(p, expand)
 
 	text := m.Prompt
 	if m.PromptFile != "" {
@@ -360,7 +362,7 @@ func unmet(p *Plugin) []string {
 }
 
 func (p *Plugin) runsCode() bool {
-	return len(p.Commands) > 0 || len(p.EnvVars) > 0 || len(p.Servers) > 0
+	return len(p.Commands) > 0 || len(p.EnvVars) > 0 || len(p.Servers) > 0 || len(p.HookList) > 0
 }
 
 // expander substitutes ${plugin_dir} and ${config.<key>}. Settings the

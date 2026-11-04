@@ -94,7 +94,41 @@ type Manifest struct {
 	Env map[string]string `yaml:"env" json:"-"`
 	// MCP is the tool servers this plugin starts, by server name.
 	MCP map[string]MCPServer `yaml:"mcp" json:"-"`
+	// Hooks run around the agent's tool calls, on every backend.
+	Hooks Hooks `yaml:"hooks" json:"hooks,omitempty"`
 }
+
+// Hooks are commands run around the agent's tool calls. pre_tool may refuse
+// a call; post_tool sees what came back and cannot change it.
+type Hooks struct {
+	PreTool  []HookSpec `yaml:"pre_tool" json:"pre_tool,omitempty"`
+	PostTool []HookSpec `yaml:"post_tool" json:"post_tool,omitempty"`
+}
+
+// HookSpec is one hook as a manifest declares it.
+type HookSpec struct {
+	// Match is a regular expression over the tool's name — the normalised one
+	// (bash, edit, write, read, …) or the backend's own (Bash, shell, …).
+	// Empty matches every tool.
+	Match string `yaml:"match" json:"match,omitempty"`
+	// Run is the command line, run by the shell. ${plugin_dir} and
+	// ${config.<key>} are expanded.
+	Run string `yaml:"run" json:"run"`
+	// Timeout in seconds; 0 means DefaultHookTimeout.
+	Timeout int `yaml:"timeout" json:"timeout,omitempty"`
+	// FailClosed refuses the call when the hook itself fails (crashes, times
+	// out). The default lets the call through: a broken plugin must not be
+	// able to stop an agent from working. A guard whose whole point is to
+	// stop things opts into the other trade.
+	FailClosed bool `yaml:"fail_closed" json:"fail_closed,omitempty"`
+}
+
+// Hook timeouts. A hook runs on every matching tool call, synchronously; a
+// slow one is a slow agent.
+const (
+	DefaultHookTimeout = 10
+	MaxHookTimeout     = 120
+)
 
 // Inject lists what a plugin needs from others — plugin names or provided
 // capabilities. A required one that is missing keeps the plugin pending; an
@@ -194,6 +228,19 @@ func (m Manifest) validate() error {
 		}
 		if (s.Command == "") == (s.URL == "") {
 			return fmt.Errorf("mcp server %q needs exactly one of command or url", name)
+		}
+	}
+	for event, list := range map[string][]HookSpec{"pre_tool": m.Hooks.PreTool, "post_tool": m.Hooks.PostTool} {
+		for i, h := range list {
+			if strings.TrimSpace(h.Run) == "" {
+				return fmt.Errorf("hooks.%s[%d] has no run", event, i)
+			}
+			if _, err := regexp.Compile(h.Match); err != nil {
+				return fmt.Errorf("hooks.%s[%d] match: %v", event, i, err)
+			}
+			if h.Timeout < 0 || h.Timeout > MaxHookTimeout {
+				return fmt.Errorf("hooks.%s[%d] timeout %ds: between 0 and %d", event, i, h.Timeout, MaxHookTimeout)
+			}
 		}
 	}
 	for key, f := range m.Config {

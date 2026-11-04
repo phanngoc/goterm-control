@@ -31,6 +31,8 @@ type Kit struct {
 	// AgentWorkspace is exported to every turn as WorkspaceEnv, so the agent's
 	// own `bomclaw plugins` finds its toolkit from whatever folder it is in.
 	AgentWorkspace string `json:"agent_workspace,omitempty"`
+	// Hooks run around this turn's tool calls; see hooks.go.
+	Hooks []Hook `json:"hooks,omitempty"`
 }
 
 // WorkspaceEnv names the agent's own workspace inside a turn.
@@ -58,6 +60,7 @@ func (k *Kit) build() {
 		for key, v := range p.Values {
 			k.Env[ConfigEnvName(p.Name, key)] = v
 		}
+		k.Hooks = append(k.Hooks, p.HookList...)
 		for name, s := range p.Servers {
 			if prev, taken := k.Owner[name]; taken {
 				k.Errors = append(k.Errors, fmt.Sprintf(
@@ -152,6 +155,9 @@ func (p *Plugin) section() string {
 		if len(p.Commands) > 0 {
 			fmt.Fprintf(&b, "  commands: %s\n", strings.Join(p.Commands, ", "))
 		}
+		if n := len(p.HookList); n > 0 {
+			fmt.Fprintf(&b, "  hooks: %d around your tool calls — a refusal comes back as the tool's error\n", n)
+		}
 		if len(p.Servers) > 0 {
 			names := make([]string, 0, len(p.Servers))
 			for n := range p.Servers {
@@ -188,6 +194,7 @@ func (k *Kit) ApplyEnv(env []string) []string {
 	if k.AgentWorkspace != "" {
 		env = append(env, WorkspaceEnv+"="+k.AgentWorkspace)
 	}
+	env = append(env, k.hookEnv()...)
 	keys := make([]string, 0, len(k.Env))
 	for key := range k.Env {
 		keys = append(keys, key)
@@ -273,8 +280,14 @@ func (k *Kit) CodexArgs() []string {
 // servers, or "" when there are none. opencode merges it over its own config
 // files, so the agent's other opencode settings stay as they were.
 func (k *Kit) OpencodeConfig() string {
-	if k == nil || len(k.Servers) == 0 {
+	if k == nil || (len(k.Servers) == 0 && len(k.Hooks) == 0) {
 		return ""
+	}
+	doc := map[string]any{}
+	if len(k.Hooks) > 0 {
+		if url := k.opencodePluginPath(); url != "" {
+			doc["plugin"] = []string{url}
+		}
 	}
 	mcp := map[string]map[string]any{}
 	for name, s := range k.Servers {
@@ -292,7 +305,13 @@ func (k *Kit) OpencodeConfig() string {
 		}
 		mcp[name] = v
 	}
-	b, _ := json.Marshal(map[string]any{"mcp": mcp})
+	if len(mcp) > 0 {
+		doc["mcp"] = mcp
+	}
+	if len(doc) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(doc)
 	return string(b)
 }
 

@@ -224,6 +224,9 @@ func brings(p *plugins.Plugin) string {
 	if n := len(p.Servers); n > 0 {
 		parts = append(parts, countOf(n, "MCP server"))
 	}
+	if n := len(p.HookList); n > 0 {
+		parts = append(parts, countOf(n, "hook"))
+	}
 	if p.PromptText != "" {
 		parts = append(parts, "prompt")
 	}
@@ -282,6 +285,19 @@ func pluginShow(k *plugins.Kit, name string, asJSON bool) {
 		}
 	}
 	section("mcp", srv)
+	var hk []string
+	for _, h := range p.HookList {
+		m := h.Match
+		if m == "" {
+			m = "every tool"
+		}
+		line := fmt.Sprintf("%s on %s → %s (%ds", h.Event, m, h.Run, h.Timeout)
+		if h.FailClosed {
+			line += ", fail-closed"
+		}
+		hk = append(hk, line+")")
+	}
+	section("hooks", hk)
 	section("provides", p.Provides)
 	section("injects", append(append([]string{}, p.Inject.Required...), optionalNames(p.Inject.Optional)...))
 	if p.PromptText != "" {

@@ -131,15 +131,39 @@ On disk, an agent's toolkit is now only plugins.
 - **Still supported:** `skills/` keeps working for a skill written the old way. It is offered on the very
   next turn and moved on the next start.
 
+## Hooks around tool calls (2026-11-04, `feat/plugin-hooks`)
+
+A plugin declares `hooks: {pre_tool: [...], post_tool: [...]}`. Each entry
+has `match` (a regex on the tool name), `run`, `timeout` and `fail_closed`.
+
+All three CLIs are pointed at one dispatcher, `bomclaw hook <event> --backend
+<cli>` (`internal/plugins/hooks.go`). It:
+- reads the turn's hooks from `$BOMCLAW_HOOKS`;
+- normalises the payload: `Bash`, `shell` and `exec_command` all become
+  `bash`, and an argv command is joined into one line;
+- runs the matching hooks;
+- answers in the form that CLI expects.
+
+| CLI | Registration, per invocation | Refusal | Verified |
+|---|---|---|---|
+| claude | `--settings {"hooks":{"PreToolUse":…}}` | exit 2 + stderr | live test |
+| codex | `--dangerously-bypass-hook-trust -c features.hooks=true -c hooks.PreToolUse=[…]` | exit 2 + stderr | live test |
+| opencode | the bridge `<ws>/.bomclaw/opencode-hooks.mjs` in `OPENCODE_CONFIG_CONTENT.plugin` | the bridge throws | the bridge runs under node in a test; the hook signature was read from the opencode binary; no live turn (the API key has expired) |
+
+Rules:
+- Hooks are code that runs before every tool call. They only run for active
+  plugins that pass the trust gate. That gate is also why bypassing codex's
+  own hook-trust prompt is acceptable.
+- A hook that breaks (crash, timeout, garbage output) lets the call through
+  and is logged, unless it sets `fail_closed`. The dispatcher's own failures
+  always let the call through.
+- `post_tool` hooks only observe.
+- Every decision is appended to `<agent ws>/.bomclaw/hooks.log`, rotated at
+  5 MB.
+- With no hooks, nothing is registered and every CLI runs exactly as before.
+
 ## Next steps, if wanted
 
-- Hooks around tool calls, normalised through one `bomclaw hook` shim.
-  - Claude: through `--settings`; verified to block a Bash call under
-    `bypassPermissions`.
-  - opencode: a generated plugin, passed in `OPENCODE_CONFIG_CONTENT`.
-  - codex: `-c features.hooks=true -c hooks.*`. Decided:
-    `--dangerously-bypass-hook-trust` on codex calls, because the plugin
-    trust gate already vets hook sources.
 - Peer roster: list a peer's plugins next to its skills, so delegation can
   route on tools as well as knowledge.
 
