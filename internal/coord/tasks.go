@@ -986,3 +986,39 @@ func (db *DB) UnmarkReported(taskID string, claimedAt time.Time) error {
 	}
 	return nil
 }
+
+// CloseTask is an agent ending a task that should not run: a duplicate, work
+// already done another way, a plan that changed. Cancel was the only way to
+// end an unclaimed task, and the skills reserve cancel for a person saying
+// stop — so an agent that found a duplicate on the board had to ask the
+// person to run a command for it (ch_arcade, 2026-11-04).
+//
+// The reason is required and lands on the task, so whoever reads the board
+// sees why it ended. A task another agent is running right now is refused:
+// that is their work to stop, and closing it under them would discard what
+// the run is about to report.
+func (db *DB) CloseTask(taskID, byAgent, reason string) ([]string, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, fmt.Errorf("coord: say why the task is being closed (--reason)")
+	}
+	t, err := db.GetTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	if t.State == TaskWorking && t.ClaimedBy != "" && t.ClaimedBy != byAgent && t.LeaseUntil.After(time.Now()) {
+		return nil, fmt.Errorf("coord: %s is running on %s right now; ask it to stop (bomclaw msg --to %s) rather than closing it under it",
+			taskID, t.ClaimedBy, t.ClaimedBy)
+	}
+	children, err := db.CancelTaskTree(taskID, byAgent)
+	if err != nil {
+		return nil, err
+	}
+	note := "closed by " + byAgent + ": " + reason
+	if _, err := db.conn.Exec(`UPDATE tasks SET result = CASE WHEN result = '' THEN ? ELSE result || char(10) || ? END
+		WHERE id = ?`, note, note, taskID); err != nil {
+		return children, fmt.Errorf("close %s: %w", taskID, err)
+	}
+	_ = db.appendEvent(taskID, byAgent, "", TaskCanceled, note)
+	return children, nil
+}

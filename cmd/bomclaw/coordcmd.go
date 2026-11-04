@@ -289,6 +289,32 @@ func runTask(args []string) {
 		}
 		fmt.Println()
 
+	case "close":
+		// An agent ending a task that should not run — a duplicate, work done
+		// another way — with the reason on the record. Cancel stays the
+		// person's "stop".
+		fs := flag.NewFlagSet("task close", flag.ExitOnError)
+		agent, dbPath := agentFlag(fs), dbFlag(fs)
+		id := fs.String("id", "", "Task id (required)")
+		reason := fs.String("reason", "", "Why it ends without running: duplicate of t_…, already done in …, plan changed (required)")
+		fs.Parse(rest)
+		if *id == "" {
+			fmt.Fprintln(os.Stderr, "Usage: bomclaw task close --id <task> --reason \"duplicate of t_…\"")
+			os.Exit(1)
+		}
+		db := openCoord(*dbPath)
+		defer db.Close()
+		children, err := db.CloseTask(*id, requireAgent(*agent), *reason)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "task close: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s closed: %s", *id, strings.TrimSpace(*reason))
+		if len(children) > 0 {
+			fmt.Printf(" — and %d unfinished child task(s)", len(children))
+		}
+		fmt.Println()
+
 	case "progress":
 		// The agent's own "here is how far I got". Fed into the next run's
 		// prompt, so a run that hits its time cap loses nothing it wrote down.
@@ -631,6 +657,7 @@ func taskUsage() {
   done   --id ID [--result R] [--attempts N]                finish it
   fail   --id ID [--result R] [--attempts N]                give up on it
   cancel --id ID                                            (person) stop it, and every unfinished child with it
+  close --id ID --reason R                                  end a task that should not run (duplicate, done, obsolete)
   progress --id ID --note "..."                             record how far you got (fed to the next run)
   block  --id ID --on human|children [--ask "<question>"] [--note "..."]  park it until answered / children finish
   answer --id ID --note "..."                               (person) unblock with an answer

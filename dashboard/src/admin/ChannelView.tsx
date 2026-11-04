@@ -40,6 +40,15 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // The thread keeps its own draft. One shared box meant typing a reply in the
   // panel on the right while the words appeared in the box on the left.
   const [threadBody, setThreadBody] = useState('')
+  // Whether the thread's Files list is open. Per viewer, remembered; storage
+  // can be missing (private window), and then it simply starts collapsed.
+  const [filesOpen, setFilesOpenState] = useState<boolean>(() => {
+    try { return localStorage.getItem('bomclaw.threadFilesOpen') === '1' } catch { return false }
+  })
+  const setFilesOpen = (v: boolean) => {
+    setFilesOpenState(v)
+    try { localStorage.setItem('bomclaw.threadFilesOpen', v ? '1' : '0') } catch { /* not worth a crash */ }
+  }
   // Which agent you are talking to. Always exactly one: a message to the room
   // in general is a message nobody answers, and a thread with three agents in
   // it answering at once is the same question asked three times.
@@ -172,6 +181,10 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
         setActive(t[0].channel_id)
         setThread(t)
         setThreadRoot(openThreadID)
+        // Its files too, now rather than at the next poll.
+        const taskID = t[0]?.task_id
+        if (taskID) call('artifacts.list', { task_id: taskID, tree: true }).then((a: Artifact[]) => setFiles(a || [])).catch(() => {})
+        else setFiles([])
       })
       .catch((e: any) => setErr(String(e?.message ?? e)))
       .finally(() => onOpenedThread?.())
@@ -384,15 +397,34 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           </header>
           <ThreadPane thread={thread} rootID={threadRoot} selfID={selfID} onOpenTask={onOpenTask} />
           {files.length > 0 && (
-            <div className="border-t border-gray-800 px-3 py-2 space-y-1">
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">Files</div>
-              {files.map(a => (
-                <FileRow
-                  key={a.id} a={a} call={call}
-                  onReview={() => reviewFile(a)}
-                  reviewer={to}
-                />
-              ))}
+            <div className="border-t border-gray-800 px-3 py-2">
+              {/* Collapsed by default: a thread with nine artifacts gave them
+                  more height than the conversation. The choice is remembered. */}
+              <button
+                onClick={() => setFilesOpen(!filesOpen)}
+                aria-expanded={filesOpen}
+                className="flex w-full items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500 hover:text-gray-300"
+              >
+                <span className={`inline-block transition-transform ${filesOpen ? 'rotate-90' : ''}`}>▸</span>
+                Files
+                <span className="rounded bg-gray-800 px-1.5 text-gray-400 normal-case tracking-normal">{files.length}</span>
+                {!filesOpen && (
+                  <span className="ml-1 min-w-0 truncate normal-case tracking-normal text-gray-600">
+                    {files.slice(0, 2).map(f => f.title).join(' · ')}{files.length > 2 ? ' …' : ''}
+                  </span>
+                )}
+              </button>
+              {filesOpen && (
+                <div className="mt-1 max-h-60 space-y-1 overflow-y-auto pr-1">
+                  {files.map(a => (
+                    <FileRow
+                      key={a.id} a={a} call={call}
+                      onReview={() => reviewFile(a)}
+                      reviewer={to}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {/* Typing happens where you are reading. */}
