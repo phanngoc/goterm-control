@@ -91,7 +91,13 @@ var DetachedMethods = map[string]bool{
 	"skills.remove":  true,
 	"skills.copy":    true,
 
-	"plugins.list":      true,
+	"plugins.list": true,
+
+	"tokens.list":     true,
+	"tokens.save":     true,
+	"tokens.delete":   true,
+	"tokens.settings": true,
+
 	"plugins.files":     true,
 	"plugins.set":       true,
 	"plugins.config":    true,

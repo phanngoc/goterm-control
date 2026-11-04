@@ -143,6 +143,44 @@ How it behaves:
   tok-c    token  0         5      14:19:44   cooling 12m0s
 ```
 
+## Managing tokens from the dashboard
+
+**Admin → Accounts** keeps the credentials agents rotate through, per
+provider, without editing `config.yaml`:
+
+| Provider | Kinds | Reaches the CLI as |
+|---|---|---|
+| Claude Code | setup-token, API key | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` |
+| Codex | access token, API key | `CODEX_ACCESS_TOKEN`, `CODEX_API_KEY` |
+
+- **Storage.** Tokens live in `tokens.yaml`, next to the coordination
+  database (`~/.goterm-shared/data/tokens.yaml` by default), with mode 0600.
+  The page never gets a value back. It shows a mask such as
+  `sk-ant-oat01-…abcd`, and an edit with an empty value field keeps the
+  current one.
+- **Sharing.** Every agent running that provider uses the provider's tokens.
+- **Taking effect.** A gateway re-reads the file before its next turn when it
+  has changed, so adding, editing or deleting a token needs no restart.
+- **Rotation length.** "Đổi token sau N lượt" is the provider's
+  `rotate_every`. It overrides the config value; 0 defers to the config.
+- **Opting out.** A token outside the rotation ("ngoài vòng xoay") is the
+  equivalent of `rotate: false`.
+- **Live status.** Each token shows how every agent is using it right now:
+  current or not, turns served, cooldown, and the last error. The page reads
+  this from each agent's `/api/status`.
+- **Config accounts.** Accounts from `config.yaml` are listed read-only below
+  the tokens. A stored token whose name matches a config account is ignored
+  for that agent.
+
+**Which accounts rotate together.** Every account that shares a session store
+can answer any conversation in it. That covers tokens, API keys, and the
+default login, meaning the subscription you logged into with plain `claude`
+(or `codex`). With a rotation set, all of these take turns. A login with a
+`config_dir` of its own keeps its own conversations.
+
+A conversation on the rotation is pinned to the rotation (`@rotation`), not
+to the token it started on, so deleting that token does not strand it.
+
 ## How an account is chosen
 
 - **New session** → the least recently used account that is not cooling down,

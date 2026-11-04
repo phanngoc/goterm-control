@@ -183,9 +183,6 @@ func TestErrorClassification(t *testing.T) {
 }
 
 func TestBadTokenConfigIsRefused(t *testing.T) {
-	if _, err := NewPool(ProviderCodex, []Account{{Name: "x", Provider: ProviderCodex, OAuthToken: "t"}}, 0); err == nil {
-		t.Error("a codex account accepted a claude setup-token")
-	}
 	if _, err := NewPool(ProviderClaude, []Account{{Name: "x", OAuthToken: "t", APIKey: "k"}}, 0); err == nil {
 		t.Error("an account with two credentials was accepted")
 	}

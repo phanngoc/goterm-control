@@ -276,6 +276,10 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleSkillsList(deps, params)
 		case "plugins.list":
 			return handlePluginsList(deps, params)
+		case "tokens.list":
+			return handleTokensList(deps, params)
+		case "tokens.save", "tokens.delete", "tokens.settings":
+			return handleTokensMutate(deps, method, params)
 		case "plugins.files":
 			return handlePluginFiles(deps, params)
 		case "plugins.set", "plugins.config", "plugins.install", "plugins.update",
