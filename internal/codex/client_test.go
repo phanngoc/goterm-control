@@ -128,3 +128,15 @@ func TestResumedTurnSendsRawUserText(t *testing.T) {
 		t.Errorf("empty memory must not add a memory section: %q", got)
 	}
 }
+
+// Plugin MCP overrides must land before the trailing "-": codex reads every
+// argument after it as part of the prompt.
+func TestWithConfigKeepsStdinMarkerLast(t *testing.T) {
+	got := withConfig(buildArgs("m", "", true), []string{"-c", `mcp_servers.x.command="y"`})
+	if got[len(got)-1] != "-" || got[len(got)-2] != `mcp_servers.x.command="y"` {
+		t.Fatalf("got %v", got)
+	}
+	if plain := buildArgs("m", "", true); strings.Join(withConfig(plain, nil), " ") != strings.Join(plain, " ") {
+		t.Fatalf("no overrides changed the args")
+	}
+}

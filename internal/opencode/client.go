@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ngocp/goterm-control/internal/plugins"
+
 	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/credentials"
 	"github.com/ngocp/goterm-control/internal/execution"
@@ -39,8 +41,10 @@ type Client struct {
 	systemPrompt string
 	// systemExtra is re-read every turn; see chat.Deps.SystemExtra.
 	systemExtra func(workspace string) string
-	pool        *credentials.Pool
-	workspace   string
+	// plugins is re-read every turn too; see chat.Deps.Plugins.
+	plugins   func(workspace string) *plugins.Kit
+	pool      *credentials.Pool
+	workspace string
 }
 
 // New creates an opencode client. The CLI owns its own auth and its own tool
@@ -113,6 +117,18 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	cmd := fsguard.CommandContext(ctx, opencodeBin, buildArgs(modelID, sessionID, isNew)...)
 	execution.Detach(cmd)
 	cmd.Env = credentials.ApplyEnv(os.Environ(), acct)
+	kit := c.kit(chat.WorkspaceFor(sess, c.workspace))
+	cmd.Env = kit.ApplyEnv(cmd.Env)
+	// opencode takes extra config only as a whole document in this variable.
+	// An operator who already set it keeps theirs: merging two JSON configs
+	// here would be guessing at which of them they meant.
+	if cfg := kit.OpencodeConfig(); cfg != "" {
+		if os.Getenv("OPENCODE_CONFIG_CONTENT") == "" {
+			cmd.Env = append(cmd.Env, "OPENCODE_CONFIG_CONTENT="+cfg)
+		} else {
+			log.Printf("opencode: OPENCODE_CONFIG_CONTENT is already set; plugin MCP servers left out")
+		}
+	}
 	// See claude/client.go: per-run variables, appended last so a session's
 	// own value wins over the gateway's.
 	cmd.Env = append(cmd.Env, sess.GetEnv()...)
@@ -351,6 +367,7 @@ func init() {
 		c.SetWorkspace(d.Workspace)
 		c.SetPool(d.Pool)
 		c.SetSystemExtra(d.SystemExtra)
+		c.plugins = d.Plugins
 		return c
 	})
 }
@@ -366,4 +383,13 @@ func (c *Client) prompt(workspace string) string {
 		return c.systemPrompt
 	}
 	return c.systemPrompt + c.systemExtra(workspace)
+}
+
+// kit is this turn's plugin toolkit, or nil when the agent has none wired.
+// Every Kit method accepts nil, so callers need no check.
+func (c *Client) kit(workspace string) *plugins.Kit {
+	if c.plugins == nil {
+		return nil
+	}
+	return c.plugins(workspace)
 }

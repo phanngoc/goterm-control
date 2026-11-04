@@ -128,6 +128,8 @@ func main() {
 		runPreview(os.Args[2:])
 	case "skills", "skill":
 		runSkills(os.Args[2:])
+	case "plugins", "plugin":
+		runPlugins(os.Args[2:])
 	case "artifact":
 		runArtifact(os.Args[2:])
 	case "agents":
@@ -187,6 +189,7 @@ Commands:
   preview            Set up and check a project's Preview button (bomclaw.json)
   artifact           Store and fetch what a task produced
   skills             What this agent can do, and when each skill applies
+  plugins            The agent's toolkit as plugins: list, enable, configure, trust, new
   passwd             Set the dashboard password (creates the account if none)
   help               Show this help`)
 }

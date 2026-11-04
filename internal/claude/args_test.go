@@ -78,3 +78,14 @@ func TestBuildArgsFirstTurnCarriesPromptAndDoesNotResume(t *testing.T) {
 		t.Error("a new session must not resume")
 	}
 }
+
+// The plugin config replaces the empty one; --strict-mcp-config stays, so the
+// operator's own servers still never reach the agent.
+func TestWithMCPConfigKeepsStrict(t *testing.T) {
+	cfg := `{"mcpServers":{"x":{"command":"y"}}}`
+	args := withMCPConfig(buildArgs("m", "s", true, ""), cfg)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--mcp-config "+cfg) || !strings.Contains(joined, "--strict-mcp-config") {
+		t.Fatalf("got %v", args)
+	}
+}
