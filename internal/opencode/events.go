@@ -27,6 +27,7 @@ type part struct {
 	Tool   string     `json:"tool,omitempty"`
 	State  *toolState `json:"state,omitempty"`
 	Tokens *usage     `json:"tokens,omitempty"` // step-finish only
+	Cost   float64    `json:"cost,omitempty"`   // step-finish only, USD
 }
 
 // usage rides on the step-finish part. It matters beyond bookkeeping: the

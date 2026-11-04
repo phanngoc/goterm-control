@@ -854,6 +854,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		// The CLI clients report usage by adding to the session counters, so
 		// this call's own usage is the delta across SendMessage.
 		inBefore, outBefore := sess.Tokens()
+		crBefore, cwBefore, costBefore := sess.Usage()
 
 		sendErr := h.llm.SendMessage(ctx, sess, modelID, currentText, currentMemory, cb)
 
@@ -861,6 +862,8 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		reply := turnText.String()
 		textMu.Unlock()
 		inAfter, outAfter := sess.Tokens()
+		crAfter, cwAfter, costAfter := sess.Usage()
+		call.SetUsage(coord.Usage{CacheRead: crAfter - crBefore, CacheWrite: cwAfter - cwBefore, CostUSD: costAfter - costBefore})
 		call.EndWithTokens(reply, sendErr, inAfter-inBefore, outAfter-outBefore)
 
 		if err := sendErr; err != nil {

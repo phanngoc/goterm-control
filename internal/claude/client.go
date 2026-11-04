@@ -118,6 +118,8 @@ type streamEvent struct {
 	IsError   bool        `json:"is_error,omitempty"`
 	Errors    []string    `json:"errors,omitempty"`
 	Usage     *cliUsage   `json:"usage,omitempty"`
+	// TotalCostUSD is the CLI's own figure for the call, on the result line.
+	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
 }
 
 // cliUsage is the usage object on the final "result" event.
@@ -330,6 +332,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 			sess.IncrementMessages()
 			if ev.Usage != nil {
 				sess.AddTokens(ev.Usage.InputTokens, ev.Usage.OutputTokens)
+				sess.AddUsage(ev.Usage.CacheReadInputTokens, ev.Usage.CacheCreationInputTokens, ev.TotalCostUSD)
 				// Context size proxy for the threshold memory flush: what the
 				// last call actually carried, including cached prompt tokens.
 				sess.SetLastContextTokens(ev.Usage.InputTokens +

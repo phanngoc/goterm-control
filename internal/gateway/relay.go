@@ -52,6 +52,9 @@ var DetachedMethods = map[string]bool{
 	"admin.set_model": true,
 	"admin.restart":   true,
 
+	"economics.get":   true,
+	"economics.judge": true,
+
 	"traces.list": true,
 	"traces.get":  true,
 

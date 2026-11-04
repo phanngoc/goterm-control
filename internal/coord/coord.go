@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 13
+const schemaVersion = 14
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -614,6 +614,26 @@ var v13TaskColumns = []struct{ name, decl string }{
 	{"question", "TEXT NOT NULL DEFAULT ''"},
 }
 
+// v14: what a turn really cost, and what a judge thought of the work.
+//
+// input_tokens alone undercounted a Claude turn by two orders of magnitude:
+// the CLI reports prompt-cache reads and writes separately, and on a resumed
+// session nearly the whole context is a cache read. The CLI also reports its
+// own dollar figure for the call (at API list price, whatever the plan), which
+// is the one number that weighs input, output and cache correctly.
+var v14RunColumns = []struct{ name, decl string }{
+	{"cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"},
+	{"cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"},
+	{"cost_usd", "REAL NOT NULL DEFAULT 0"},
+}
+
+// score is a verification's grade of the goal it read, 1–10; 0 means none.
+// Pass/fail says whether the bar was met; the score says by how much, which
+// is what a comparison between agents needs.
+var v14TaskColumns = []struct{ name, decl string }{
+	{"score", "INTEGER NOT NULL DEFAULT 0"},
+}
+
 var v10AgentColumns = []struct{ name, decl string }{
 	{"telegram_bot", "TEXT NOT NULL DEFAULT ''"},
 }
@@ -723,6 +743,16 @@ func (db *DB) migrate() error {
 		}
 	}
 	for _, c := range v13TaskColumns {
+		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v14RunColumns {
+		if err := db.ensureColumn("runs", c.name, c.decl); err != nil {
+			return err
+		}
+	}
+	for _, c := range v14TaskColumns {
 		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
 			return err
 		}
