@@ -84,6 +84,18 @@ export default function PreviewPanel({ call, channelID, onClose }: {
     const t = setInterval(refresh, st?.state === 'starting' ? 1000 : 5000)
     return () => clearInterval(t)
   }, [refresh, st?.state])
+  // An agent asked from the empty panel writes bomclaw.json while it is open:
+  // the poll above sees it declared, and the server starts without a click.
+  const wasDeclared = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (!st) return
+    if (wasDeclared.current === false && st.declared && st.kind === 'server' && st.state === 'stopped' && !autoStarted.current) {
+      autoStarted.current = true
+      start()
+    }
+    if (st.declared && wasDeclared.current === false) setFrameKey(k => k + 1)
+    wasDeclared.current = st.declared
+  }, [st?.declared, st?.kind, st?.state, start]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (st?.state === 'running' && prevState.current === 'starting') setFrameKey(k => k + 1)
     prevState.current = st?.state ?? ''
@@ -157,7 +169,7 @@ export default function PreviewPanel({ call, channelID, onClose }: {
 
       <div className="flex-1 min-h-0 flex flex-col">
         {st && !st.declared ? (
-          <NotDeclared channelID={channelID} />
+          <NotDeclared call={call} channelID={channelID} />
         ) : src && (st?.kind === 'static' || st?.state === 'running') ? (
           <div className={`flex-1 min-h-0 flex justify-center ${mobile ? 'bg-[#111] py-3' : ''}`}>
             <iframe
@@ -180,13 +192,69 @@ export default function PreviewPanel({ call, channelID, onClose }: {
   )
 }
 
-function NotDeclared({ channelID }: { channelID: string }) {
+// The ask an agent gets from the button: everything it needs is the skill and
+// the two commands, and the PASS line is how the person knows it is done.
+const setupAsk = (channelID: string) =>
+  `Thiết lập Preview cho dự án này theo skill \`preview\`: viết \`bomclaw.json\` ` +
+  `(\`bomclaw preview init ${channelID}\`, hoặc tự viết nếu đoán sai), chạy ` +
+  `\`bomclaw preview check ${channelID}\` tới khi PASS, ghi một dòng vào AGENTS.md mục Preview, rồi trả lời kèm dòng PASS. ` +
+  `Nếu dự án chưa có gì để xem thì nói rõ nên preview cái gì, đừng dựng trang giả.`
+
+function NotDeclared({ call, channelID }: { call: Call; channelID: string }) {
+  const [agents, setAgents] = useState<string[]>([])
+  const [agent, setAgent] = useState('')
+  const [sent, setSent] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    call('channels.list')
+      .then((cs: any[]) => {
+        const ch = (cs || []).find(c => c.id === channelID)
+        const ids: string[] = (ch?.members ?? []).filter((m: any) => m.kind === 'agent').map((m: any) => m.id)
+        setAgents(ids)
+        setAgent(a => a || ids[0] || '')
+      })
+      .catch(e => setErr(errText(e)))
+  }, [call, channelID])
+  const ask = async () => {
+    if (!agent || sending) return
+    setSending(true)
+    setErr(null)
+    try {
+      await call('channels.post', { channel_id: channelID, body: setupAsk(channelID), notify: [agent] })
+      setSent(agent)
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setSending(false)
+    }
+  }
   return (
     <div className="flex-1 overflow-y-auto px-5 py-4 text-sm text-gray-400 space-y-3">
       <p className="text-gray-200">Dự án chưa khai báo cách chạy preview.</p>
+      {sent ? (
+        <p className="rounded border border-emerald-700/50 bg-emerald-900/20 px-3 py-2 text-emerald-200">
+          Đã nhờ <b>{sent}</b> trong phòng. Agent viết xong <code>bomclaw.json</code> là panel này tự chạy, không cần tải lại.
+          Theo dõi ở tab Agent hoặc Messages → phòng.
+        </p>
+      ) : agents.length > 0 ? (
+        <div className="flex items-center gap-2">
+          <button onClick={ask} disabled={sending}
+            className="rounded bg-sky-700 px-3 py-1.5 text-white hover:bg-sky-600 disabled:opacity-50">
+            {sending ? 'Đang gửi…' : 'Nhờ agent thiết lập preview'}
+          </button>
+          {agents.length > 1 && (
+            <select value={agent} onChange={e => setAgent(e.target.value)}
+              className="h-7 rounded bg-[#2d2d2d] px-1 text-gray-200 outline-none">
+              {agents.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          )}
+        </div>
+      ) : null}
+      {err && <p className="text-red-300 text-[12px]">{err}</p>}
       <p>
-        Thêm <code className="text-sky-300">bomclaw.json</code> ở thư mục gốc dự án — hoặc nhắn agent trong phòng:
-        {' '}<em>“làm preview cho dự án theo skill preview”</em>.
+        Hoặc tự thêm <code className="text-sky-300">bomclaw.json</code> ở thư mục gốc dự án. Agent kiểm tra bằng
+        {' '}<code className="text-sky-300">bomclaw preview check {channelID}</code>.
       </p>
       <pre className="rounded bg-[#141414] p-3 text-[12px] text-gray-300 overflow-x-auto">{`{
   "preview": {

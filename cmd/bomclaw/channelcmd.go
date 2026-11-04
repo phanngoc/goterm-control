@@ -177,6 +177,14 @@ func runChannel(args []string) {
 		if c.Workspace != "" {
 			fmt.Printf("workspace: %s\n", c.Workspace)
 			fmt.Printf("brief:     %s\n", filepath.Join(c.Workspace, coord.AgentsFile))
+			// The Preview button reads bomclaw.json. Saying so here, at the
+			// moment the project is born, is what gets it written: a room made
+			// without it (shopee-deals, 2026-11-03) opened to "no preview".
+			if spec, _ := gateway.ReadPreviewSpec(c.Workspace); spec != nil {
+				fmt.Printf("preview:   declared in %s\n", gateway.PreviewManifest)
+			} else {
+				fmt.Printf("preview:   none yet. Once there is something to look at: bomclaw preview init %s (skill: preview)\n", c.ID)
+			}
 		}
 
 	case "join":

@@ -124,6 +124,8 @@ func main() {
 		runMsg(os.Args[2:])
 	case "ch", "channel":
 		runChannel(os.Args[2:])
+	case "preview":
+		runPreview(os.Args[2:])
 	case "skills", "skill":
 		runSkills(os.Args[2:])
 	case "artifact":
@@ -179,6 +181,7 @@ Commands:
   inbox              Read messages other agents sent to this one
   msg                Send a message to another agent
   ch                 Shared channels: post, read, thread, mention
+  preview            Set up and check a project's Preview button (bomclaw.json)
   artifact           Store and fetch what a task produced
   skills             What this agent can do, and when each skill applies
   passwd             Set the dashboard password (creates the account if none)
