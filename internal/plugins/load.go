@@ -420,7 +420,7 @@ func executables(dir string) []string {
 		if err != nil {
 			continue
 		}
-		if runtime.GOOS == "windows" || info.Mode()&0o111 != 0 {
+		if runnable(e.Name(), info.Mode()) {
 			out = append(out, e.Name())
 		}
 	}
@@ -443,4 +443,25 @@ func absOrEmpty(dir string) string {
 		return abs
 	}
 	return dir
+}
+
+// runnable says whether a file in bin/ is a command. On Windows there is no
+// executable bit — what makes a file runnable from PATH is an extension in
+// PATHEXT, so that is the test; anything else (a README, a .py the command
+// wraps) would be offered to the agent as a command that cannot run.
+func runnable(name string, mode os.FileMode) bool {
+	if runtime.GOOS != "windows" {
+		return mode&0o111 != 0
+	}
+	exts := os.Getenv("PATHEXT")
+	if exts == "" {
+		exts = ".COM;.EXE;.BAT;.CMD"
+	}
+	ext := strings.ToUpper(filepath.Ext(name))
+	for _, e := range strings.Split(exts, ";") {
+		if ext != "" && strings.EqualFold(strings.TrimSpace(e), ext) {
+			return true
+		}
+	}
+	return false
 }

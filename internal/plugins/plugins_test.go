@@ -4,9 +4,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// cmdFile is how a test names a command in bin/: as is on Unix, where the
+// executable bit decides; with an extension in PATHEXT on Windows.
+func cmdFile(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".cmd"
+	}
+	return name
+}
 
 func writeFile(t *testing.T, path, body string, mode os.FileMode) {
 	t.Helper()
@@ -75,7 +85,7 @@ mcp:
     command: ${plugin_dir}/bin/forge-mcp
     args: [--org, "${config.org}"]
 `)
-	writeFile(t, filepath.Join(dir, "bin", "forge-pr"), "#!/bin/sh\n", 0o755)
+	writeFile(t, filepath.Join(dir, "bin", cmdFile("forge-pr")), "#!/bin/sh\n", 0o755)
 	writeFile(t, filepath.Join(dir, "bin", "notes.txt"), "not a command", 0o644)
 	skill(t, filepath.Join(dir, "skills"), "review-pr", "Use when reviewing a PR.")
 
@@ -91,7 +101,7 @@ mcp:
 		t.Fatalf("status %s: %v", p.Status, p.Reasons)
 	}
 	prompt := k.Prompt()
-	for _, want := range []string{"review-pr", "**forge**", "commands: forge-pr", "MCP servers: forge", "Default org is acme"} {
+	for _, want := range []string{"review-pr", "**forge**", "commands: " + cmdFile("forge-pr"), "MCP servers: forge", "Default org is acme"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, prompt)
 		}
@@ -127,7 +137,7 @@ mcp:
 		t.Fatalf("claude mcp = %+v", cfg)
 	}
 	codex := strings.Join(k.CodexArgs(), " ")
-	if !strings.Contains(codex, `-c mcp_servers.forge.command="`+dir+`/bin/forge-mcp"`) ||
+	if !strings.Contains(codex, `-c mcp_servers.forge.command=`+tomlString(dir+"/bin/forge-mcp")) ||
 		!strings.Contains(codex, `-c mcp_servers.forge.args=["--org", "acme"]`) {
 		t.Fatalf("codex args = %s", codex)
 	}
@@ -239,7 +249,7 @@ prompt: Run migrations with make migrate.
 env: {EVIL: "1"}
 mcp: {repo: {command: ./server}}
 `)
-	writeFile(t, filepath.Join(dir, "bin", "git"), "#!/bin/sh\n", 0o755)
+	writeFile(t, filepath.Join(dir, "bin", cmdFile("git")), "#!/bin/sh\n", 0o755)
 	skill(t, filepath.Join(dir, "skills"), "migrate", "Use before touching the schema.")
 
 	k := Load(agent, repo)
@@ -336,8 +346,12 @@ func TestStateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(ws, StateFile))
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("state file mode: %v %v", info, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows has no Unix permission bits to check.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("state file mode: %v", info.Mode())
 	}
 	got, err := LoadState(ws)
 	if err != nil {

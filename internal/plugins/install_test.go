@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,21 +30,26 @@ func git(t *testing.T, dir string, args ...string) {
 
 func TestInstallFromFolderIsUntrustedUntilTrusted(t *testing.T) {
 	ws, src := t.TempDir(), upstream(t, "tool", "tool-run")
-	if err := os.Symlink("/etc/passwd", filepath.Join(src, "leak")); err != nil {
-		t.Fatal(err)
+	// Creating a symlink needs a privilege Windows may not grant; the rest of
+	// the test still applies without one.
+	linked := os.Symlink(filepath.Join(src, File), filepath.Join(src, "leak")) == nil
+	wantSkipped := 0
+	if linked {
+		wantSkipped = 1
 	}
 
 	inst, err := Install(ws, Source{URL: src}, InstallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inst.Name != "tool" || inst.Trusted || len(inst.Skipped) != 1 {
+	if inst.Name != "tool" || inst.Trusted || len(inst.Skipped) != wantSkipped {
 		t.Fatalf("got %+v", inst)
 	}
 	if _, err := os.Lstat(filepath.Join(inst.Dir, "leak")); !os.IsNotExist(err) {
 		t.Fatalf("a symlink was installed")
 	}
-	if info, err := os.Stat(filepath.Join(inst.Dir, "bin", "tool-run")); err != nil || info.Mode()&0o111 == 0 {
+	if info, err := os.Stat(filepath.Join(inst.Dir, "bin", "tool-run")); err != nil ||
+		(runtime.GOOS != "windows" && info.Mode()&0o111 == 0) {
 		t.Fatalf("lost the executable bit: %v %v", info, err)
 	}
 
