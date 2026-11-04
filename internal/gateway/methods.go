@@ -270,6 +270,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelBind(deps, params)
 		case "channels.unbind":
 			return handleChannelUnbind(deps, params)
+		case "channels.repos", "channels.repo_add", "channels.repo_primary", "channels.repo_remove":
+			return handleChannelRepos(deps, method, params)
 		case "skills.list":
 			return handleSkillsList(deps, params)
 		case "skills.get":

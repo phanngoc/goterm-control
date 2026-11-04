@@ -459,6 +459,13 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	children, _ := r.db.Children(task.ID)
 	inbox := r.taskMail(task.ID)
 	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers(), workspace, r.db.RunspacePath(task.ContextID), shared)
+	// The repos the task's project keeps its code in, so a run does not
+	// rediscover them from prose (coord/repos.go).
+	if task.ChannelID != "" {
+		if rb := r.db.RepoBrief(task.ChannelID); rb != "" {
+			prompt += "\n\n" + rb
+		}
+	}
 
 	// Same rule as the chat lane: only a brand-new session. A resumed one
 	// already carries this, and injecting it again pollutes the context.

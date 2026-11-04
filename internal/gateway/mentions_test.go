@@ -1209,3 +1209,35 @@ func TestAMentionTaskOpensItsThread(t *testing.T) {
 		t.Errorf("detail points at thread %q / session %q, want thread %s and no session", d.ThreadRoot, d.SessionID, root.ID)
 	}
 }
+
+// The repos a room links are in the prompt of every turn in it, primary
+// first, so an agent does not rediscover where the code is.
+func TestTheRoomsReposAreInThePrompt(t *testing.T) {
+	turn := &recordingTurn{reply: "ok"}
+	deps, cdb := mentionTestDeps(t, turn)
+	c, err := cdb.CreateProject("arcade", "games", "bomclaw", t.TempDir(), []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cdb.AddRepo(c.ID, "phanngoc/arcade-platform", "", "main", "", "bomclaw", false)
+	cdb.AddRepo(c.ID, "phanngoc/rumba-puzzle", "", "", "game Rumba", "bomclaw", false)
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: c.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "@bomclaw2 sửa luật Rumba",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	if turn.count() != 1 {
+		t.Fatalf("turns = %d", turn.count())
+	}
+	p := turn.prompts[0]
+	for _, want := range []string{"Repo GitHub của dự án", "**chính** `phanngoc/arcade-platform`", "phụ `phanngoc/rumba-puzzle`", "game Rumba"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	raw, err := handleChannelRepos(deps, "channels.repo_primary", json.RawMessage(`{"channel_id":"`+c.ID+`","repo":"phanngoc/rumba-puzzle"}`))
+	if err != nil || !strings.Contains(string(raw), `"repo":"phanngoc/rumba-puzzle","url":"https://github.com/phanngoc/rumba-puzzle","role":"primary"`) {
+		t.Errorf("rpc primary: %s %v", raw, err)
+	}
+}
