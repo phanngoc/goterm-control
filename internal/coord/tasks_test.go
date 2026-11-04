@@ -510,3 +510,34 @@ func TestResumeIsGuardedAgainstADoubleClick(t *testing.T) {
 		t.Errorf("max_attempts = %d, want a single +5 (%d)", got.MaxAttempts, before.MaxAttempts+5)
 	}
 }
+
+// An agent can end a duplicate it did not claim, with the reason on record —
+// but not a task another agent is running right now.
+func TestAnAgentClosesADuplicateButNotARunningTask(t *testing.T) {
+	db := testDB(t)
+	dup, err := db.CreateTask(NewTask{Title: "copy", CreatedBy: "bomclaw", AssignedTo: "bomclaw2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CloseTask(dup.ID, "bomclaw3", ""); err == nil {
+		t.Error("closed without a reason")
+	}
+	if _, err := db.CloseTask(dup.ID, "bomclaw3", "duplicate of t_x"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := db.GetTask(dup.ID)
+	if got.State != TaskCanceled || !strings.Contains(got.Result, "closed by bomclaw3: duplicate of t_x") {
+		t.Errorf("closed task: %s %q", got.State, got.Result)
+	}
+
+	live, _ := db.CreateTask(NewTask{Title: "live", CreatedBy: "owner", AssignedTo: "bomclaw2"})
+	if _, err := db.ClaimTask("bomclaw2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CloseTask(live.ID, "bomclaw3", "looks done"); err == nil {
+		t.Error("closed a task another agent is running")
+	}
+	if _, err := db.CloseTask(live.ID, "bomclaw2", "superseded"); err != nil {
+		t.Errorf("the agent running it could not close its own: %v", err)
+	}
+}

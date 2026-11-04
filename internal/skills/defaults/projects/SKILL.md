@@ -51,6 +51,7 @@ bomclaw task list [--state S] [--mine]
 bomclaw task show --id <id>      # runs, checkpoint, history
 bomclaw task tree --id <id>      # a goal: what is left, what it cost
 bomclaw task cancel --id <id>    # only when the person says stop
+bomclaw task close --id <id> --reason "…"   # a task that should not run: duplicate, already done, plan changed
 ```
 
 - `--channel` puts the task on that project's board. Without it, the task
@@ -90,7 +91,11 @@ move files that a running site or job depends on without asking.
 | "giao cho agent 2" | `task new … --to bomclaw2` |
 | "báo vào Telegram" for a room | `ch bind <channel> --mode all` |
 | "dừng/huỷ task …" | `task cancel --id …` |
+| you find a duplicate / already-done / obsolete task | `task close --id … --reason "duplicate of t_…"`, then say so in the thread |
 | "đóng phòng X" | `ch archive ch_x` |
 
 Confirm before archiving a room or cancelling a task the person did not name
-exactly. Everything else on this page is cheap to undo, so just do it.
+exactly. Closing is different: a task that duplicates one already done, or that
+a change of plan made pointless, you close yourself with the reason — do not
+ask the person to run a command for it. You cannot close a task another agent
+is running; message that agent instead. Everything else on this page is cheap to undo, so just do it.
