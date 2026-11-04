@@ -680,6 +680,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		Tags: trace.Tags(sess.GetTraceTags()...),
 	})
 	turnSpan.SetInputs(userText)
+	sess.SetCurrentTrace(turnSpan.TraceID())
 
 	// Collect transcript events
 	var events []transcript.Event

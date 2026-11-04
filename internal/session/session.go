@@ -57,8 +57,9 @@ type Session struct {
 	Seq              int     `json:"seq"`
 	MemoryFlushed    bool    `json:"memory_flushed,omitempty"` // threshold flush already ran this session
 
-	mu       sync.Mutex `json:"-"`
-	cancelFn func()     `json:"-"`
+	mu           sync.Mutex `json:"-"`
+	currentTrace string
+	cancelFn     func() `json:"-"`
 
 	// lastContextTokens is the context size of the most recent CLI call
 	// (input + cache tokens). In-memory only — after a restart the threshold
@@ -262,6 +263,21 @@ func (s *Session) AddTokens(input, output int) {
 	s.InputTokens += input
 	s.OutputTokens += output
 	s.UpdatedAt = time.Now()
+}
+
+// SetCurrentTrace records the trace of the turn now running, so whatever the
+// turn spawns (a task record of a mention) can point at it.
+func (s *Session) SetCurrentTrace(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.currentTrace = id
+}
+
+// CurrentTrace is the trace of the turn now running, or "".
+func (s *Session) CurrentTrace() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentTrace
 }
 
 // AddUsage records prompt-cache tokens and cost from a run.
