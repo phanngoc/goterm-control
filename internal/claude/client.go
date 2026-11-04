@@ -111,12 +111,13 @@ const ProviderName = "claude"
 // --- stream-json event types from claude CLI ---
 
 type streamEvent struct {
+	// TotalCostUSD is the CLI's own figure for the call, on the result line.
+	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
+
 	Type      string      `json:"type"`
 	Message   *cliMessage `json:"message,omitempty"`
 	SessionID string      `json:"session_id,omitempty"`
 	Result    string      `json:"result,omitempty"`
-	// TotalCostUSD is the CLI's own figure for the call, on the result line.
-	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
 	IsError   bool        `json:"is_error,omitempty"`
 	Errors    []string    `json:"errors,omitempty"`
 	Usage     *cliUsage   `json:"usage,omitempty"`
