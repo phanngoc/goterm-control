@@ -39,6 +39,10 @@ const (
 	// ScopeProject is the folder a turn runs in, usually somebody's repo:
 	// skills and prompt always, code only when the agent trusts it.
 	ScopeProject Scope = "project"
+	// ScopeInstalled is a plugin fetched from elsewhere into the agent's own
+	// folder (it carries a SourceFile). Same rule as a project plugin: it is
+	// someone else's code until the owner says otherwise.
+	ScopeInstalled Scope = "installed"
 )
 
 // Plugin is one plugin as resolved for one turn.
@@ -151,7 +155,11 @@ func Load(agentWorkspace, turnWorkspace string) *Kit {
 			if _, err := os.Stat(filepath.Join(dir, File)); err != nil {
 				continue // a folder with no manifest is just a folder
 			}
-			add(open(dir, r.scope, st))
+			scope := r.scope
+			if _, err := os.Stat(filepath.Join(dir, SourceFile)); err == nil && scope == ScopeAgent {
+				scope = ScopeInstalled
+			}
+			add(open(dir, scope, st))
 		}
 	}
 
@@ -252,7 +260,7 @@ func resolve(list []*Plugin, st State) {
 			continue
 		}
 		p.Reasons = append(p.Reasons, unmet(p)...)
-		if p.Scope == ScopeProject && p.Kind == KindPlugin && !st.trusted(p.Name) && p.runsCode() {
+		if p.Scope != ScopeAgent && p.Kind == KindPlugin && !st.trusted(p.Name) && p.runsCode() {
 			p.Untrusted = true
 		}
 		if len(p.Reasons) > 0 && !onlySoft(p) {

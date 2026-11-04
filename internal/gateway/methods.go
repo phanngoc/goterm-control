@@ -274,6 +274,11 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleChannelRepos(deps, method, params)
 		case "skills.list":
 			return handleSkillsList(deps, params)
+		case "plugins.list":
+			return handlePluginsList(deps, params)
+		case "plugins.set", "plugins.config", "plugins.install", "plugins.update",
+			"plugins.uninstall", "plugins.copy":
+			return handlePluginsMutate(deps, method, params)
 		case "skills.get":
 			return handleSkillGet(deps, params)
 		case "skills.install":

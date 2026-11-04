@@ -387,3 +387,61 @@ export interface AgentSkills {
   online: boolean
   provider?: string
 }
+
+// The plugins hub (internal/gateway/plugins.go). A secret setting arrives with
+// set=true and no value: its value never leaves the server.
+export interface HubSetting {
+  key: string
+  description?: string
+  required?: boolean
+  secret?: boolean
+  enum?: string[]
+  default?: string
+  env?: string
+  var: string
+  value?: string
+  set: boolean
+  configured: boolean
+}
+
+export interface PluginSource {
+  url: string
+  ref?: string
+  path?: string
+  commit?: string
+  installed_at: string
+}
+
+export type PluginStatus = 'active' | 'pending' | 'disabled' | 'broken'
+
+export interface HubPlugin {
+  name: string
+  kind: 'plugin' | 'skill'
+  scope: 'agent' | 'project' | 'installed'
+  status: PluginStatus
+  reasons?: string[]
+  description?: string
+  version?: string
+  dir: string
+  trusted: boolean
+  untrusted: boolean
+  needs_trust: boolean
+  skills?: string[]
+  commands?: string[]
+  mcp?: string[]
+  prompt?: string
+  provides?: string[]
+  injects?: string[]
+  source?: PluginSource
+  settings?: HubSetting[]
+}
+
+export interface AgentPlugins {
+  agent_id: string
+  workspace: string
+  online: boolean
+  provider?: string
+  plugins: HubPlugin[]
+  warnings?: string[]
+  error?: string
+}

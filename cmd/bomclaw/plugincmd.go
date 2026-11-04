@@ -24,6 +24,9 @@ const pluginsUsage = `Usage: bomclaw plugins <command> [flags]
   show <name>                One plugin in full: contributions, config, reasons
   prompt                     The block the agent receives on its next turn
   new <name>                 Scaffold a plugin in this agent's workspace
+  install <git-url|folder>   Fetch a plugin (--ref, --path, --name, --replace, --trust)
+  update <name>              Re-fetch an installed plugin from its source (--trust)
+  uninstall <name>           Remove a plugin and forget its switches and settings
   enable|disable <name>      Turn a plugin (or a bare skill) on or off
   trust|untrust <name>       Let a project's plugin run commands/MCP, or stop it
   config <name> [k=v ...]    Show settings, or set them (k= clears one)
@@ -40,6 +43,11 @@ func runPlugins(args []string) {
 	workspace := fs.String("workspace", "", "The agent's workspace")
 	project := fs.String("project", "", "The folder a turn runs in")
 	asJSON := fs.Bool("json", false, "Print JSON")
+	ref := fs.String("ref", "", "install: branch or tag")
+	subPath := fs.String("path", "", "install: the plugin's folder inside the repository")
+	asName := fs.String("name", "", "install: install under this name")
+	replace := fs.Bool("replace", false, "install: overwrite an existing plugin of that name")
+	trust := fs.Bool("trust", false, "install/update: let its commands, env and MCP servers run")
 	fs.Usage = func() { fmt.Fprintln(os.Stderr, pluginsUsage) }
 
 	sub, rest := "list", args
@@ -81,6 +89,21 @@ func runPlugins(args []string) {
 		dir, err := plugins.Scaffold(ws, pos[0])
 		exitIf(err)
 		fmt.Printf("created %s\nEdit %s, then `bomclaw plugins show %s`.\n", dir, plugins.File, pos[0])
+	case "install":
+		need(1)
+		inst, err := plugins.Install(ws, plugins.Source{URL: pos[0], Ref: *ref, Path: *subPath},
+			plugins.InstallOptions{Name: *asName, Replace: *replace, Trust: *trust})
+		exitIf(err)
+		reportInstall(inst, "installed")
+	case "update":
+		need(1)
+		inst, err := plugins.Update(ws, pos[0], *trust)
+		exitIf(err)
+		reportInstall(inst, "updated")
+	case "uninstall", "remove", "rm":
+		need(1)
+		exitIf(plugins.Uninstall(ws, pos[0]))
+		fmt.Printf("%s uninstalled — from the next turn\n", pos[0])
 	case "enable", "disable":
 		need(1)
 		updateState(ws, func(st *plugins.State) { st.SetEnabled(pos[0], sub == "enable") })
@@ -219,7 +242,7 @@ func pluginShow(k *plugins.Kit, name string, asJSON bool) {
 		fmt.Printf("  ! %s\n", r)
 	}
 	if p.Untrusted {
-		fmt.Printf("  ! a project plugin: its commands, env and MCP servers are off until `bomclaw plugins trust %s`\n", p.Name)
+		fmt.Printf("  ! %s plugin: its commands, env and MCP servers are off until `bomclaw plugins trust %s`\n", p.Scope, p.Name)
 	}
 	section := func(title string, lines []string) {
 		if len(lines) > 0 {
@@ -306,4 +329,20 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func reportInstall(inst *plugins.Installed, verb string) {
+	at := inst.Source.URL
+	if inst.Source.Commit != "" {
+		at += " @ " + inst.Source.Commit[:min(12, len(inst.Source.Commit))]
+	}
+	fmt.Printf("%s %s from %s\n  %s\n", verb, inst.Name, at, inst.Dir)
+	for _, s := range inst.Skipped {
+		fmt.Printf("  skipped %s (symlinks and special files are never installed)\n", s)
+	}
+	if inst.Trusted {
+		fmt.Println("  trusted: its commands, env and MCP servers run from the next turn")
+	} else {
+		fmt.Printf("  NOT trusted: skills and prompt apply now; read it, then `bomclaw plugins trust %s`\n", inst.Name)
+	}
 }

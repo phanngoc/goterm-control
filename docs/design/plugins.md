@@ -85,12 +85,42 @@ with mode 0600.
   into the first message of a thread, so a plugin change reaches their prompt
   on the next new thread. Env and MCP changes reach them on the next turn.
 
+## Install and the hub (2026-11-04, `feat/plugins-hub`)
+
+- `bomclaw plugins install <git-url|folder> [--ref] [--path] [--name] [--replace] [--trust]`,
+  `update <name>`, `uninstall <name>` (`internal/plugins/install.go`).
+  - `git clone --depth 1` with `protocol.ext.allow=never` and no terminal
+    prompt. Only https/http/ssh/git/file and scp-style URLs are accepted, and
+    nothing starting with `-`.
+  - Symlinks and special files are never copied. Size is capped at 64 MB and
+    5000 files.
+  - The new folder is staged next to the old one and swapped in with renames.
+  - `.source.yaml` records url, ref, path and commit, so `update` and copies
+    can fetch from upstream again.
+- An installed plugin is its own scope (`installed`) and needs trust, the same
+  rule as a repo plugin. Installing or updating **withdraws** trust: trust was
+  given to the code that was there. Uninstalling forgets the plugin's settings,
+  so secrets meant for it never flow to a later plugin with the same name.
+- Gateway: `plugins.list|set|config|install|update|uninstall|copy`. They are
+  answered by the dashboard process straight from the workspaces, so they keep
+  working while an agent is down. A secret never leaves the server: the hub
+  only learns whether it is set.
+- Dashboard: an Admin → Plugins pane with one column per agent.
+  - Each row shows status and reasons, plus chips for what the plugin brings,
+    provides and injects.
+  - Settings forms are generated from the plugin's schema.
+  - Per row: install, enable/disable, trust, update, copy to another agent,
+    uninstall.
+
 ## Next steps, if wanted
 
-- A dashboard hub view (the skills hub already lists per-agent skills, and
-  `bomclaw plugins list --json` is the data).
-- `bomclaw plugins install <git-url>` and copying a plugin between agents
-  (skills already have `Copy`).
+- Hooks around tool calls, normalised through one `bomclaw hook` shim.
+  - Claude: through `--settings`; verified to block a Bash call under
+    `bypassPermissions`.
+  - opencode: a generated plugin, passed in `OPENCODE_CONFIG_CONTENT`.
+  - codex: `-c features.hooks=true -c hooks.*`. Decided:
+    `--dangerously-bypass-hook-trust` on codex calls, because the plugin
+    trust gate already vets hook sources.
 - Peer roster: list a peer's plugins next to its skills, so delegation can
   route on tools as well as knowledge.
 
