@@ -10,9 +10,9 @@
 // easier to test than to debug through a browser.
 
 export type Tab = 'sessions' | 'chat' | 'status' | 'admin' | 'files'
-export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'skills' | 'plugins' | 'settings'
+export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'plugins' | 'settings'
 
-export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'skills', 'plugins', 'settings']
+export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'plugins', 'settings']
 
 export interface Route {
   tab: Tab
@@ -59,7 +59,9 @@ export function parseRoute(pathname: string): Route {
     case 'admin': {
       // An unknown or missing pane lands on Overview rather than a blank panel,
       // which is what a stale or hand-typed link deserves.
-      const pane = ADMIN_PANES.find(p => p === parts[1])
+      // Skills live inside plugins now; an old /admin/skills link lands there.
+      const wanted = parts[1] === 'skills' ? 'plugins' : parts[1]
+      const pane = ADMIN_PANES.find(p => p === wanted)
       if (pane === 'tasks' && parts[2]) {
         return { tab: 'admin', adminPane: 'tasks', taskId: decodeURIComponent(parts[2]) }
       }

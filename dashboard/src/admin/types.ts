@@ -426,7 +426,7 @@ export interface HubPlugin {
   trusted: boolean
   untrusted: boolean
   needs_trust: boolean
-  skills?: string[]
+  skills?: PluginSkill[]
   commands?: string[]
   mcp?: string[]
   hooks?: string[]
@@ -437,12 +437,21 @@ export interface HubPlugin {
   settings?: HubSetting[]
 }
 
+export interface PluginSkill {
+  name: string
+  description?: string
+  path: string
+  bundled?: boolean
+  edited?: boolean
+}
+
 export interface AgentPlugins {
   agent_id: string
   workspace: string
   online: boolean
   provider?: string
   plugins: HubPlugin[]
+  missing?: string[]
   warnings?: string[]
   error?: string
 }
