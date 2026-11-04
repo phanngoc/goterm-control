@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useStore, ChatMessage } from '../stores/store'
 import { eventsToMessages } from '../lib/transcript'
 import MessageMarkdown from './MessageMarkdown'
+import ChatInput, { type ChatInputHandle } from './ChatInput'
 
 export default function ChatView({ call }: { call: (m: string, p?: any) => Promise<any> }) {
   const messages = useStore(s => s.messages)
@@ -12,7 +13,7 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
   const activeSessionId = useStore(s => s.activeSessionId)
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const inputRef = useRef<ChatInputHandle>(null)
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -78,13 +79,6 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
-  }
-
   return (
     <div className="h-full flex flex-col">
       {/* Messages */}
@@ -118,35 +112,18 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
       </div>
 
       {/* Input */}
-      <div className="border-t border-gray-800 p-3 bg-gray-900">
-        <div className="flex gap-2 max-w-3xl mx-auto">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-            rows={1}
-            className="flex-1 bg-gray-800 text-gray-100 rounded-xl px-4 py-2.5 text-sm resize-none border border-gray-700 focus:border-blue-500 focus:outline-none placeholder-gray-500"
-            disabled={sending}
-          />
-          {sending ? (
-            <button
-              onClick={() => call('cancel').catch(() => {})}
-              className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-500 transition-colors"
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              onClick={send}
-              disabled={!input.trim()}
-              className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Send
-            </button>
-          )}
-        </div>
+      <div className="border-t border-gray-800 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-gray-900">
+        <ChatInput
+          ref={inputRef}
+          className="max-w-3xl mx-auto"
+          value={input}
+          onChange={setInput}
+          onSend={send}
+          disabled={sending}
+          busy={sending}
+          onStop={() => call('cancel').catch(() => {})}
+          placeholder="Nhắn cho agent…"
+        />
       </div>
     </div>
   )
@@ -172,7 +149,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             🔧 {compactTools(message.tools)}
           </div>
         )}
-        <MessageMarkdown>{message.content}</MessageMarkdown>
+        {/* What a person typed is shown as typed — line breaks included —
+            the way ChatGPT shows it; markdown would fold their lines together. */}
+        {isUser
+          ? <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          : <MessageMarkdown>{message.content}</MessageMarkdown>}
         {message.partial && (
           <div className="text-xs text-yellow-500/80 mt-1 animate-pulse">
             ⏳ đang trả lời… (bản lưu tạm mỗi 10s)

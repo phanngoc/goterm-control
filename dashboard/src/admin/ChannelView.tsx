@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
+import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { ArtifactModal, isPage } from './ArtifactView'
 import GatewayEditor from './GatewayEditor'
@@ -478,7 +479,9 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
       {/* The agents write markdown — tables, code, headings — and a thread that
           shows it raw is a thread where a comparison table is a wall of pipes. */}
       <div className="mt-1 text-sm text-gray-100 break-words">
-        <MessageMarkdown>{m.body}</MessageMarkdown>
+        {mine
+          ? <div className="whitespace-pre-wrap">{m.body}</div>
+          : <MessageMarkdown>{m.body}</MessageMarkdown>}
       </div>
 
       {/* An answered message shows its answer. A count on its own reads like
@@ -516,42 +519,27 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
   to: string; setTo: (s: string) => void; agents: string[]; placeholder: string
 }) {
   return (
-    <div className="border-t border-gray-800 bg-gray-900/40">
-      <div className="p-3 flex gap-2">
-        {/* Who you are talking to. The author is always you — a person at a
-            browser is a person — so the only choice here is which agent the
-            line is addressed at. Picking one rings its doorbell without making
-            anyone type the name a second time; picking nobody leaves the room
-            readable and no one interrupted. */}
-        <select
-          value={to}
-          onChange={e => setTo(e.target.value)}
-          title="Which agent this is for"
-          className="px-2 py-2 text-sm bg-gray-950 rounded ring-1 ring-sky-500/50 text-sky-300 outline-none"
-        >
-          {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
-        </select>
-        <input
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          // Enter while an IME is composing commits the candidate — Vietnamese,
-          // Japanese, Korean — and is not a send. Chrome reports that press as
-          // keyCode 229; isComposing covers the rest.
-          onKeyDown={e => {
-            if (e.nativeEvent.isComposing || e.keyCode === 229) return
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() }
-          }}
-          placeholder={`${placeholder} — ${to || 'no agent'} will answer`}
-          className="flex-1 px-3 py-2 text-sm bg-gray-950 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
-        />
-        <button
-          onClick={onSend}
-          disabled={!value.trim() || !to}
-          className="px-4 py-2 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          Send
-        </button>
-      </div>
+    <div className="border-t border-gray-800 bg-gray-900/40 p-3">
+      <ChatInput
+        value={value} onChange={onChange} onSend={onSend}
+        canSend={!!to}
+        placeholder={`${placeholder}…`}
+        tools={
+          /* Who you are talking to. The author is always you — a person at a
+             browser is a person — so the only choice here is which agent the
+             line is addressed at. Picking one rings its doorbell without
+             making anyone type the name a second time. */
+          <select
+            value={to}
+            onChange={e => setTo(e.target.value)}
+            title="Which agent this is for"
+            className="h-7 max-w-[11rem] truncate rounded-full bg-gray-900 px-2 text-xs text-sky-300 ring-1 ring-sky-500/40 outline-none"
+          >
+            {agents.length === 0 && <option value="">no agent</option>}
+            {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
+          </select>
+        }
+      />
     </div>
   )
 }

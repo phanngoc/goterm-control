@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import type { Channel, ChannelMessage } from './types'
 
@@ -187,7 +188,7 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
                 <span>{clock(m.created_at)}</span>
               </div>
               <div className={`rounded-lg px-3 py-2 text-[13px] ${mine ? 'bg-sky-950/50' : progress ? 'bg-amber-950/30 text-gray-300' : 'bg-[#252526]'}`}>
-                <MessageMarkdown>{m.body}</MessageMarkdown>
+                {mine ? <MineBody body={m.body} /> : <MessageMarkdown>{m.body}</MessageMarkdown>}
               </div>
             </div>
           )
@@ -197,42 +198,45 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
         )}
       </div>
 
-      <div className="shrink-0 border-t border-black/60 p-2 space-y-1.5">
-        <div className="flex items-center gap-2 text-[11px] text-gray-500">
-          <select
-            value={agent} onChange={e => setAgent(e.target.value)}
-            className="h-6 rounded bg-[#2d2d2d] px-1 text-gray-200 outline-none"
-            title="Agent nhận tin"
-          >
-            {agents.length === 0 && <option value="">(phòng chưa có agent)</option>}
-            {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
-          </select>
-          <button
-            onClick={() => { setAttach(v => !v); refreshCtx() }}
-            title="Gửi kèm file, dòng và đoạn đang chọn"
-            className={`truncate ${attach ? 'text-sky-300' : 'text-gray-500 hover:text-gray-300'}`}
-          >
-            📎 {attach ? (ctx ? `${ctx.path}:${ctx.line}${ctx.selection ? ` · ${ctx.selection.split('\n').length} dòng chọn` : ''}` : 'không có file mở') : 'không kèm ngữ cảnh'}
-          </button>
-        </div>
-        <textarea
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onFocus={refreshCtx}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
-          }}
-          rows={3}
-          placeholder={session ? 'Nhắn tiếp trong phiên này… (Enter gửi, Shift+Enter xuống dòng)' : 'Bắt đầu phiên mới… (Enter gửi)'}
-          className="w-full resize-none rounded bg-[#2d2d2d] px-2 py-1.5 text-[13px] text-gray-100 outline-none ring-1 ring-transparent focus:ring-sky-700 placeholder:text-gray-500"
+      <div className="shrink-0 border-t border-black/60 p-2">
+        <ChatInput
+          value={draft} onChange={setDraft} onSend={send} onFocus={refreshCtx}
+          canSend={!!agent && !sending} busy={sending}
+          maxHeight={260}
+          placeholder={session ? 'Nhắn tiếp trong phiên này…' : 'Bắt đầu phiên mới…'}
+          tools={<>
+            <select
+              value={agent} onChange={e => setAgent(e.target.value)}
+              className="h-6 max-w-[8rem] shrink-0 rounded-full bg-[#2d2d2d] px-2 text-[11px] text-gray-200 outline-none"
+              title="Agent nhận tin"
+            >
+              {agents.length === 0 && <option value="">(phòng chưa có agent)</option>}
+              {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => { setAttach(v => !v); refreshCtx() }}
+              title="Gửi kèm file, dòng và đoạn đang chọn"
+              className={`min-w-0 truncate text-[11px] ${attach ? 'text-sky-300' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              📎 {attach ? (ctx ? `${ctx.path}:${ctx.line}${ctx.selection ? ` · ${ctx.selection.split('\n').length} dòng` : ''}` : 'không có file mở') : 'không kèm'}
+            </button>
+          </>}
         />
-        <div className="flex justify-end">
-          <button
-            onClick={send} disabled={!draft.trim() || !agent || sending}
-            className="px-3 py-1 rounded text-[12px] bg-sky-700 text-white hover:bg-sky-600 disabled:opacity-40"
-          >{sending ? 'đang gửi…' : 'Gửi'}</button>
-        </div>
       </div>
     </div>
+  )
+}
+
+// MineBody shows what the person typed as typed, line breaks kept, and the 📎
+// context the panel appended as the markdown it is (a path and a code block).
+function MineBody({ body }: { body: string }) {
+  const at = body.indexOf('\n\n---\n📎')
+  const text = at < 0 ? body : body.slice(0, at)
+  return (
+    <>
+      <div className="whitespace-pre-wrap break-words">{text}</div>
+      {at >= 0 && <div className="mt-1 opacity-80"><MessageMarkdown>{body.slice(at + 6)}</MessageMarkdown></div>}
+    </>
   )
 }
