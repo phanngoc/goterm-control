@@ -534,16 +534,36 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                 onChanged={() => { load(); onChanged() }} onOpenFiles={onOpenFiles}
               />
 
-              {/* The conversation the task has been running in, across every
-                  run. The board could see it existed and gave no way in. */}
-              {detail.session_id && (
+              {/* The conversation of this task. When the work came out of a
+                  room thread — a mention, or a task opened from one — that
+                  thread IS the conversation: where it was asked, discussed and
+                  answered, and where a reply reaches the agent. The private CLI
+                  session is the fallback for work that never had a room. */}
+              {detail.thread_root && onOpenThread ? (
+                <div className="space-y-1">
+                  <button
+                    onClick={() => onOpenThread(detail.thread_root!)}
+                    className="block text-left text-xs text-sky-300 hover:underline"
+                  >
+                    → mở cuộc hội thoại trong thread{detail.project ? ` của #${detail.project.name}` : ''} (đọc tiếp, hỏi thêm)
+                  </button>
+                  {detail.session_id && (
+                    <a
+                      href={`/chat/${encodeURIComponent(detail.session_id)}`}
+                      className="block text-[11px] text-gray-500 hover:text-gray-300 hover:underline"
+                    >
+                      phiên CLI riêng của các lượt chạy task
+                    </a>
+                  )}
+                </div>
+              ) : detail.session_id ? (
                 <a
                   href={`/chat/${encodeURIComponent(detail.session_id)}`}
                   className="block text-xs text-sky-300 hover:underline"
                 >
                   → mở cuộc hội thoại của task này (đọc tiếp, hỏi thêm, chạy tay)
                 </a>
-              )}
+              ) : null}
 
               {/* A row saying "running" for four minutes tells you less than
                   the log would. This is what it is actually doing. */}
@@ -563,14 +583,6 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                 </div>
               )}
 
-              {detail.thread_root && onOpenThread && (
-                <button
-                  onClick={() => onOpenThread(detail.thread_root!)}
-                  className="text-xs text-sky-300 hover:underline text-left"
-                >
-                  ← từ cuộc nói chuyện đã mở việc này
-                </button>
-              )}
 
               {t.parent_id && (
                 <div className="text-xs text-gray-500">

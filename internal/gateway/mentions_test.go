@@ -1168,3 +1168,44 @@ func TestOneMentionOneTask(t *testing.T) {
 	}
 	_ = deps
 }
+
+// The board's "open the conversation" of a mention task is its thread in the
+// room, not a private chat that holds nothing.
+func TestAMentionTaskOpensItsThread(t *testing.T) {
+	turn := &recordingTurn{reply: "xong"}
+	deps, cdb := mentionTestDeps(t, turn)
+	turn.duringTurn = func(sink TurnSink) { sink.NoteTool("Bash(ls)") }
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "kiểm tra giúp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Asked inside the thread, not on its root: the thread is still the root's.
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, ThreadRoot: root.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 làm phần này",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	tasks, _ := cdb.ListTasks(coord.TaskFilter{ChannelID: coord.GeneralChannelID})
+	if len(tasks) != 1 {
+		t.Fatalf("tasks: %+v", tasks)
+	}
+	raw, err := handleTaskGet(deps, json.RawMessage(`{"id":"`+tasks[0].ID+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		ThreadRoot string `json:"thread_root"`
+		SessionID  string `json:"session_id"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.ThreadRoot != root.ID || d.SessionID != "" {
+		t.Errorf("detail points at thread %q / session %q, want thread %s and no session", d.ThreadRoot, d.SessionID, root.ID)
+	}
+}

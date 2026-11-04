@@ -245,6 +245,16 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A task recorded from a mention lives in its thread: that is where it was
+	// asked, worked and answered, and there is no private session to open —
+	// the CLI conversation is the thread's own.
+	sessionID := coord.TaskSessionID(task.ID)
+	if task.Kind == coord.KindMention {
+		sessionID = ""
+		if threadRoot == "" {
+			threadRoot, _ = deps.Coord.MentionThread(task)
+		}
+	}
 	var live *LiveRun
 	if deps.Runs != nil {
 		for _, r := range deps.Runs() {
@@ -280,7 +290,7 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(TaskDetail{
 		Task: task, Events: events, Runs: runs, Children: children,
 		Artifacts: artifacts, Mail: mail, SideTalk: sideTalk,
-		Project: project, SessionID: coord.TaskSessionID(task.ID),
+		Project: project, SessionID: sessionID,
 		ContextCount: inContext, ContextCap: deps.Coord.MaxTasksPerContext(),
 		ContextOpen: contextOpen, ContextRuns: contextRuns, ContextBudget: deps.Coord.RunsPerGoal(),
 		ThreadRoot: threadRoot, Live: live,

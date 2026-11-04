@@ -143,3 +143,17 @@ func (db *DB) EnsureMentionTask(messageID, agent string) (*Task, error) {
 	}
 	return db.OpenMentionTask(*m, agent, "")
 }
+
+// MentionThread is the thread a mention task's work was asked in: the room
+// conversation it belongs to, which is where its talk and its answer are.
+// "" for any other task.
+func (db *DB) MentionThread(t *Task) (rootID, channelID string) {
+	if t == nil || t.Kind != KindMention || !strings.HasPrefix(t.ContextID, "mention_") {
+		return "", ""
+	}
+	m, err := db.GetMessage(strings.TrimPrefix(t.ContextID, "mention_"))
+	if err != nil {
+		return "", ""
+	}
+	return ThreadKey(*m), m.ChannelID
+}
