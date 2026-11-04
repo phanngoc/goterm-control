@@ -45,6 +45,7 @@ type HubPlugin struct {
 	Skills      []string        `json:"skills,omitempty"`
 	Commands    []string        `json:"commands,omitempty"`
 	MCP         []string        `json:"mcp,omitempty"`
+	Hooks       []string        `json:"hooks,omitempty"` // "pre_tool bash", "post_tool *"
 	Prompt      string          `json:"prompt,omitempty"`
 	Provides    []string        `json:"provides,omitempty"`
 	Injects     []string        `json:"injects,omitempty"`
@@ -119,6 +120,17 @@ func hubPlugins(workspace string) ([]HubPlugin, []string) {
 			h.MCP = append(h.MCP, name)
 		}
 		sort.Strings(h.MCP)
+		for _, hk := range p.HookList {
+			m := hk.Match
+			if m == "" {
+				m = "*"
+			}
+			line := hk.Event + " " + m
+			if hk.FailClosed {
+				line += " (fail-closed)"
+			}
+			h.Hooks = append(h.Hooks, line)
+		}
 		h.Injects = append(h.Injects, p.Inject.Required...)
 		for _, o := range p.Inject.Optional {
 			h.Injects = append(h.Injects, o+"?")

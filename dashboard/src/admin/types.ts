@@ -429,6 +429,7 @@ export interface HubPlugin {
   skills?: string[]
   commands?: string[]
   mcp?: string[]
+  hooks?: string[]
   prompt?: string
   provides?: string[]
   injects?: string[]

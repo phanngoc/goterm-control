@@ -52,6 +52,7 @@ function Contributions({ p }: { p: HubPlugin }) {
   if (p.skills?.length) items.push([`${p.skills.length} skill`, p.skills.join(', ')])
   if (p.commands?.length) items.push([`${p.commands.length} lệnh`, p.commands.join(', ')])
   if (p.mcp?.length) items.push([`${p.mcp.length} MCP`, p.mcp.join(', ')])
+  if (p.hooks?.length) items.push([`${p.hooks.length} hook`, p.hooks.join('\n')])
   if (p.prompt) items.push(['prompt', p.prompt])
   if (items.length === 0 && !p.provides?.length && !p.injects?.length) return null
   return (
@@ -168,7 +169,7 @@ function PluginRow({ p, agent, peers, busy, act }: {
               disabled={busy}
               onClick={() => act('plugins.set', { ...base, trusted: !p.trusted },
                 p.trusted ? undefined
-                  : `Tin cậy "${p.name}" trên ${agent}?\n\nLệnh, biến môi trường và MCP server của nó sẽ chạy ở mọi lượt kế tiếp của agent. Đây là code của người khác — hãy đọc nó trước.\n\n${p.dir}`)}
+                  : `Tin cậy "${p.name}" trên ${agent}?\n\nLệnh, biến môi trường, MCP server và hook của nó sẽ chạy ở mọi lượt kế tiếp của agent${p.hooks?.length ? ' — hook chạy trước MỌI lần agent gọi tool khớp' : ''}. Đây là code của người khác — hãy đọc nó trước.\n\n${p.dir}`)}
               className={`px-1.5 py-0.5 text-[11px] rounded ring-1 ${p.trusted
                 ? 'ring-gray-800 text-gray-500 hover:text-amber-300'
                 : 'ring-amber-500/40 text-amber-300 hover:bg-amber-500/10'}`}
@@ -213,6 +214,11 @@ function PluginRow({ p, agent, peers, busy, act }: {
           )}
           {p.commands?.length ? <p className="text-[11px] text-gray-500">lệnh: <span className="font-mono text-gray-400">{p.commands.join(' ')}</span></p> : null}
           {p.mcp?.length ? <p className="text-[11px] text-gray-500">MCP: <span className="font-mono text-gray-400">{p.mcp.join(', ')}</span></p> : null}
+          {p.hooks?.length ? (
+            <p className="text-[11px] text-gray-500" title="Chạy quanh mỗi lần agent gọi tool khớp">
+              hook: <span className="font-mono text-gray-400">{p.hooks.join(' · ')}</span>
+            </p>
+          ) : null}
           {p.prompt && <pre className="text-[11px] text-gray-400 whitespace-pre-wrap bg-gray-950/60 rounded p-2 ring-1 ring-gray-800">{p.prompt}</pre>}
 
           {p.settings?.length ? (
