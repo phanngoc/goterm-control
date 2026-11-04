@@ -306,6 +306,13 @@ func (c *Client) handleCompletedItem(it *threadItem, pending map[string]string, 
 			cb.OnText(it.Text)
 		}
 
+	case "reasoning":
+		// Codex's own summary of what it is thinking, one item per step.
+		if it.Text != "" && cb.OnThinking != nil {
+			cb.OnThinking(it.Text)
+			cb.OnThinking("")
+		}
+
 	case "command_execution":
 		command := pending[it.ID]
 		if command == "" {

@@ -245,7 +245,7 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	progress, _, err := w.deps.Coord.PostMessage(coord.NewChannelMessage{
 		ChannelID: m.ChannelID, ThreadRoot: key,
 		AuthorKind: coord.MemberAgent, AuthorID: w.deps.AgentID,
-		Body: workingLine(nil, "", time.Time{}),
+		Body: workingLine(progressView{}),
 	})
 	if err != nil {
 		log.Printf("mentions: could not open a progress line: %v", err)
@@ -254,8 +254,8 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 
 	sink := &replySink{preview: chat.DefaultPreview()}
 	if progress != nil {
-		sink.onProgress = func(tools []string, partial string, since time.Time) {
-			if err := w.deps.Coord.UpdateMessageBody(progress.ID, workingLine(tools, partial, since)); err != nil {
+		sink.onProgress = func(p progressView) {
+			if err := w.deps.Coord.UpdateMessageBody(progress.ID, workingLine(p)); err != nil {
 				log.Printf("mentions: progress update: %v", err)
 			}
 		}
@@ -688,18 +688,31 @@ func truncateRunes(s string, n int) string {
 // room a new line per token would cost a database write per token to tell the
 // reader something they cannot read that fast anyway.
 type replySink struct {
-	mu      sync.Mutex
-	b       strings.Builder
-	tools   []string
-	started time.Time
-	last    time.Time
+	mu       sync.Mutex
+	b        strings.Builder
+	tools    []string
+	thinking strings.Builder
+	todos    []chat.Todo
+	started  time.Time
+	last     time.Time
+	lastSeen int // len(thinking) at the last report
 
-	// onProgress is called with the tools used so far and the reply as it
-	// stands. Nil when nobody is watching.
-	onProgress func(tools []string, partial string, since time.Time)
+	// onProgress is called with the turn as it stands. Nil when nobody is
+	// watching.
+	onProgress func(progressView)
 
 	preview *chat.StreamPreview
 	done    bool
+}
+
+// progressView is one redraw of the progress line: what the turn has done,
+// what it is thinking, what its plan says is left, and the answer so far.
+type progressView struct {
+	tools    []string
+	thinking string
+	todos    []chat.Todo
+	partial  string
+	since    time.Time
 }
 
 // stop ends progress reporting. A turn whose caller has given up keeps running
@@ -711,6 +724,11 @@ func (r *replySink) stop() {
 }
 
 const progressEvery = 2 * time.Second
+
+// thinkingRedraw is how much new thinking justifies a redraw before the
+// interval is up: about a sentence. Thinking arrives as a stream of small
+// deltas, and a database write per delta tells nobody anything faster.
+const thinkingRedraw = 160
 
 // Write redraws when the answer has grown by enough to be worth reading again
 // — a character threshold rather than a timer, because a timer fires mid-word
@@ -738,6 +756,30 @@ func (r *replySink) NoteTool(label string) {
 	r.report(true)
 }
 
+// NoteThinking keeps the thinking as it streams. An empty chunk ends a block.
+func (r *replySink) NoteThinking(chunk string) {
+	r.mu.Lock()
+	if chunk == "" {
+		if r.thinking.Len() > 0 && !strings.HasSuffix(r.thinking.String(), "\n\n") {
+			r.thinking.WriteString("\n\n")
+		}
+		r.mu.Unlock()
+		return
+	}
+	r.thinking.WriteString(chunk)
+	grown := r.thinking.Len()-r.lastSeen >= thinkingRedraw
+	r.mu.Unlock()
+	r.report(grown)
+}
+
+// NoteTodos takes the model's plan. A new plan is news: report at once.
+func (r *replySink) NoteTodos(todos []chat.Todo) {
+	r.mu.Lock()
+	r.todos = append([]chat.Todo(nil), todos...)
+	r.mu.Unlock()
+	r.report(true)
+}
+
 func (r *replySink) report(now bool) {
 	r.mu.Lock()
 	if r.onProgress == nil || r.done {
@@ -752,13 +794,18 @@ func (r *replySink) report(now bool) {
 		return
 	}
 	r.last = time.Now()
-	tools := append([]string(nil), r.tools...)
-	partial := r.b.String()
-	started := r.started
+	r.lastSeen = r.thinking.Len()
+	v := progressView{
+		tools:    append([]string(nil), r.tools...),
+		thinking: r.thinking.String(),
+		todos:    append([]chat.Todo(nil), r.todos...),
+		partial:  r.b.String(),
+		since:    r.started,
+	}
 	fn := r.onProgress
 	r.mu.Unlock()
 
-	fn(tools, partial, started)
+	fn(v)
 }
 
 func (r *replySink) Text() string {
@@ -771,27 +818,103 @@ func (r *replySink) Flush()                   {}
 func (r *replySink) SendPhoto(string, string) {}
 func (r *replySink) Finalize()                {}
 
-// workingLine is what the room sees while the agent is still working.
-func workingLine(tools []string, partial string, since time.Time) string {
+// workingLine is what the room sees while the agent is still working, laid out
+// the way Claude Code shows a turn: what it is thinking, the steps it took with
+// the current one last, its plan with what is done and what is left, then the
+// answer as it is being written. Markdown, rendered by the dashboard.
+func workingLine(p progressView) string {
 	var b strings.Builder
 	b.WriteString(coord.ProgressPrefix + "_đang làm_")
-	if !since.IsZero() {
-		fmt.Fprintf(&b, " · %s", time.Since(since).Round(time.Second))
+	if !p.since.IsZero() {
+		fmt.Fprintf(&b, " · %s", time.Since(p.since).Round(time.Second))
 	}
-	if len(tools) > 0 {
+	if n := len(p.tools); n > 0 {
+		fmt.Fprintf(&b, " · %d bước", n)
+	}
+	if t := latestThought(p.thinking); t != "" {
+		// A quote block, italic: it reads as the agent's aside, apart from
+		// the steps and the answer, the way Claude Code dims its thinking.
+		b.WriteString("\n\n")
+		for i, line := range strings.Split(t, "\n") {
+			line = strings.TrimSpace(line)
+			if i == 0 {
+				line = "💭 " + line
+			}
+			if line != "" {
+				line = "_" + line + "_"
+			}
+			b.WriteString("> " + line + "\n")
+		}
+	}
+	if n := len(p.tools); n > 0 {
+		b.WriteString("\n")
 		// The last few, newest last: what it is doing now matters more than
 		// what it did first, and the whole list gets long on a real task.
 		from := 0
-		if len(tools) > 5 {
-			from = len(tools) - 5
+		if n > 6 {
+			from = n - 6
+			fmt.Fprintf(&b, "- _… %d bước trước_\n", from)
 		}
-		fmt.Fprintf(&b, " · %s", strings.Join(tools[from:], " → "))
+		for i, t := range p.tools[from:] {
+			mark := "✓"
+			if from+i == n-1 {
+				mark = "▸" // the newest call is the one still running
+			}
+			fmt.Fprintf(&b, "- %s `%s`\n", mark, oneLine(t, 90))
+		}
 	}
-	if p := strings.TrimSpace(partial); p != "" {
-		b.WriteString("\n\n")
-		b.WriteString(chat.DefaultPreview().Cut(p))
+	if len(p.todos) > 0 {
+		done := 0
+		for _, t := range p.todos {
+			if t.Status == "completed" {
+				done++
+			}
+		}
+		fmt.Fprintf(&b, "\n**Kế hoạch** · %d/%d xong\n", done, len(p.todos))
+		for _, t := range p.todos {
+			switch t.Status {
+			case "completed":
+				fmt.Fprintf(&b, "- ☑ ~~%s~~\n", oneLine(t.Content, 100))
+			case "in_progress":
+				label := t.ActiveForm
+				if label == "" {
+					label = t.Content
+				}
+				fmt.Fprintf(&b, "- ◐ **%s**\n", oneLine(label, 100))
+			default:
+				fmt.Fprintf(&b, "- ☐ %s\n", oneLine(t.Content, 100))
+			}
+		}
 	}
-	return b.String()
+	if s := strings.TrimSpace(p.partial); s != "" {
+		b.WriteString("\n---\n\n")
+		b.WriteString(chat.DefaultPreview().Cut(s))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// latestThought is the newest paragraph of thinking, capped: the room needs
+// to see what the agent is weighing now, not everything it weighed before.
+func latestThought(t string) string {
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return ""
+	}
+	paras := strings.Split(t, "\n\n")
+	last := strings.TrimSpace(paras[len(paras)-1])
+	const max = 480
+	if r := []rune(last); len(r) > max {
+		last = "…" + string(r[len(r)-max:])
+	}
+	return last
+}
+
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max-1]) + "…"
+	}
+	return s
 }
 
 // finishProgress replaces the progress line with its final form, or removes it

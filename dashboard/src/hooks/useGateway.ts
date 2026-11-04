@@ -51,6 +51,10 @@ export function useGateway() {
             store.appendStreamingText(msg.data)
           } else if (msg.event === 'tool') {
             store.addStreamingTool(msg.data)
+          } else if (msg.event === 'thinking') {
+            store.appendStreamingThinking(msg.data ?? '')
+          } else if (msg.event === 'todos') {
+            try { store.setStreamingTodos(JSON.parse(msg.data) || []) } catch { /* a malformed plan is not worth a crash */ }
           } else if (msg.event === 'error') {
             store.setStreamingError(msg.data)
           }

@@ -813,7 +813,17 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 					textMu.Lock()
 					latestTodos = todos
 					textMu.Unlock()
+					// The plan is what tells a person how far along the turn
+					// is; a sink that can show it gets every revision.
+					if ts, ok := streamer.(chat.TodoSink); ok {
+						ts.NoteTodos(toChatTodos(todos))
+					}
 				}
+			}
+		},
+		OnThinking: func(chunk string) {
+			if ts, ok := streamer.(chat.ThinkingSink); ok {
+				ts.NoteThinking(chunk)
 			}
 		},
 		OnToolResult: func(name string, toolResult tools.ToolResult) {

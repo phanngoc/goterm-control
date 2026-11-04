@@ -187,14 +187,21 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // newest page, so running it after somebody scrolled up would throw away the
   // history they just asked for and drop them back at the end — twice a
   // minute, while they were reading.
+  //
+  // Faster while an agent is mid-turn: its progress line (thinking, steps,
+  // plan) is redrawn every couple of seconds, and a 4s poll halves that.
+  const working = useMemo(
+    () => [...msgs, ...(thread ?? [])].some(m => m.body.startsWith('⏳ ') || (m.last_reply_text ?? '').startsWith('⏳ ')),
+    [msgs, thread],
+  )
   useEffect(() => {
     const id = setInterval(() => {
       loadChannels()
       if (atBottom.current) loadMessages(active)
       if (threadRoot) loadThread(threadRoot)
-    }, 4000)
+    }, working ? 1500 : 4000)
     return () => clearInterval(id)
-  }, [active, threadRoot, loadChannels, loadMessages, loadThread])
+  }, [active, threadRoot, loadChannels, loadMessages, loadThread, working])
 
   // Opening a room is reading it — but only for the human. An agent's unread
   // is its own business and must not be cleared by someone looking at a page.

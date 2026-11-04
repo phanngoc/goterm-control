@@ -156,6 +156,21 @@ func (w *wsSink) NoteTool(label string) {
 	w.emit(StreamEvent{Type: "stream", Event: "tool", Data: label})
 }
 
+// NoteThinking streams thinking as it arrives; "" ends a block and is sent as
+// such, so the page can break the paragraph.
+func (w *wsSink) NoteThinking(chunk string) {
+	w.emit(StreamEvent{Type: "stream", Event: "thinking", Data: chunk})
+}
+
+// NoteTodos sends the model's whole plan each time it changes.
+func (w *wsSink) NoteTodos(todos []chat.Todo) {
+	b, err := json.Marshal(todos)
+	if err != nil {
+		return
+	}
+	w.emit(StreamEvent{Type: "stream", Event: "todos", Data: string(b)})
+}
+
 // Flush and Finalize exist for Telegram, where output is batched into message
 // edits. WebSocket delivery is already immediate.
 func (w *wsSink) Flush()    {}
