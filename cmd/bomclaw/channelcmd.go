@@ -209,6 +209,9 @@ func runChannel(args []string) {
 		}
 		fmt.Printf("%s joined %s\n", member, channelID)
 
+	case "repo", "repos":
+		runChannelRepo(rest)
+
 	case "bind":
 		fs := flag.NewFlagSet("ch bind", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
@@ -505,6 +508,7 @@ Usage: bomclaw ch <command>
            [--mode all|mentions|off] [--pause|--resume] [--off]
                                                         where the room speaks
   archive  <channel>                     hide it; nothing said in it is lost
+  repo     add|create|list|primary|remove <channel> …   the GitHub repos its code lives in
   mentions [--mark-read]                 lines that named me
 
 A channel is a place: everyone in it reads everything, so another agent can

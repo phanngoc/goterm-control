@@ -476,6 +476,9 @@ func (w *MentionWatcher) project(channelID string) string {
 		"Làm việc bên trong nó, đừng rải ra workspace riêng của bạn: người khác và agent khác sẽ đi tìm ở đây.\n\n",
 		c.Workspace)
 
+	// Where the code is: the repos linked to the room, primary first.
+	b.WriteString(w.deps.Coord.RepoBrief(channelID))
+
 	if brief := strings.TrimSpace(w.deps.Coord.ProjectBrief(channelID)); brief != "" {
 		b.WriteString("### " + coord.AgentsFile + " của dự án\n\n")
 		b.WriteString(truncateRunes(brief, MaxProjectBriefRunes))

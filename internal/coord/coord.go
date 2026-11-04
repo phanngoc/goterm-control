@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 14
+const schemaVersion = 15
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -459,6 +459,24 @@ var ddl = []string{
 	// birth and the forward cut-off, which is why the re-bind path has a
 	// comment defending not touching it — and why there was no way to move the
 	// cut-off forward when a paused destination was switched back on.
+	// v15: the repositories a channel's code lives in — see repos.go. One
+	// primary per channel, enforced below rather than trusted to callers.
+	`CREATE TABLE IF NOT EXISTS channel_repos (
+		id         TEXT PRIMARY KEY,                    -- 'cr_' || uuid
+		channel_id TEXT NOT NULL,
+		provider   TEXT NOT NULL DEFAULT 'github',
+		repo       TEXT NOT NULL,                       -- owner/name
+		url        TEXT NOT NULL,
+		role       TEXT NOT NULL DEFAULT 'secondary',   -- primary | secondary
+		path       TEXT NOT NULL DEFAULT '',            -- where it is checked out
+		branch     TEXT NOT NULL DEFAULT '',            -- default branch
+		label      TEXT NOT NULL DEFAULT '',
+		added_by   TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	) STRICT`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_repos_repo ON channel_repos(channel_id, repo COLLATE NOCASE)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_repos_primary ON channel_repos(channel_id) WHERE role = 'primary'`,
+
 	`CREATE TABLE IF NOT EXISTS channel_gateways (
 		id         TEXT PRIMARY KEY,                 -- 'cg_' || uuid
 		channel_id TEXT NOT NULL,

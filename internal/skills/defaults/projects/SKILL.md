@@ -39,6 +39,24 @@ then put "preview check passes" in the first task's acceptance instead.
 When the code lives somewhere else, the Preview runs from a copy in the project
 folder (a clone, or the built files), never from a production checkout.
 
+A project's code lives in GitHub repos, and the room links them: one
+**primary** ("the repo" when nobody says which) and any number of others (a
+repo per game, a shared library, a production checkout).
+
+```
+bomclaw ch repo list    ch_<name>
+bomclaw ch repo add     ch_<name> <owner/name|url> [--primary] [--clone] [--path web] [--label "…"]
+bomclaw ch repo create  ch_<name> <name> [--public]     # new repo, cloned into the project folder
+bomclaw ch repo primary ch_<name> <owner/name>
+bomclaw ch repo remove  ch_<name> <owner/name>          # unlink only
+```
+
+Every agent in the room is told the list, so link a repo the moment the
+project has one — when you create it, clone it, or find the project's code in
+one — rather than leaving it in a line of AGENTS.md. The first link is the
+primary. A checkout that must not be edited (production) is linked with
+`--path` to it and a `--label` saying so.
+
 Name rooms in short lowercase kebab-case (`shopee-deals`). Run `ch list --all`
 first; reuse a room that already covers the work.
 
@@ -84,7 +102,8 @@ move files that a running site or job depends on without asking.
 
 | The person says | You do |
 |---|---|
-| "tạo phòng/dự án X", "make a project for X" | `ch new x --purpose …` → write the brief → preview (if it has something to show) → reply with the id |
+| "tạo phòng/dự án X", "make a project for X" | `ch new x --purpose …` → write the brief → link/create its repo → preview (if it has something to show) → reply with the id |
+| "link repo …", "kết nối GitHub", "tạo repo cho dự án" | `ch repo add ch_x owner/name [--primary]` or `ch repo create ch_x <name>` |
 | "làm preview", "chạy thử dự án trên dashboard" | `preview` skill: `preview init` → `preview check` until PASS |
 | "/goal …", "mục tiêu là …", a multi-step build | room (reuse or new) + `task new --channel … --acceptance …` |
 | "track this", "đưa việc này lên board" | room + brief of what is done + task for what is left |

@@ -80,6 +80,11 @@ var DetachedMethods = map[string]bool{
 	"channels.bind":     true,
 	"channels.unbind":   true,
 
+	"channels.repos":        true,
+	"channels.repo_add":     true,
+	"channels.repo_primary": true,
+	"channels.repo_remove":  true,
+
 	"skills.list":    true,
 	"skills.get":     true,
 	"skills.install": true,

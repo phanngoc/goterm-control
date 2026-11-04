@@ -4,6 +4,7 @@ import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { ArtifactModal, isPage } from './ArtifactView'
 import GatewayEditor from './GatewayEditor'
+import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
 
 import { ago, clock } from './format'
 
@@ -65,6 +66,10 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // per room.
   const [gateways, setGateways] = useState<ChannelGateway[]>([])
   const [gatewaysFor, setGatewaysFor] = useState('')
+  // The room's GitHub repos, primary first — shown in the header like a
+  // Lovable project's GitHub connection.
+  const [repos, setRepos] = useState<ChannelRepo[]>([])
+  const [reposFor, setReposFor] = useState('')
   const sending = useRef(false)
   const loadingOlder = useRef(false)
   const scroller = useRef<HTMLDivElement>(null)
@@ -161,6 +166,14 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   }, [loadChannels, setActive])
 
   useEffect(() => { loadMessages(active) }, [active, loadMessages])
+  useEffect(() => {
+    if (!active) { setRepos([]); return }
+    let stale = false
+    call('channels.repos', { channel_id: active })
+      .then((r: any) => { if (!stale) setRepos(r?.repos ?? []) })
+      .catch(() => { if (!stale) setRepos([]) })
+    return () => { stale = true }
+  }, [active, call])
 
   // Land on the newest message when a room opens, and follow it while you are
   // already at the bottom — but never yank the view down while somebody is
@@ -318,6 +331,27 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               AGENTS.md
             </button>
           )}
+          {current && (() => {
+            const primary = repos.find(r => r.role === 'primary')
+            return (
+              <span className="flex items-center rounded ring-1 ring-gray-700 text-[11px] text-gray-400">
+                {primary && (
+                  <a href={primary.url} target="_blank" rel="noopener noreferrer" title={`Mở ${primary.repo} trên GitHub`}
+                    className="flex items-center gap-1 px-1.5 font-mono hover:text-sky-300">
+                    <GitHubMark className="h-3 w-3" />{primary.repo.split('/')[1]}
+                  </a>
+                )}
+                <button
+                  onClick={() => setReposFor(current.id)}
+                  title="Các repo GitHub của phòng: một repo chính, thêm repo khác"
+                  className={`flex items-center gap-1 px-1.5 hover:text-sky-300 ${primary ? 'border-l border-gray-700' : ''}`}
+                >
+                  {!primary && <GitHubMark className="h-3 w-3" />}
+                  {primary ? (repos.length > 1 ? `+${repos.length - 1}` : '⋯') : 'GitHub'}
+                </button>
+              </span>
+            )
+          })()}
           {current && (
             <button
               onClick={() => setGatewaysFor(current.id)}
@@ -375,6 +409,14 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       </div>
 
       {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
+      {reposFor && (
+        <RepoEditor
+          call={call} channelID={reposFor}
+          channelName={channels.find(c => c.id === reposFor)?.name ?? reposFor}
+          onChanged={list => { if (reposFor === active) setRepos(list) }}
+          onClose={() => setReposFor('')}
+        />
+      )}
       {gatewaysFor && (
         <GatewayEditor
           call={call} channelID={gatewaysFor}
