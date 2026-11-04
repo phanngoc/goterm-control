@@ -33,6 +33,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/fsguard"
 	"github.com/ngocp/goterm-control/internal/gateway"
 	"github.com/ngocp/goterm-control/internal/models"
+	"github.com/ngocp/goterm-control/internal/plugins"
 	"github.com/ngocp/goterm-control/internal/reporter"
 	"github.com/ngocp/goterm-control/internal/scheduler"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -302,14 +303,30 @@ func runGateway(args []string) {
 		}
 	}
 
+	// Skills are plugins now: move any skill folder still in skills/ into
+	// plugins/, whole — edits included. Idempotent, so it runs every start and
+	// also catches skills an agent or a backend wrote the old way since.
+	// Before seeding, so an agent's existing copy of a default is moved
+	// rather than shadowed by a fresh one.
+	if moved, skipped, err := plugins.MigrateSkills(cfg.Claude.Workspace); err != nil {
+		log.Printf("plugins: migrate skills: %v", err)
+	} else {
+		for _, m := range moved {
+			log.Printf("plugins: moved skill %s → %s", m.Name, m.To)
+		}
+		for _, s := range skipped {
+			log.Printf("plugins: left skill in place — %s", s)
+		}
+	}
+
 	// The toolkit this agent starts with. Seeded once into its workspace and
 	// never overwritten: an agent revises its own copies, and re-seeding on
 	// every start would undo that silently, on a schedule nobody chose.
 	if n, err := skills.EnsureDefaults(cfg.Claude.Workspace); err != nil {
-		log.Printf("skills: %v", err)
+		log.Printf("plugins: %v", err)
 	} else if len(n) > 0 {
-		log.Printf("skills: seeded %s into %s", strings.Join(n, ", "),
-			filepath.Join(cfg.Claude.Workspace, skills.Dir))
+		log.Printf("plugins: seeded %s into %s", strings.Join(n, ", "),
+			filepath.Join(cfg.Claude.Workspace, skills.PluginsDir))
 	}
 
 	// One-shot text backend (session titles, `bomclaw send` fallback). Which

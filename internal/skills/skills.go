@@ -124,6 +124,28 @@ func Load(workspace string) ([]Skill, error) {
 	return Merge(own, project), nil
 }
 
+// finder is the richer loader the plugins package installs at init: skills
+// now live inside plugins as well as in bare folders, and this package cannot
+// import the one that knows about plugins (plugins builds on it). Everything
+// here that looks a skill up BY NAME — the hub, the roster, Read/Install/
+// Remove — goes through All, so it finds a skill wherever it was moved to.
+// That is Cordis's service injection in miniature: the leaf asks for "the
+// skill finder" and whoever provides it wins.
+var finder func(workspace string) ([]Skill, error)
+
+// SetFinder installs the loader All uses. Called once, from an init.
+func SetFinder(f func(workspace string) ([]Skill, error)) { finder = f }
+
+// All is every skill an agent holds, wherever it lives: bare folders under
+// skills/ and .agents/skills, and inside its plugins. Without a finder
+// installed it is Load.
+func All(workspace string) ([]Skill, error) {
+	if finder != nil {
+		return finder(workspace)
+	}
+	return Load(workspace)
+}
+
 // Merge combines sets by name, later winning, and re-sorts. Exported because
 // the caller assembling a turn's toolkit does the same join across roots.
 func Merge(sets ...[]Skill) []Skill {

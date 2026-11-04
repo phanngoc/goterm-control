@@ -69,7 +69,7 @@ func locate(workspace, name string) (dir string, found bool, err error) {
 	if err := ValidateName(name); err != nil {
 		return "", false, err
 	}
-	list, err := Load(workspace)
+	list, err := All(workspace)
 	if err != nil {
 		return "", false, err
 	}

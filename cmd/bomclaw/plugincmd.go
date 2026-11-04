@@ -27,6 +27,7 @@ const pluginsUsage = `Usage: bomclaw plugins <command> [flags]
   install <git-url|folder>   Fetch a plugin (--ref, --path, --name, --replace, --trust)
   update <name>              Re-fetch an installed plugin from its source (--trust)
   uninstall <name>           Remove a plugin and forget its switches and settings
+  migrate                    Move skill folders from skills/ into plugins/ (also runs at gateway start)
   enable|disable <name>      Turn a plugin (or a bare skill) on or off
   trust|untrust <name>       Let a project's plugin run commands/MCP, or stop it
   config <name> [k=v ...]    Show settings, or set them (k= clears one)
@@ -104,6 +105,22 @@ func runPlugins(args []string) {
 		need(1)
 		exitIf(plugins.Uninstall(ws, pos[0]))
 		fmt.Printf("%s uninstalled — from the next turn\n", pos[0])
+	case "migrate":
+		moved, skipped, err := plugins.MigrateSkills(ws)
+		exitIf(err)
+		for _, m := range moved {
+			tag := ""
+			if m.Bundled {
+				tag = " (bundled manifest)"
+			}
+			fmt.Printf("moved %s → %s%s\n", m.Name, m.To, tag)
+		}
+		for _, s := range skipped {
+			fmt.Printf("left in place: %s\n", s)
+		}
+		if len(moved) == 0 && len(skipped) == 0 {
+			fmt.Println("nothing to migrate — every skill is already a plugin")
+		}
 	case "enable", "disable":
 		need(1)
 		updateState(ws, func(st *plugins.State) { st.SetEnabled(pos[0], sub == "enable") })

@@ -1,0 +1,5 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: plugins
+version: 1.0.0
+description: Extend your own toolkit with plugins — commands, MCP servers, settings.
+provides: [plugin-authoring]

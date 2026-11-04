@@ -1,0 +1,7 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: projects
+version: 1.0.0
+description: Open rooms and tasks so the work shows up in Messages and on the Tasks board.
+provides: [projects]
+inject:
+  optional: [channels]

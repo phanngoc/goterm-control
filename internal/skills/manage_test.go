@@ -16,7 +16,7 @@ func TestDefaultsAreSeededOnceAndThenLeftAlone(t *testing.T) {
 	if len(written) == 0 {
 		t.Fatal("no defaults were seeded")
 	}
-	list, err := Load(ws)
+	list, err := seeded(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestDefaultsAreSeededOnceAndThenLeftAlone(t *testing.T) {
 
 	// The agent revises its copy. Starting the gateway again must not undo it:
 	// that would destroy the lesson silently, on a schedule nobody chose.
-	edited := filepath.Join(ws, Dir, list[0].Name, File)
+	edited := list[0].Path
 	if err := os.WriteFile(edited,
 		[]byte("---\nname: "+list[0].Name+"\ndescription: 'điều tôi tự học được'\n---\nbài học\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestTheBundledSetFitsWithRoomLeft(t *testing.T) {
 	if _, err := EnsureDefaults(ws); err != nil {
 		t.Fatal(err)
 	}
-	list, err := Load(ws)
+	list, err := seeded(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,4 +261,11 @@ func TestTheBundledSetFitsWithRoomLeft(t *testing.T) {
 			t.Errorf("%q does not say when NOT to use it — half the routing signal", s.Name)
 		}
 	}
+}
+
+// seeded reads the bundled defaults as they land: each a plugin folder whose
+// root SKILL.md is its skill. Load would not see them — it reads skills/, and
+// finding skills inside plugins is the plugins package's finder's job.
+func seeded(ws string) ([]Skill, error) {
+	return LoadDir(filepath.Join(ws, PluginsDir))
 }

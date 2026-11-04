@@ -6,9 +6,12 @@ description: 'Extend your own toolkit: commands, MCP tool servers, settings. Use
 # plugins
 
 Everything you can do beyond the CLI's own tools is a plugin: a folder under
-`plugins/` in your workspace with a `plugin.yaml`. A bare skill folder counts
-as one too. Plugins are re-read before every turn, so anything you add,
-configure or switch off takes effect on your next turn. Nothing restarts.
+`plugins/` in your workspace with a `plugin.yaml`. Your skills live there too:
+each is a plugin whose `SKILL.md` sits at its root. A skill you write the old
+way, as `skills/<name>/SKILL.md`, works at once and is moved into `plugins/` on
+the next gateway start (or by `bomclaw plugins migrate`). Plugins are re-read
+before every turn, so anything you add, configure or switch off takes effect
+on your next turn. Nothing restarts.
 
 ## What a plugin can give you
 

@@ -1,0 +1,7 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: preview
+version: 1.0.0
+description: Make a project runnable from the dashboard's Preview button (bomclaw.json).
+provides: [preview]
+inject:
+  optional: [projects]

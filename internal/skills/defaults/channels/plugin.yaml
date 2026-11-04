@@ -1,0 +1,5 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: channels
+version: 1.0.0
+description: Work in the shared rooms with `bomclaw ch`, so peers and people can follow.
+provides: [channels]

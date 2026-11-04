@@ -1,0 +1,5 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: artifacts
+version: 1.0.0
+description: File what a task produced (reports, patches, pages, URLs) with `bomclaw artifact`.
+provides: [artifacts]

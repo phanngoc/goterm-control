@@ -64,7 +64,7 @@ func handleSkillsList(deps Deps, params json.RawMessage) (json.RawMessage, error
 			Online: a.Online, Provider: a.Provider,
 			Skills: []HubSkill{},
 		}
-		list, err := skills.Load(a.Workspace)
+		list, err := skills.All(a.Workspace)
 		if err != nil {
 			// Reported per agent, not as a failed call: one unreadable
 			// workspace must not blank the screen for the other two.
@@ -171,14 +171,15 @@ func handleSkillInstall(deps Deps, params json.RawMessage) (json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
-	body := []byte(p.Body)
-	if len(body) == 0 {
-		// No body means "the shipped one" — how a removed default is put back.
-		if body, err = skills.Default(p.Name); err != nil {
+	if p.Body == "" {
+		// No body means "the shipped one" — how a removed default is put back,
+		// as the plugin it ships as, manifest and all.
+		if err := skills.InstallDefault(ws, p.Name); err != nil {
 			return nil, err
 		}
+		return json.Marshal(map[string]any{"ok": true, "agent_id": p.AgentID, "name": p.Name})
 	}
-	if err := skills.Install(ws, p.Name, body); err != nil {
+	if err := skills.Install(ws, p.Name, []byte(p.Body)); err != nil {
 		return nil, err
 	}
 	return json.Marshal(map[string]any{"ok": true, "agent_id": p.AgentID, "name": p.Name})
