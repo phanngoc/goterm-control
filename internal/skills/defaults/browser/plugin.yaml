@@ -1,0 +1,5 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: browser
+version: 1.0.0
+description: Drive the user's own logged-in browser with `bomclaw browser`.
+provides: [browser]

@@ -46,7 +46,7 @@ func runSkills(args []string) {
 		ws = cfg.Claude.Workspace
 	}
 
-	list, err := skills.Load(ws)
+	list, err := skills.All(ws)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skills: %v\n", err)
 		os.Exit(1)

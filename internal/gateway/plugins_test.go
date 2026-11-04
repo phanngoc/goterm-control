@@ -61,9 +61,9 @@ config:
 	if forge.Status != "pending" || !strings.Contains(strings.Join(forge.Reasons, ";"), "token") {
 		t.Fatalf("forge: %+v", forge)
 	}
-	// Bundled skills are in the same list, as plugins of kind skill.
-	if findHub(t, mine.Plugins, "browser").Kind != "skill" {
-		t.Fatal("skills missing from the plugins hub")
+	// Bundled defaults ship as plugins, and are in the same list.
+	if b := findHub(t, mine.Plugins, "browser"); b.Kind != "plugin" || len(b.Skills) != 1 {
+		t.Fatalf("bundled browser plugin: %+v", b)
 	}
 
 	if _, err := pluginsCall(t, deps, "plugins.config", map[string]any{

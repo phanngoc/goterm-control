@@ -78,7 +78,7 @@ func Roster(peers []Peer) string {
 // to render because one workspace was missing would take the other peers with
 // it.
 func describe(workspace string) string {
-	list, err := Load(workspace)
+	list, err := All(workspace)
 	if err != nil || len(list) == 0 {
 		return ""
 	}

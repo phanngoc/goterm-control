@@ -238,7 +238,7 @@ func TestEveryBundledSkillLoadsWithADescription(t *testing.T) {
 	if _, err := EnsureDefaults(ws); err != nil {
 		t.Fatal(err)
 	}
-	list, err := Load(ws)
+	list, err := seeded(ws)
 	if err != nil {
 		t.Fatal(err)
 	}

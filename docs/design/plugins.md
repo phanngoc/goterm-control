@@ -112,6 +112,25 @@ with mode 0600.
   - Per row: install, enable/disable, trust, update, copy to another agent,
     uninstall.
 
+## Skills migrated to plugins (2026-11-04, `feat/skills-to-plugins`)
+
+On disk, an agent's toolkit is now only plugins.
+- **Defaults:** the bundled defaults ship as plugins (`internal/skills/defaults/<name>/{SKILL.md,plugin.yaml}`),
+  each naming what it `provides`. They are seeded into `<workspace>/plugins/<name>/`.
+- **Migration:** `plugins.MigrateSkills` runs on every gateway start and as `bomclaw plugins migrate`.
+  - It moves each folder in `skills/` (categories included) into `plugins/<name>/` whole: files beside
+    `SKILL.md` and the agent's own edits go with it.
+  - It adds the bundled manifest for a default, or a generated one otherwise.
+  - It leaves a symlink at the old path. A codex or opencode thread got the skill index once, at its
+    start, and still holds the old path.
+  - A name already taken by a plugin is left in place and reported, never overwritten.
+  - A repository's `.agents/skills` is never touched.
+- **Lookup by name:** the hub, the peer roster and `skills.Read/Install/Remove` go through `skills.All`.
+  The plugins package provides it via `skills.SetFinder`: the leaf package asks for a skill finder and the
+  plugins package provides one, which is Cordis's service injection with Go's import graph in the way.
+- **Still supported:** `skills/` keeps working for a skill written the old way. It is offered on the very
+  next turn and moved on the next start.
+
 ## Next steps, if wanted
 
 - Hooks around tool calls, normalised through one `bomclaw hook` shim.
