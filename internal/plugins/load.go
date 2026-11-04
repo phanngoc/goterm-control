@@ -260,7 +260,9 @@ func resolve(list []*Plugin, st State) {
 			continue
 		}
 		p.Reasons = append(p.Reasons, unmet(p)...)
-		if p.Scope != ScopeAgent && p.Kind == KindPlugin && !st.trusted(p.Name) && p.runsCode() {
+		// A bin folder counts even when nothing in it looks runnable today:
+		// it goes on PATH all the same, and what is runnable is up to the OS.
+		if p.Scope != ScopeAgent && p.Kind == KindPlugin && !st.trusted(p.Name) && (p.runsCode() || p.BinDir != "") {
 			p.Untrusted = true
 		}
 		if len(p.Reasons) > 0 && !onlySoft(p) {

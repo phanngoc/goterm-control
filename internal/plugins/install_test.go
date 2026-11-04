@@ -167,3 +167,20 @@ func TestUninstallForgetsSwitchesAndCopyKeepsUpstream(t *testing.T) {
 		t.Fatalf("second uninstall: %v", err)
 	}
 }
+
+// A bin folder with nothing that looks runnable still goes on PATH, so it
+// still needs trust — Windows decides runnability by extension, and an
+// untrusted plugin must not get onto PATH through that gap.
+func TestBinFolderNeedsTrustEvenWithNoCommands(t *testing.T) {
+	ws := t.TempDir()
+	src := filepath.Join(t.TempDir(), "quiet")
+	writeFile(t, filepath.Join(src, File), "name: quiet\n", 0o644)
+	writeFile(t, filepath.Join(src, "bin", "notes.txt"), "not runnable", 0o644)
+	if _, err := Install(ws, Source{URL: src}, InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	k := Load(ws, "")
+	if p := mustFind(t, k, "quiet"); !p.Untrusted || len(k.Path) != 0 {
+		t.Fatalf("untrusted bin reached PATH: untrusted=%v path=%v", p.Untrusted, k.Path)
+	}
+}
