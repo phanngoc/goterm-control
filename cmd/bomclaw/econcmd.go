@@ -50,16 +50,16 @@ func printEconomics(e *coord.Economics, days int) {
 	fmt.Printf("Agent economics · last %d days · judge: %s\n\n", days, judge)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w, "agent\tturns\ttokens\tcache hit\tcost $\ttask $\tdone\tfail\trej\tcancel\topen\tcompletion\t$/done\tverified\tpass\tscore\tjudged\t")
+	fmt.Fprintln(w, "agent\tturns\ttokens\tcache hit\tcost $\ttask $\tdone\tfail\trej\tstuck\tcancel\topen\tcompletion\t$/done\twasted $\tlost tries\tverified\tpass\tscore\tjudged\t")
 	for _, a := range e.Agents {
 		hit := "-"
 		if t := a.InputTokens + a.CacheRead + a.CacheWrite; t > 0 {
 			hit = fmt.Sprintf("%.0f%%", 100*float64(a.CacheRead)/float64(t))
 		}
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%.2f\t%.2f\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%d\t%s\t%s\t%d\t\n",
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%.2f\t%.2f\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%.2f\t%d\t%d\t%s\t%s\t%d\t\n",
 			a.AgentID, a.Turns, humanTokens(a.Tokens()), hit, a.CostUSD, a.TaskCostUSD,
-			a.Completed, a.Failed, a.Rejected, a.Canceled, a.Open,
-			pct(a.CompletionRate()), money(a.CostPerCompleted()),
+			a.Completed, a.Failed, a.Rejected, a.Stuck, a.Canceled, a.Open,
+			pct(a.CompletionRate()), money(a.CostPerCompleted()), a.WastedUSD, a.FailedAttempts,
 			a.Verified, ratio(a.Passed, a.Verified), score(a.MeanScore, a.Scored), a.Judged)
 	}
 	w.Flush()
@@ -74,7 +74,9 @@ func printEconomics(e *coord.Economics, days int) {
 		w.Flush()
 	}
 	fmt.Println("\ncost $ is the CLI's own figure at API list price, whatever the plan pays.\n" +
-		"completion = done / (done + fail + rejected); a cancel is the owner's call, not a miss.\n" +
+		"completion = done / (done + fail + rejected + stuck); a cancel is the owner's call, not a miss.\n" +
+		"$/done = what finished tasks cost in full (every attempt, any agent) / how many; wasted $ = cost of failed/rejected ones.\n" +
+		"lost tries = attempts that died on a task another agent ended up carrying.\n" +
 		"pass and score are the judge's reading of finished goals against their criteria.")
 }
 
