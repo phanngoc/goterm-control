@@ -17,8 +17,12 @@ import (
 //
 // Two denominators, kept apart on purpose:
 //   - completion rate counts what an agent could have finished: completed over
-//     completed + failed + rejected. A task the owner cancelled is not the
-//     agent's miss, so it is shown but left out.
+//     completed + failed + rejected + stuck (open with every attempt used). A
+//     task the owner cancelled is not the agent's miss, so it is shown but left
+//     out.
+//   - $ per finished task divides what the finished tasks cost, all of it, by
+//     how many there are. Spend on open or failed work is not in it; it shows
+//     as burn and as wasted $ instead.
 //   - quality is the judge's: verifications of goals this agent did, pass rate
 //     and mean score. Self-declared "done" is the completion rate; a peer's
 //     reading against the criteria is this.
@@ -43,7 +47,20 @@ type AgentEconomics struct {
 	Rejected  int `json:"rejected"`
 	Canceled  int `json:"canceled"`
 	Open      int `json:"open"`
-	Runs      int `json:"runs"` // attempts across those tasks
+	// Stuck is open but unclaimable: every attempt used. It counts against
+	// completion like a failure, because nothing will pick it up again.
+	Stuck int `json:"stuck"`
+	Runs  int `json:"runs"` // attempts across those tasks
+
+	// DoneCostUSD is what the tasks this agent finished cost, all of it,
+	// whoever ran the earlier attempts and whenever they started. It is the
+	// numerator of $ per finished task, so that ratio compares like with like.
+	DoneCostUSD float64 `json:"done_cost_usd"`
+	// WastedUSD is what tasks this agent carried to failed or rejected cost.
+	WastedUSD float64 `json:"wasted_usd"`
+	// FailedAttempts are this agent's attempts that died on tasks it did not
+	// end up carrying: the cost of work another agent had to finish.
+	FailedAttempts int `json:"failed_attempts"`
 
 	// Quality, as the judge read it.
 	Verified  int     `json:"verified"`
@@ -58,19 +75,19 @@ type AgentEconomics struct {
 // CompletionRate is completed over what could have been completed; -1 when
 // nothing ended.
 func (a AgentEconomics) CompletionRate() float64 {
-	d := a.Completed + a.Failed + a.Rejected
+	d := a.Completed + a.Failed + a.Rejected + a.Stuck
 	if d == 0 {
 		return -1
 	}
 	return float64(a.Completed) / float64(d)
 }
 
-// CostPerCompleted is the task spend per finished task; -1 with none.
+// CostPerCompleted is what a finished task cost on average; -1 with none.
 func (a AgentEconomics) CostPerCompleted() float64 {
 	if a.Completed == 0 {
 		return -1
 	}
-	return a.TaskCostUSD / float64(a.Completed)
+	return a.DoneCostUSD / float64(a.Completed)
 }
 
 // Tokens is everything the model processed: fresh input, cache traffic and
@@ -141,20 +158,30 @@ func (db *DB) EconomicsSince(since time.Time) (*Economics, error) {
 	}
 	rows.Close()
 
-	// Outcomes: tasks that ended (or still stand open) in the window, credited
-	// to whoever carried them.
-	rows, err = db.conn.Query(`SELECT CASE WHEN claimed_by <> '' THEN claimed_by ELSE assigned_to END, state, COUNT(*),
-			SUM((SELECT COUNT(*) FROM task_runs tr WHERE tr.task_id = t.id))
+	// Outcomes, one row per task, credited to whoever carried it at the end.
+	//
+	// A task is in the window when it ENDED in it (or is still open): the one
+	// anchor for both its outcome and its cost, so a task that started before
+	// the window and finished inside it brings all of its cost along rather
+	// than whichever runs happened to start after the cutoff. Its cost is
+	// every run under any of its attempts, by any agent.
+	rows, err = db.conn.Query(`SELECT CASE WHEN t.claimed_by <> '' THEN t.claimed_by ELSE t.assigned_to END,
+			t.state, t.attempts, t.max_attempts,
+			(SELECT COUNT(*) FROM task_runs tr WHERE tr.task_id = t.id),
+			COALESCE((SELECT SUM(r.cost_usd) FROM runs r WHERE r.run_type = ? AND r.trace_id IN
+				(SELECT tr.trace_id FROM task_runs tr WHERE tr.task_id = t.id AND tr.trace_id <> '')), 0)
 		FROM tasks t
-		WHERE kind NOT IN ('bench', ?) AND updated_at >= ?
-		GROUP BY 1, 2`, KindVerify, from)
+		WHERE t.kind NOT IN ('bench', ?)
+		  AND (t.updated_at >= ? OR t.state NOT IN (?, ?, ?, ?))`,
+		RunTypeLLM, KindVerify, from, TaskCompleted, TaskFailed, TaskRejected, TaskCanceled)
 	if err != nil {
 		return nil, fmt.Errorf("economics: outcomes: %w", err)
 	}
 	for rows.Next() {
 		var id, state string
-		var n, runs int
-		if err := rows.Scan(&id, &state, &n, &runs); err != nil {
+		var attempts, maxAttempts, runs int
+		var cost float64
+		if err := rows.Scan(&id, &state, &attempts, &maxAttempts, &runs, &cost); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -162,16 +189,44 @@ func (db *DB) EconomicsSince(since time.Time) (*Economics, error) {
 		a.Runs += runs
 		switch state {
 		case TaskCompleted:
-			a.Completed += n
+			a.Completed++
+			a.DoneCostUSD += cost
 		case TaskFailed:
-			a.Failed += n
+			a.Failed++
+			a.WastedUSD += cost
 		case TaskRejected:
-			a.Rejected += n
+			a.Rejected++
+			a.WastedUSD += cost
 		case TaskCanceled:
-			a.Canceled += n
+			a.Canceled++
 		default:
-			a.Open += n
+			if state == TaskSubmitted && maxAttempts > 0 && attempts >= maxAttempts {
+				a.Stuck++
+			} else {
+				a.Open++
+			}
 		}
+	}
+	rows.Close()
+
+	// Attempts that died on tasks someone else carried: without this, an
+	// agent that burns and fails, then hands over, looks free.
+	rows, err = db.conn.Query(`SELECT tr.agent_id, COUNT(*)
+		FROM task_runs tr JOIN tasks t ON t.id = tr.task_id
+		WHERE tr.started_at >= ? AND tr.liveness IN ('failed', 'timed_out', 'empty')
+		  AND tr.agent_id <> CASE WHEN t.claimed_by <> '' THEN t.claimed_by ELSE t.assigned_to END
+		GROUP BY tr.agent_id`, from)
+	if err != nil {
+		return nil, fmt.Errorf("economics: failed attempts: %w", err)
+	}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		get(id).FailedAttempts = n
 	}
 	rows.Close()
 

@@ -18,7 +18,11 @@ interface AgentEcon {
   rejected: number
   canceled: number
   open: number
+  stuck: number
   runs: number
+  done_cost_usd: number
+  wasted_usd: number
+  failed_attempts: number
   verified: number
   passed: number
   mean_score: number
@@ -85,7 +89,7 @@ export default function EconomicsPane({ call, agents }: { call: Call; agents: st
   const sum = rows.reduce((s, a) => ({
     cost: s.cost + a.cost_usd,
     done: s.done + a.completed,
-    ended: s.ended + a.completed + a.failed + a.rejected,
+    ended: s.ended + a.completed + a.failed + a.rejected + a.stuck,
     tok: s.tok + total(a),
     verified: s.verified + a.verified,
     passed: s.passed + a.passed,
@@ -132,17 +136,17 @@ export default function EconomicsPane({ call, agents }: { call: Call; agents: st
           <table className="min-w-full text-sm tabular-nums">
             <thead className="bg-gray-900/80 text-[11px] uppercase tracking-wide text-gray-400">
               <tr>
-                {['Agent', 'Lượt', 'Token', 'Cache hit', 'Chi phí', 'Cho task', 'Xong', 'Hỏng', 'Bị trả', 'Huỷ', 'Đang mở', 'Hoàn thành', '$ / task', 'Điểm', 'Qua', 'Đã chấm hộ'].map(h => (
+                {['Agent', 'Lượt', 'Token', 'Cache hit', 'Chi phí', 'Cho task', 'Xong', 'Hỏng', 'Bị trả', 'Kẹt', 'Huỷ', 'Đang mở', 'Hoàn thành', '$ / task xong', '$ phí hoài', 'Lượt hỏng bàn giao', 'Điểm', 'Qua', 'Đã chấm hộ'].map(h => (
                   <th key={h} className="px-3 py-2 text-right first:text-left whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {rows.length === 0 && (
-                <tr><td colSpan={16} className="px-3 py-6 text-center text-gray-500">Chưa có dữ liệu trong khoảng này.</td></tr>
+                <tr><td colSpan={19} className="px-3 py-6 text-center text-gray-500">Chưa có dữ liệu trong khoảng này.</td></tr>
               )}
               {rows.map(a => {
-                const ended = a.completed + a.failed + a.rejected
+                const ended = a.completed + a.failed + a.rejected + a.stuck
                 const fresh = a.input_tokens + a.cache_read_tokens + a.cache_write_tokens
                 return (
                   <tr key={a.agent_id} className="text-gray-200">
@@ -157,10 +161,13 @@ export default function EconomicsPane({ call, agents }: { call: Call; agents: st
                     <td className="px-3 py-2 text-right text-emerald-300">{a.completed}</td>
                     <td className="px-3 py-2 text-right text-red-300">{a.failed || '·'}</td>
                     <td className="px-3 py-2 text-right text-amber-300">{a.rejected || '·'}</td>
+                    <td className="px-3 py-2 text-right text-red-300">{a.stuck || '·'}</td>
                     <td className="px-3 py-2 text-right text-gray-500">{a.canceled || '·'}</td>
                     <td className="px-3 py-2 text-right text-gray-400">{a.open || '·'}</td>
                     <td className="px-3 py-2 text-right font-medium">{pct(a.completed, ended)}</td>
-                    <td className="px-3 py-2 text-right">{a.completed ? usd(a.task_cost_usd / a.completed) : '—'}</td>
+                    <td className="px-3 py-2 text-right">{a.completed ? usd(a.done_cost_usd / a.completed) : '—'}</td>
+                    <td className="px-3 py-2 text-right text-red-300">{a.wasted_usd ? usd(a.wasted_usd) : '·'}</td>
+                    <td className="px-3 py-2 text-right text-gray-400">{a.failed_attempts || '·'}</td>
                     <td className="px-3 py-2 text-right font-medium">{a.scored ? a.mean_score.toFixed(1) : '—'}</td>
                     <td className="px-3 py-2 text-right">{a.verified ? `${a.passed}/${a.verified}` : '—'}</td>
                     <td className="px-3 py-2 text-right text-gray-400">{a.judged || '·'}</td>
@@ -201,7 +208,8 @@ export default function EconomicsPane({ call, agents }: { call: Call; agents: st
 
       <div className="text-xs text-gray-500 space-y-1 max-w-3xl">
         <p><b className="text-gray-400">Chi phí</b> là con số CLI tự báo theo giá API niêm yết, kể cả khi gói đang dùng là thuê bao: dùng để so giữa các agent, không phải hoá đơn.</p>
-        <p><b className="text-gray-400">Hoàn thành</b> = xong / (xong + hỏng + bị trả). Task bị huỷ là quyết định của owner nên không tính là trượt.</p>
+        <p><b className="text-gray-400">Hoàn thành</b> = xong / (xong + hỏng + bị trả + kẹt). Task bị huỷ là quyết định của owner nên không tính là trượt. <b className="text-gray-400">Kẹt</b> là task đã dùng hết lượt thử, không ai nhận lại được nữa.</p>
+        <p><b className="text-gray-400">$ / task xong</b> = toàn bộ chi phí của các task đã xong (mọi lượt thử, mọi agent, kể cả lượt bắt đầu trước khoảng xem) chia số task. <b className="text-gray-400">$ phí hoài</b> là chi phí của task hỏng hoặc bị trả. <b className="text-gray-400">Lượt hỏng bàn giao</b> là lượt chết trên task mà cuối cùng agent khác làm xong.</p>
         <p><b className="text-gray-400">Điểm</b> (1–10) và <b className="text-gray-400">Qua</b> là giám khảo đọc goal đã xong theo tiêu chí nghiệm thu. Giám khảo không bao giờ chấm việc của chính nó: khi nó là người làm, một peer khác chấm thay.</p>
       </div>
     </div>

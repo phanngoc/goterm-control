@@ -125,3 +125,71 @@ func TestEconomicsAddsUpBurnOutcomesAndGrades(t *testing.T) {
 		t.Errorf("judge = %q", e.Judge)
 	}
 }
+
+func runAt(t *testing.T, db *DB, id, agent, trace string, at time.Time, cost float64) {
+	t.Helper()
+	if err := db.InsertRun(&Run{ID: id, TraceID: trace, DottedOrder: DottedOrderSegment(at, id),
+		AgentID: agent, Name: "claude", RunType: RunTypeLLM, StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRunUsage(id, Usage{CostUSD: cost}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The four ways the first version misled, each pinned: a handover moved cost
+// and credit apart, the two halves used different windows, open work leaked
+// into $ per finished task, and a task nobody could claim again counted as
+// merely open.
+func TestEconomicsCreditsATaskWholeToWhoeverFinishedIt(t *testing.T) {
+	db := verifyDB(t)
+	since := time.Now().Add(-time.Hour)
+
+	// bomclaw tries and fails (its run started BEFORE the window), bomclaw2
+	// finishes. The task's whole $3 belongs to the finished task.
+	task, err := db.CreateTask(NewTask{Title: "handover", CreatedBy: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.StartRun(task.ID, "bomclaw", 1, "tr_a"); err != nil {
+		t.Fatal(err)
+	}
+	db.conn.Exec(`UPDATE task_runs SET liveness = 'failed', started_at = ? WHERE trace_id = 'tr_a'`, ts(time.Now()))
+	runAt(t, db, "ra", "bomclaw", "tr_a", since.Add(-time.Hour), 2.0)
+	if _, err := db.StartRun(task.ID, "bomclaw2", 2, "tr_b"); err != nil {
+		t.Fatal(err)
+	}
+	runAt(t, db, "rb", "bomclaw2", "tr_b", time.Now(), 1.0)
+	db.conn.Exec(`UPDATE tasks SET state = ?, claimed_by = 'bomclaw2', updated_at = ? WHERE id = ?`, TaskCompleted, ts(time.Now()), task.ID)
+
+	// bomclaw2 also has an open task that cost $5 so far: not a finished task.
+	open, _ := db.CreateTask(NewTask{Title: "open", CreatedBy: "owner", AssignedTo: "bomclaw2"})
+	db.StartRun(open.ID, "bomclaw2", 1, "tr_o")
+	runAt(t, db, "ro", "bomclaw2", "tr_o", time.Now(), 5.0)
+
+	// bomclaw3 has a task with every attempt used: stuck, counted as a miss.
+	stuck, _ := db.CreateTask(NewTask{Title: "stuck", CreatedBy: "owner", AssignedTo: "bomclaw3"})
+	db.conn.Exec(`UPDATE tasks SET attempts = max_attempts WHERE id = ?`, stuck.ID)
+
+	e, err := db.EconomicsSince(since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]AgentEconomics{}
+	for _, a := range e.Agents {
+		got[a.AgentID] = a
+	}
+	two := got["bomclaw2"]
+	if two.Completed != 1 || math.Abs(two.DoneCostUSD-3.0) > 1e-9 || math.Abs(two.CostPerCompleted()-3.0) > 1e-9 {
+		t.Errorf("finished task not costed whole (handover + pre-window run): %+v", two)
+	}
+	if two.Open != 1 {
+		t.Errorf("open task: %+v", two)
+	}
+	if got["bomclaw"].FailedAttempts != 1 || got["bomclaw"].Completed != 0 {
+		t.Errorf("the failed attempt before the handover vanished: %+v", got["bomclaw"])
+	}
+	if s := got["bomclaw3"]; s.Stuck != 1 || s.Open != 0 || s.CompletionRate() != 0 {
+		t.Errorf("an unclaimable task counted as open: %+v", s)
+	}
+}
