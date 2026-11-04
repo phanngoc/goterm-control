@@ -91,6 +91,28 @@ function LiveLine({ l, every }: { l: TokenLive; every: number }) {
   )
 }
 
+// tokenName turns what someone types into a usable name: Vietnamese (or any)
+// diacritics dropped, đ → d, spaces → "-", everything else that cannot be in
+// a name removed. "Tiến" becomes "tien", so typing a person's name just works
+// instead of leaving a disabled button with no reason.
+function tokenName(s: string): string {
+  return s
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_.-]/g, '')
+    .slice(0, 48)
+}
+
+// nameProblem says why a name cannot be saved, or "" when it can.
+function nameProblem(name: string, taken: string[]): string {
+  if (!name) return 'Cần một tên.'
+  if (!/^[a-z0-9]/.test(name)) return 'Tên phải bắt đầu bằng chữ hoặc số.'
+  if (taken.includes(name)) return `Đã có token tên "${name}".`
+  return ''
+}
+
 interface Draft {
   old_name?: string
   name: string
@@ -102,8 +124,8 @@ interface Draft {
 
 // TokenForm adds a token, or edits one. Editing never shows the value — the
 // server does not send it — so an empty value field means "keep it".
-function TokenForm({ provider, initial, busy, onSave, onCancel }: {
-  provider: string; initial?: TokenView; busy: boolean
+function TokenForm({ provider, initial, taken, busy, onSave, onCancel }: {
+  provider: string; initial?: TokenView; taken: string[]; busy: boolean
   onSave: (d: Draft) => Promise<boolean>; onCancel: () => void
 }) {
   const kinds = KINDS[provider]
@@ -112,7 +134,9 @@ function TokenForm({ provider, initial, busy, onSave, onCancel }: {
     : { name: '', kind: kinds[0].kind, value: '', rotate: true, note: '' })
   const meta = kinds.find(k => k.kind === d.kind) ?? kinds[0]
   const editing = !!initial
-  const valid = /^[a-z0-9][a-z0-9_.-]{0,47}$/.test(d.name) && (editing || d.value.trim() !== '')
+  const problem = nameProblem(d.name, taken.filter(n => n !== initial?.name))
+    || (!editing && d.value.trim() === '' ? 'Dán giá trị token vào ô "giá trị".' : '')
+  const valid = problem === ''
 
   return (
     <div className="rounded-lg ring-1 ring-sky-500/30 bg-gray-950/60 p-3 space-y-2">
@@ -121,8 +145,8 @@ function TokenForm({ provider, initial, busy, onSave, onCancel }: {
           <span className="block text-[10px] uppercase tracking-wider text-gray-600">tên</span>
           <input
             value={d.name}
-            onChange={e => setD({ ...d, name: e.target.value.toLowerCase() })}
-            placeholder="vd: max-ngoc, team-2"
+            onChange={e => setD({ ...d, name: tokenName(e.target.value) })}
+            placeholder="vd: tien, max-ngoc — dấu và khoảng trắng tự bỏ"
             className="w-full mt-0.5 px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 focus:ring-gray-600 text-gray-200 outline-none font-mono"
           />
         </label>
@@ -172,7 +196,9 @@ function TokenForm({ provider, initial, busy, onSave, onCancel }: {
           {editing ? 'Lưu' : 'Thêm'}
         </button>
         <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-300">huỷ</button>
-        <span className="ml-auto text-[11px] text-gray-600">Lưu vào file 0600 · agent dùng từ lượt kế tiếp</span>
+        {problem
+          ? <span className="text-[11px] text-amber-300">{problem}</span>
+          : <span className="ml-auto text-[11px] text-gray-600">Lưu vào file 0600 · agent dùng từ lượt kế tiếp</span>}
       </div>
     </div>
   )
@@ -234,7 +260,7 @@ function ProviderSection({ pv, busy, act }: {
         )}
         {pv.tokens.map(t => editing === t.name ? (
           <li key={t.name}>
-            <TokenForm provider={pv.provider} initial={t} busy={busy} onSave={save} onCancel={() => setEditing(null)} />
+            <TokenForm provider={pv.provider} initial={t} taken={pv.tokens.map(x => x.name)} busy={busy} onSave={save} onCancel={() => setEditing(null)} />
           </li>
         ) : (
           <li key={t.name} className="rounded ring-1 ring-gray-800 px-3 py-2">
@@ -276,7 +302,7 @@ function ProviderSection({ pv, busy, act }: {
           </li>
         ))}
         {adding && (
-          <li><TokenForm provider={pv.provider} busy={busy} onSave={save} onCancel={() => setAdding(false)} /></li>
+          <li><TokenForm provider={pv.provider} taken={pv.tokens.map(x => x.name)} busy={busy} onSave={save} onCancel={() => setAdding(false)} /></li>
         )}
       </ul>
 
