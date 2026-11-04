@@ -92,6 +92,7 @@ var DetachedMethods = map[string]bool{
 	"skills.copy":    true,
 
 	"plugins.list":      true,
+	"plugins.files":     true,
 	"plugins.set":       true,
 	"plugins.config":    true,
 	"plugins.install":   true,

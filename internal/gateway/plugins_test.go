@@ -137,3 +137,24 @@ func TestPluginsHubInstallTrustCopyUninstall(t *testing.T) {
 		t.Fatal("an unknown agent was accepted")
 	}
 }
+
+func TestPluginsHubBrowsesAPluginsFiles(t *testing.T) {
+	deps, wsA, _ := hubFixture(t)
+	writePlugin(t, filepath.Join(wsA, "plugins", "forge"), "name: forge\n")
+	if err := os.WriteFile(filepath.Join(wsA, "plugins.yaml"), []byte("config: {forge: {token: s3cret}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"agent_id": "bomclaw", "name": "forge"})
+	out, err := handlePluginFiles(deps, raw)
+	if err != nil || !strings.Contains(string(out), `"path":"plugin.yaml"`) {
+		t.Fatalf("tree: %s %v", out, err)
+	}
+	raw, _ = json.Marshal(map[string]any{"agent_id": "bomclaw", "name": "forge", "path": "plugin.yaml"})
+	if out, err = handlePluginFiles(deps, raw); err != nil || !strings.Contains(string(out), "name: forge") {
+		t.Fatalf("read: %s %v", out, err)
+	}
+	raw, _ = json.Marshal(map[string]any{"agent_id": "bomclaw", "name": "forge", "path": "../../plugins.yaml"})
+	if _, err := handlePluginFiles(deps, raw); err == nil {
+		t.Fatal("read outside the plugin")
+	}
+}

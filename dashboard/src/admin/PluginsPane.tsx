@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentPlugins, HubPlugin, HubSetting, PluginStatus } from './types'
 
 type Call = (method: string, params?: any) => Promise<any>
+
+// Monaco is heavy; the file browser loads only when a plugin is opened.
+const PluginFiles = lazy(() => import('./PluginFiles'))
 
 // The plugins hub.
 //
@@ -139,9 +142,10 @@ function SettingsForm({ settings, onSave, busy }: {
   )
 }
 
-function PluginRow({ p, agent, peers, busy, act }: {
+function PluginRow({ p, agent, peers, busy, act, onBrowse }: {
   p: HubPlugin; agent: string; peers: string[]; busy: boolean
   act: (method: string, params: any, confirmText?: string) => Promise<void>
+  onBrowse: () => void
 }) {
   const [open, setOpen] = useState(false)
   const enabled = p.status !== 'disabled'
@@ -164,12 +168,19 @@ function PluginRow({ p, agent, peers, busy, act }: {
         {p.version && <span className="text-[10px] text-gray-600 font-mono">v{p.version}</span>}
 
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={onBrowse}
+            title="Xem plugin gồm những file gì và đọc nội dung từng file"
+            className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+          >
+            file
+          </button>
           {p.needs_trust && (
             <button
               disabled={busy}
               onClick={() => act('plugins.set', { ...base, trusted: !p.trusted },
                 p.trusted ? undefined
-                  : `Tin cậy "${p.name}" trên ${agent}?\n\nLệnh, biến môi trường, MCP server và hook của nó sẽ chạy ở mọi lượt kế tiếp của agent${p.hooks?.length ? ' — hook chạy trước MỌI lần agent gọi tool khớp' : ''}. Đây là code của người khác — hãy đọc nó trước.\n\n${p.dir}`)}
+                  : `Tin cậy "${p.name}" trên ${agent}?\n\nLệnh, biến môi trường, MCP server và hook của nó sẽ chạy ở mọi lượt kế tiếp của agent${p.hooks?.length ? ' — hook chạy trước MỌI lần agent gọi tool khớp' : ''}. Đây là code của người khác — hãy bấm "file" để đọc nó trước.\n\n${p.dir}`)}
               className={`px-1.5 py-0.5 text-[11px] rounded ring-1 ${p.trusted
                 ? 'ring-gray-800 text-gray-500 hover:text-amber-300'
                 : 'ring-amber-500/40 text-amber-300 hover:bg-amber-500/10'}`}
@@ -344,6 +355,8 @@ export default function PluginsPane({ call }: { call: Call }) {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
+  // Which plugin's files are open in the browser.
+  const [browsing, setBrowsing] = useState<{ agent: string; name: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -435,6 +448,7 @@ export default function PluginsPane({ call }: { call: Call }) {
                   {list.map(p => (
                     <PluginRow
                       key={p.name} p={p} agent={r.agent_id} busy={busy} act={act}
+                      onBrowse={() => setBrowsing({ agent: r.agent_id, name: p.name })}
                       peers={agentIDs.filter(a => a !== r.agent_id)}
                     />
                   ))}
@@ -445,6 +459,12 @@ export default function PluginsPane({ call }: { call: Call }) {
           )
         })}
       </div>
+
+      {browsing && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center text-sm text-gray-400">Đang mở…</div>}>
+          <PluginFiles call={call} agent={browsing.agent} name={browsing.name} onClose={() => setBrowsing(null)} />
+        </Suspense>
+      )}
     </div>
   )
 }

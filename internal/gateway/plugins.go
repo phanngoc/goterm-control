@@ -277,3 +277,45 @@ func setPluginConfig(ws, name string, values map[string]string) error {
 	}
 	return st.Save(ws)
 }
+
+type pluginFilesParams struct {
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name"`
+	// Path set reads that file; empty lists the whole plugin.
+	Path string `json:"path,omitempty"`
+}
+
+// handlePluginFiles lets the hub look inside a plugin: the whole tree in one
+// call (plugins are small), then one file at a time. Read-only.
+func handlePluginFiles(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p pluginFilesParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	ws, err := workspaceOf(deps, p.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	pl := plugins.Load(ws, "").Find(p.Name)
+	if pl == nil {
+		return nil, fmt.Errorf("%s has no plugin %q", p.AgentID, p.Name)
+	}
+	if p.Path == "" {
+		entries, truncated, err := plugins.Tree(pl.Dir)
+		if err != nil {
+			return nil, err
+		}
+		if entries == nil {
+			entries = []plugins.Entry{}
+		}
+		return json.Marshal(map[string]any{"dir": pl.Dir, "entries": entries, "truncated": truncated})
+	}
+	body, truncated, binary, err := plugins.ReadFile(pl.Dir, p.Path)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"path": p.Path, "body": body, "truncated": truncated, "binary": binary})
+}
