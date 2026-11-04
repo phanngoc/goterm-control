@@ -40,6 +40,17 @@ type Account struct {
 	APIKey    string
 	APIKeyEnv string
 
+	// OAuthToken (claude only) is a long-lived token from `claude
+	// setup-token`, handed to the CLI as CLAUDE_CODE_OAUTH_TOKEN.
+	// OAuthTokenEnv reads it from the environment instead.
+	//
+	// This is the credential that makes per-TURN rotation possible. A
+	// config-dir login carries its own session store, so a conversation
+	// cannot leave it; a token is auth alone, and every token account that
+	// shares one session store can answer any session in it. See TokenGroup.
+	OAuthToken    string
+	OAuthTokenEnv string
+
 	// NoRotate keeps this account in the pool and out of the rotation: usable
 	// by name and never chosen for you, which is what a colleague's login
 	// needs.
@@ -59,6 +70,32 @@ func (a Account) resolvedKey() string {
 		}
 	}
 	return strings.TrimSpace(a.APIKey)
+}
+
+// resolvedToken returns the setup-token, from the env var when one is named.
+func (a Account) resolvedToken() string {
+	if a.OAuthTokenEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(a.OAuthTokenEnv)); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(a.OAuthToken)
+}
+
+// IsToken reports whether this account authenticates with a setup-token —
+// whether or not the token is actually there right now.
+func (a Account) IsToken() bool {
+	return a.Provider != ProviderCodex && (a.OAuthToken != "" || a.OAuthTokenEnv != "")
+}
+
+// store is the session store an account reads and writes: the config dir,
+// or "" for the CLI's default. Sessions can move between accounts that share
+// one — and only between those.
+func (a Account) store() string {
+	if a.ConfigDir == "" || isDefaultClaudeDir(a.ConfigDir) {
+		return ""
+	}
+	return filepath.Clean(a.ConfigDir)
 }
 
 // Env returns the environment overrides for running under this account:
@@ -91,12 +128,21 @@ func (a Account) Env() (set map[string]string, unset []string) {
 		default:
 			set["CLAUDE_CONFIG_DIR"] = a.ConfigDir
 		}
-		if key := a.resolvedKey(); key != "" {
-			set["ANTHROPIC_API_KEY"] = key
-		} else {
+		switch {
+		case a.IsToken():
+			// The token, and nothing that outranks it: an API key in the
+			// environment would win over it and bill the wrong account.
+			set["CLAUDE_CODE_OAUTH_TOKEN"] = a.resolvedToken()
+			unset = append(unset, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD", "ANTHROPIC_AUTH_TOKEN")
+		case a.resolvedKey() != "":
+			// An API key outranks a setup-token in the CLI, so an ambient
+			// token can stay: it is never consulted.
+			set["ANTHROPIC_API_KEY"] = a.resolvedKey()
+		default:
 			// No key for this account: the CLI must fall back to the OAuth
-			// login in its config dir, so an ambient key must not leak in.
-			unset = append(unset, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD")
+			// login in its config dir, so an ambient key or token must not
+			// leak in and quietly answer as somebody else.
+			unset = append(unset, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD", "CLAUDE_CODE_OAUTH_TOKEN")
 		}
 	}
 	return set, unset
@@ -108,7 +154,8 @@ func (a Account) Env() (set map[string]string, unset []string) {
 // an account that selects a config dir still selects an identity, named or
 // not, and treating it as ambient would quietly ignore it.
 func (a Account) Zero() bool {
-	return a.ConfigDir == "" && a.APIKey == "" && a.APIKeyEnv == ""
+	return a.ConfigDir == "" && a.APIKey == "" && a.APIKeyEnv == "" &&
+		a.OAuthToken == "" && a.OAuthTokenEnv == ""
 }
 
 // Status is one account's health, for `bomclaw accounts` and the dashboard.
@@ -119,12 +166,22 @@ type Status struct {
 	LastUsed    string `json:"last_used,omitempty"`     // RFC3339
 	CoolingHint string `json:"cooling_until,omitempty"` // RFC3339 while rate-limited
 	LastError   string `json:"last_error,omitempty"`
+	// Kind is how it authenticates: "login" (a config dir), "api_key" or
+	// "token" (a setup-token).
+	Kind string `json:"kind"`
+	// Current marks the token turns are going to now, and Uses how many it
+	// has taken since it became current. Token rotation only.
+	Current bool `json:"current,omitempty"`
+	Uses    int  `json:"uses,omitempty"`
+	// Turns is every turn this account has served since the gateway started.
+	Turns int `json:"turns"`
 }
 
 type accountState struct {
 	acct      Account
 	lastUsed  time.Time
 	sessions  int
+	turns     int
 	coolUntil time.Time
 	lastErr   string
 }
@@ -139,6 +196,91 @@ type Pool struct {
 	mu    sync.Mutex
 	accts []*accountState
 	next  int // round-robin cursor, used to break ties between equal accounts
+
+	// Token rotation: every rotateEvery turns, the next token in the group
+	// takes over. 0 leaves token accounts pinned per session like any other.
+	rotateEvery int
+	tokCursor   int // index into the token group of the current token
+	tokUses     int // turns the current token has served
+}
+
+// AuthCooldown is how long a token that failed to authenticate is left out.
+// Long, because a revoked or expired token does not recover by itself — but
+// not forever, so a token someone renews comes back without a restart.
+const AuthCooldown = 6 * time.Hour
+
+// SetRotateEvery makes token accounts take turns: each serves n turns, then
+// the next one does. n <= 0 turns rotation off.
+func (p *Pool) SetRotateEvery(n int) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	p.rotateEvery = n
+}
+
+// tokenGroup is the token accounts a session anchored on `anchor` may move
+// between: rotating, and sharing its session store. Caller holds p.mu.
+func (p *Pool) tokenGroup(anchor Account) []*accountState {
+	var out []*accountState
+	for _, s := range p.accts {
+		if s.acct.IsToken() && !s.acct.NoRotate && s.acct.store() == anchor.store() {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// rotateToken returns the token a turn should use, advancing the rotation:
+// the current token keeps serving until it has done rotateEvery turns, is
+// cooling down, or has no token to give — then the next usable one takes
+// over. Caller holds p.mu.
+func (p *Pool) rotateToken(anchor *accountState) *accountState {
+	group := p.tokenGroup(anchor.acct)
+	if len(group) == 0 {
+		return anchor
+	}
+	now := time.Now()
+	usable := func(s *accountState) bool {
+		return s.acct.resolvedToken() != "" && !now.Before(s.coolUntil)
+	}
+	cur := p.tokCursor % len(group)
+	if p.tokUses >= p.rotateEvery || !usable(group[cur]) {
+		// Look from the next one round to the current one itself, so a
+		// group with one usable token keeps using it.
+		found := -1
+		for i := 1; i <= len(group); i++ {
+			j := (cur + i) % len(group)
+			if usable(group[j]) {
+				found = j
+				break
+			}
+		}
+		if found < 0 {
+			// Nothing usable. The one recovering soonest gets the turn — a
+			// cooldown is a guess, and an idle agent is worse than a try.
+			found = cur
+			for j, s := range group {
+				if s.acct.resolvedToken() != "" && s.coolUntil.Before(group[found].coolUntil) {
+					found = j
+				}
+			}
+		}
+		if found != cur {
+			p.tokCursor, p.tokUses = found, 0
+		} else if p.tokUses >= p.rotateEvery {
+			p.tokUses = 0 // the only usable token starts a fresh run
+		}
+	}
+	s := group[p.tokCursor%len(group)]
+	p.tokUses++
+	s.lastUsed = now
+	s.turns++
+	return s
 }
 
 // NewPool builds the pool for provider from accounts. Entries for other
@@ -164,6 +306,14 @@ func NewPool(provider string, accounts []Account, cooldown time.Duration) (*Pool
 			return nil, fmt.Errorf("credentials: duplicate account name %q", a.Name)
 		}
 		seen[a.Name] = true
+		if a.OAuthToken != "" || a.OAuthTokenEnv != "" {
+			if a.Provider == ProviderCodex {
+				return nil, fmt.Errorf("credentials: %q: oauth_token is a claude setup-token; codex accounts use config_dir", a.Name)
+			}
+			if a.APIKey != "" || a.APIKeyEnv != "" {
+				return nil, fmt.Errorf("credentials: %q has both an API key and a setup-token — one account, one credential", a.Name)
+			}
+		}
 		a.ConfigDir = expandHome(a.ConfigDir)
 		p.accts = append(p.accts, &accountState{acct: a})
 	}
@@ -217,7 +367,14 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 	if pinned != "" {
 		for _, s := range p.accts {
 			if s.acct.Name == pinned {
+				// A session on a rotating token is not tied to that token:
+				// its history is in the shared store, so whichever token is
+				// current answers it.
+				if p.rotateEvery > 0 && s.acct.IsToken() && !s.acct.NoRotate {
+					return p.rotateToken(s).acct, nil
+				}
 				s.lastUsed = time.Now()
+				s.turns++
 				return s.acct, nil
 			}
 		}
@@ -266,9 +423,44 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 		// and they are what an install with no pool uses anyway.
 		return Account{}, nil
 	}
-	best.lastUsed = now
 	p.next = (p.next + 1) % len(p.accts)
+	if p.rotateEvery > 0 && best.acct.IsToken() {
+		return p.rotateToken(best).acct, nil
+	}
+	best.lastUsed = now
+	best.turns++
 	return best.acct, nil
+}
+
+// Failover returns another account this session can continue on after `from`
+// failed with err, or false when there is none. Only a token in a rotation
+// has anywhere to go: its session store is shared, so the conversation moves
+// with the turn. Anything else stays where its history is.
+//
+// It marks the failure first, so the account it leaves is cooling down and
+// the rotation steps past it.
+func (p *Pool) Failover(from Account, err error) (Account, bool) {
+	if p == nil || !from.IsToken() || from.NoRotate || !(IsRateLimit(err) || IsAuthFailure(err)) {
+		return Account{}, false
+	}
+	p.MarkFailure(from.Name, err)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	for _, s := range p.tokenGroup(from) {
+		if s.acct.Name != from.Name && s.acct.resolvedToken() != "" && !now.Before(s.coolUntil) {
+			// Make it current, so the turns after this one stay on it too.
+			for i, g := range p.tokenGroup(from) {
+				if g == s {
+					p.tokCursor, p.tokUses = i, 1
+				}
+			}
+			s.lastUsed = now
+			s.turns++
+			return s.acct, true
+		}
+	}
+	return Account{}, false
 }
 
 // MarkStarted records that a session is now pinned to an account.
@@ -285,8 +477,14 @@ func (p *Pool) MarkFailure(name string, err error) {
 	}
 	p.each(name, func(s *accountState) {
 		s.lastErr = truncateErr(err.Error())
-		if IsRateLimit(err) {
+		switch {
+		case IsRateLimit(err):
 			s.coolUntil = time.Now().Add(p.cooldown)
+		case IsAuthFailure(err) && s.acct.IsToken():
+			// Only a token is benched for this: a config-dir login that
+			// says "not logged in" is the one login there is, and benching
+			// it would change nothing but the message.
+			s.coolUntil = time.Now().Add(AuthCooldown)
 		}
 	})
 }
@@ -329,6 +527,22 @@ func (p *Pool) Status() []Status {
 			Provider:  s.acct.Provider,
 			Sessions:  s.sessions,
 			LastError: s.lastErr,
+			Turns:     s.turns,
+			Kind:      "login",
+		}
+		switch {
+		case s.acct.IsToken():
+			st.Kind = "token"
+			if p.rotateEvery > 0 {
+				if g := p.tokenGroup(s.acct); len(g) > 0 && g[p.tokCursor%len(g)] == s {
+					st.Current, st.Uses = true, p.tokUses
+				}
+			}
+			if s.acct.resolvedToken() == "" && st.LastError == "" {
+				st.LastError = "no token: $" + s.acct.OAuthTokenEnv + " is empty"
+			}
+		case s.acct.APIKey != "" || s.acct.APIKeyEnv != "":
+			st.Kind = "api_key"
 		}
 		if !s.lastUsed.IsZero() {
 			st.LastUsed = s.lastUsed.Format(time.RFC3339)
@@ -350,6 +564,17 @@ func IsRateLimit(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	// The provider throttling everyone says so — "Server is temporarily
+	// limiting requests (not your usage limit)" — and contains "usage limit".
+	// Benching an account for it would shrink the pool for nothing.
+	if strings.Contains(msg, "not your usage limit") || strings.Contains(msg, "temporarily limiting requests") {
+		return false
+	}
+	// Subscription caps, as the CLI words them: "You've hit your session
+	// limit", "… weekly limit", "… Opus limit", "… monthly spend limit".
+	if strings.Contains(msg, "hit your") && strings.Contains(msg, "limit") {
+		return true
+	}
 	for _, sig := range []string{
 		"rate limit",
 		"rate_limit",
@@ -358,6 +583,39 @@ func IsRateLimit(err error) bool {
 		"usage limit",
 		"too many requests",
 		"insufficient_quota",
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsAuthFailure reports whether err says the credential itself was refused —
+// an expired, revoked or malformed token — rather than throttled. A token
+// that fails this way is left out for AuthCooldown, and the turn moves on.
+func IsAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	// The CLI's own wording (code.claude.com/docs/en/errors): "Failed to
+	// authenticate: OAuth token revoked", "API Error: 401 OAuth token has
+	// expired", code authentication_failed, "Not logged in · Please run
+	// /login", "Login expired".
+	for _, sig := range []string{
+		"401",
+		"authentication_error",
+		"authentication_failed",
+		"failed to authenticate",
+		"oauth token revoked",
+		"oauth token has expired",
+		"invalid bearer token",
+		"invalid api key",
+		"invalid x-api-key",
+		"not logged in",
+		"login expired",
+		"please run /login",
 	} {
 		if strings.Contains(msg, sig) {
 			return true

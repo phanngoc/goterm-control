@@ -76,6 +76,73 @@ can describe both backends:
       config_dir: "~/.codex"
 ```
 
+## Setup-tokens: rotating per turn
+
+A login (`config_dir`) carries its own session store, so it can only rotate
+**per session**. A **setup-token** is different: it is authentication alone.
+Every token account that shares one session store can answer any conversation
+in it. So tokens can take turns **within** a conversation.
+
+```bash
+claude setup-token          # once per subscription; prints a one-year token
+```
+
+Keep each token in the agent's `.env`, not in `config.yaml`:
+
+```bash
+CLAUDE_TOKEN_A=sk-ant-oat01-…
+CLAUDE_TOKEN_B=sk-ant-oat01-…
+CLAUDE_TOKEN_C=sk-ant-oat01-…
+```
+
+```yaml
+accounts:
+  rotate_every: 5        # each token serves 5 turns, then the next one does
+  pool:
+    - name: "tok-a"
+      oauth_token_env: "CLAUDE_TOKEN_A"
+    - name: "tok-b"
+      oauth_token_env: "CLAUDE_TOKEN_B"
+    - name: "tok-c"
+      oauth_token_env: "CLAUDE_TOKEN_C"
+```
+
+How it behaves:
+
+- **The count is per agent.** Every turn of every conversation advances it:
+  turns 1–5 go to `tok-a`, 6–10 to `tok-b`, 11–15 to `tok-c`, and then back
+  to `tok-a`.
+- **A capped or refused token is skipped.** Messages like `You've hit your
+  session limit`, a 429, or `OAuth token revoked/expired` take the token out of
+  the rotation, for `cooldown_minutes` or 6 hours respectively.
+- **The turn that hit the cap moves to the next token.** It is retried there
+  at once, provided nothing had been shown to the person yet. The conversation
+  continues on the new token because the session store is shared. Once output
+  has streamed, the error stands rather than a second answer appearing under
+  the first.
+- **A token whose variable is empty is skipped** and reported by
+  `bomclaw accounts`.
+- **What doesn't move.** Logins and `rotate: false` accounts keep per-session
+  pinning. Tokens only rotate among accounts with the same `config_dir`
+  (usually none, which means the default store).
+- **The cost: prompt cache.** The API cache is kept per organization, so the
+  first turn on a new subscription re-reads the whole conversation without a
+  cache hit. Rotating every 5 turns means one uncached turn in five. A larger
+  `rotate_every` trades evenness for cache.
+- **Precedence.** An `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in the
+  environment outranks a setup-token in the CLI, so both are removed for token
+  turns. A config-dir login likewise never sees an ambient
+  `CLAUDE_CODE_OAUTH_TOKEN`.
+
+`bomclaw accounts` marks the current token and how many turns it has used:
+
+```
+  ACCOUNT  KIND   SESSIONS  TURNS  LAST USED  STATE
+  tok-a    token  3         10     14:22:01   ready
+  tok-b    token  0         7      14:31:40   current (2 used) · ready
+  tok-c    token  0         5      14:19:44   cooling 12m0s
+```
+
 ## How an account is chosen
 
 - **New session** → the least recently used account that is not cooling down,

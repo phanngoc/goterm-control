@@ -220,12 +220,14 @@ func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
 			provider = cfg.Provider
 		}
 		byProvider[provider] = append(byProvider[provider], credentials.Account{
-			Name:      a.Name,
-			Provider:  provider,
-			ConfigDir: a.ConfigDir,
-			APIKey:    a.APIKey,
-			APIKeyEnv: a.APIKeyEnv,
-			NoRotate:  a.Rotate != nil && !*a.Rotate,
+			Name:          a.Name,
+			Provider:      provider,
+			ConfigDir:     a.ConfigDir,
+			APIKey:        a.APIKey,
+			APIKeyEnv:     a.APIKeyEnv,
+			OAuthToken:    a.OAuthToken,
+			OAuthTokenEnv: a.OAuthTokenEnv,
+			NoRotate:      a.Rotate != nil && !*a.Rotate,
 		})
 	}
 	cooldown := time.Duration(cfg.Accounts.CooldownMinutes) * time.Minute
@@ -235,6 +237,7 @@ func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", provider, err)
 		}
+		p.SetRotateEvery(cfg.Accounts.RotateEvery)
 		out[provider] = p
 	}
 	return out, nil

@@ -176,7 +176,72 @@ type pendingCall struct {
 // modelID is the resolved model to use for this call.
 // memoryContext is appended to the system prompt (new sessions) or prepended to
 // the user message (resumed sessions) to inject cross-session memory.
-func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID string, userText string, memoryContext string, cb StreamCallbacks) (err error) {
+func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID string, userText string, memoryContext string, cb StreamCallbacks) error {
+	// Resolve the credential before spawning: a pin that no longer names a
+	// configured account must fail the turn, not start a blank conversation
+	// under someone else's login.
+	acct, err := c.account(sess)
+	if err != nil {
+		return err
+	}
+	for attempt := 0; ; attempt++ {
+		var emitted bool
+		err = c.sendOnce(ctx, sess, modelID, userText, memoryContext, markEmitted(cb, &emitted), acct)
+		// A setup-token that is throttled or refused, before anything reached
+		// the person, hands the turn to the next token in its rotation: the
+		// session store is shared, so the conversation continues there. Once
+		// output has streamed, retrying would show the person a second answer
+		// under the first — so the error stands.
+		if err == nil || emitted || ctx.Err() != nil || attempt >= maxTokenFailovers {
+			c.recordOutcome(acct, err)
+			return err
+		}
+		next, ok := c.pool.Failover(acct, err)
+		if !ok {
+			c.recordOutcome(acct, err)
+			return err
+		}
+		log.Printf("claude: account %s failed (%v); retrying the turn on %s", acct.Name, firstLine(err), next.Name)
+		acct = next
+	}
+}
+
+// maxTokenFailovers bounds how many tokens one turn may try after the first.
+const maxTokenFailovers = 3
+
+// markEmitted wraps cb so *emitted turns true the moment anything reaches the
+// person — the line after which a turn can no longer be silently retried.
+func markEmitted(cb StreamCallbacks, emitted *bool) StreamCallbacks {
+	out := cb
+	if f := cb.OnText; f != nil {
+		out.OnText = func(s string) { *emitted = true; f(s) }
+	} else {
+		out.OnText = func(string) { *emitted = true }
+	}
+	if f := cb.OnToolCall; f != nil {
+		out.OnToolCall = func(n, in string) { *emitted = true; f(n, in) }
+	} else {
+		out.OnToolCall = func(string, string) { *emitted = true }
+	}
+	if f := cb.OnThinking; f != nil {
+		out.OnThinking = func(s string) { *emitted = true; f(s) }
+	}
+	return out
+}
+
+func firstLine(err error) string {
+	s := err.Error()
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
+}
+
+// sendOnce runs one attempt of a turn under acct.
+func (c *Client) sendOnce(ctx context.Context, sess *session.Session, modelID string, userText string, memoryContext string, cb StreamCallbacks, acct credentials.Account) (err error) {
 	sessionID := sess.GetSessionID()
 	isNewSession := sessionID == ""
 
@@ -188,18 +253,6 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	if memoryContext != "" && isNewSession {
 		systemPrompt += memoryContext
 	}
-
-	// Resolve the credential before spawning: a pin that no longer names a
-	// configured account must fail the turn, not start a blank conversation
-	// under someone else's login.
-	acct, err := c.account(sess)
-	if err != nil {
-		return err
-	}
-	// Report how this account fared, on every exit path. A rate limit puts it
-	// on cooldown so NEW sessions go elsewhere; this one stays where its
-	// history is.
-	defer func() { c.recordOutcome(acct, err) }()
 
 	kit := c.kit(chat.WorkspaceFor(sess, c.workspace))
 	args := withMCPConfig(buildArgs(modelID, sessionID, isNewSession, systemPrompt), kit.ClaudeMCPConfig())

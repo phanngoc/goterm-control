@@ -191,8 +191,14 @@ type HeartbeatConfig struct {
 // inside the same directory as their credentials, so an account switch mid
 // conversation would lose the conversation. See internal/credentials.
 type AccountsConfig struct {
-	CooldownMinutes int             `yaml:"cooldown_minutes"` // skip an account this long after it reports a rate limit (default 15)
-	Pool            []AccountConfig `yaml:"pool"`
+	CooldownMinutes int `yaml:"cooldown_minutes"` // skip an account this long after it reports a rate limit (default 15)
+	// RotateEvery makes claude setup-token accounts take turns: each serves
+	// this many turns (across every session), then the next one does. 0 keeps
+	// them pinned per session like any other account. Tokens can rotate per
+	// turn where logins cannot because a token is auth alone — the session
+	// store stays the same, so a conversation continues on the next token.
+	RotateEvery int             `yaml:"rotate_every"`
+	Pool        []AccountConfig `yaml:"pool"`
 }
 
 // AccountConfig is one credential in the pool.
@@ -210,6 +216,14 @@ type AccountConfig struct {
 	// so the secret need not sit in config.yaml.
 	APIKey    string `yaml:"api_key"`
 	APIKeyEnv string `yaml:"api_key_env"`
+
+	// OAuthToken is a claude long-lived token from `claude setup-token`;
+	// OAuthTokenEnv names the environment variable holding it, which keeps
+	// the token out of config.yaml. Accounts with a token and the same
+	// config_dir (usually none — the default store) rotate per turn when
+	// rotate_every is set.
+	OAuthToken    string `yaml:"oauth_token"`
+	OAuthTokenEnv string `yaml:"oauth_token_env"`
 
 	// Rotate is whether new sessions may land here on their own. Pointer so an
 	// absent key means yes — every pool that exists today is a rotation and
