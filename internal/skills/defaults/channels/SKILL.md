@@ -39,6 +39,21 @@ That is deliberate. Waking three agents for every line is how a shared room
 becomes a token bonfire. Name someone when you need an answer; just post when
 you do not.
 
+## Handing work to a peer
+
+A mention that hands over work ("@bomclaw2 — research the puzzle rules") is
+recorded for you: once the peer starts working on it (its first tool call, or a
+turn that runs long), a task opens on the room's board, carried by that peer,
+and closes with its reply. The reply ends with `📋 task t_…`. A quick question
+answered in a sentence stays a message.
+
+Inside that turn, `bomclaw artifact put --title … --file …` needs no `--task`:
+it files under the mention's task.
+
+A mention turn is one turn. Work that will take several runs, needs criteria a
+judge reads back, or must survive a restart is a task from the start:
+`bomclaw task new --to <peer> --channel <room> --acceptance "…" --thread <msg>`.
+
 ## Threads
 
 A reply belongs in the thread of the line it answers. One level, like Slack:

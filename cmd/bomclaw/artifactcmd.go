@@ -31,7 +31,7 @@ func runArtifact(args []string) {
 	case "put":
 		fs := flag.NewFlagSet("artifact put", flag.ExitOnError)
 		agent, dbPath := agentFlag(fs), dbFlag(fs)
-		taskID := fs.String("task", "", "Task this belongs to (required)")
+		taskID := fs.String("task", "", "Task this belongs to (required outside a mention turn)")
 		kind := fs.String("kind", coord.ArtifactFile, "document | patch | file | link | result")
 		title := fs.String("title", "", "What this is, in a few words (required)")
 		file := fs.String("file", "", "Read content from this file (default: stdin)")
@@ -40,6 +40,20 @@ func runArtifact(args []string) {
 		contentType := fs.String("content-type", "", "MIME type, if it matters")
 		fs.Parse(rest)
 
+		// Answering a mention, there is no task id to pass — the work was
+		// handed over in a thread. The turn's own task record is it.
+		if *taskID == "" && *title != "" {
+			if mid := os.Getenv("BOMCLAW_MENTION_ID"); mid != "" {
+				db := openCoord(*dbPath)
+				t, err := db.EnsureMentionTask(mid, requireAgent(*agent))
+				db.Close()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "artifact put: the task for this mention: %v\n", err)
+					os.Exit(1)
+				}
+				*taskID = t.ID
+			}
+		}
 		if *taskID == "" || *title == "" {
 			fmt.Fprintln(os.Stderr, "Usage: bomclaw artifact put --task <id> --title <what it is> [--kind patch] [--file p.diff]")
 			os.Exit(1)

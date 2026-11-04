@@ -536,7 +536,9 @@ func TestTheRoomSeesWorkInProgress(t *testing.T) {
 	if len(mine) != 1 {
 		t.Fatalf("expected one message from the agent, got %d — progress was left behind", len(mine))
 	}
-	if mine[0].Body != "xong rồi, đây là kết quả" {
+	// A turn that used tools was work, so the answer ends by naming the task
+	// that records it (TestHandedOverWorkLandsOnTheBoard).
+	if !strings.HasPrefix(mine[0].Body, "xong rồi, đây là kết quả") || !strings.Contains(mine[0].Body, "📋 task") {
 		t.Fatalf("the answer did not replace the progress: %q", mine[0].Body)
 	}
 	if strings.Contains(mine[0].Body, "đang làm") {
@@ -1068,4 +1070,101 @@ func TestAThreadWhoseTaskIsBlockedTellsTheAgentToUnblockIt(t *testing.T) {
 	if !strings.Contains(p, task.ID) {
 		t.Error("the unblock command does not name the task")
 	}
+}
+
+// Work handed over with a mention must land on the board: a turn that reaches
+// for a tool opens a task on the room's board, carried by the agent doing it,
+// and closes it with the reply. ch_arcade had zero tasks after a whole
+// research round assigned this way.
+func TestHandedOverWorkLandsOnTheBoard(t *testing.T) {
+	turn := &recordingTurn{reply: "Đây là 4 đề xuất cho Rumba và Queens…", newID: "s1"}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	turn.duringTurn = func(sink TurnSink) { sink.NoteTool("Bash(grep -r rules games/)") }
+
+	_, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberAgent, AuthorID: "bomclaw",
+		Body: "@bomclaw2 — PUZZLE: nghiên cứu luật Rumba + Queens\nNguồn: r/puzzles",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	tasks, err := cdb.ListTasks(coord.TaskFilter{ChannelID: coord.GeneralChannelID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected one task for the handed-over work, got %d", len(tasks))
+	}
+	tk := tasks[0]
+	if tk.Kind != coord.KindMention || tk.State != coord.TaskCompleted || tk.ClaimedBy != "bomclaw2" || tk.CreatedBy != "bomclaw" {
+		t.Errorf("task record: %+v", tk)
+	}
+	if strings.Contains(tk.Title, "@") || !strings.Contains(tk.Title, "Rumba") {
+		t.Errorf("title = %q", tk.Title)
+	}
+	if !strings.Contains(tk.Result, "4 đề xuất") {
+		t.Errorf("result = %q", tk.Result)
+	}
+	// Its reply lands in the thread; Telegram must not hear it a second time.
+	if tk.ReportedAt == "" {
+		t.Error("a mention task would be reported again")
+	}
+	// No runner may pick a mention task up.
+	if c, err := cdb.ClaimTask("bomclaw2"); err == nil {
+		t.Errorf("a runner claimed %s", c.ID)
+	}
+}
+
+// A quick answer is not work: no tool, no task.
+func TestAQuickAnswerLeavesTheBoardAlone(t *testing.T) {
+	turn := &recordingTurn{reply: "có, ở cổng 8090"}
+	deps, cdb := mentionTestDeps(t, turn)
+	if _, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 arcade chạy cổng nào?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	tasks, _ := cdb.ListTasks(coord.TaskFilter{ChannelID: coord.GeneralChannelID})
+	if len(tasks) != 0 {
+		t.Fatalf("a quick answer became a task: %+v", tasks)
+	}
+}
+
+// While the turn runs, the CLI and the turn agree on one task for one mention.
+func TestOneMentionOneTask(t *testing.T) {
+	turn := &recordingTurn{reply: "ok"}
+	deps, cdb := mentionTestDeps(t, turn)
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 viết báo cáo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromCLI, fromTurn string
+	turn.duringTurn = func(sink TurnSink) {
+		// The agent files an artifact before its first tool call is parsed.
+		t1, err := cdb.EnsureMentionTask(root.ID, "bomclaw2")
+		if err != nil {
+			t.Errorf("ensure: %v", err)
+			return
+		}
+		fromCLI = t1.ID
+		sink.NoteTool("Bash(cat report.md)")
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+	tasks, _ := cdb.ListTasks(coord.TaskFilter{ChannelID: coord.GeneralChannelID})
+	if len(tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(tasks))
+	}
+	fromTurn = tasks[0].ID
+	if fromCLI != fromTurn || tasks[0].State != coord.TaskCompleted {
+		t.Errorf("CLI task %s, turn task %s (%s)", fromCLI, fromTurn, tasks[0].State)
+	}
+	_ = deps
 }

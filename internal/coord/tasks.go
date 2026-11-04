@@ -287,6 +287,7 @@ func (db *DB) ClaimTask(agentID string) (*Task, error) {
 			  AND lease_until <= ?
 			  AND attempts < max_attempts
 			  AND (assigned_to = '' OR assigned_to = ?)
+			  AND kind <> 'mention'
 			ORDER BY priority DESC, created_at
 			LIMIT 1
 		)

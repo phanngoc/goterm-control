@@ -185,6 +185,7 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	}
 
 	if age := time.Since(m.CreatedAt); age > StaleMention {
+		w.deps.Coord.CloseStaleMentionTask(m.ID, w.deps.AgentID)
 		clear(fmt.Sprintf("skipped a mention %s old", age.Round(time.Hour)))
 		return
 	}
@@ -261,6 +262,44 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 		}
 	}
 
+	// A mention that turns out to be work gets a task of its own on the
+	// room's board — see coord/mentiontasks.go. "Work" is the first tool call,
+	// or a turn still running after mentionTaskAfter; a quick answer is
+	// neither and never becomes one.
+	var (
+		taskOnce sync.Once
+		taskMu   sync.Mutex
+		mtask    *coord.Task
+	)
+	openTask := func() {
+		taskOnce.Do(func() {
+			t, err := w.deps.Coord.OpenMentionTask(m, w.deps.AgentID, sess.CurrentTrace())
+			if err != nil {
+				log.Printf("mentions: task record for %s: %v", m.ID, err)
+				return
+			}
+			taskMu.Lock()
+			mtask = t
+			taskMu.Unlock()
+		})
+	}
+	sink.onWork = openTask
+	longTurn := time.AfterFunc(mentionTaskAfter, openTask)
+	// `bomclaw artifact put` with no --task files under this mention's task.
+	sess.SetEnv("BOMCLAW_MENTION_ID", m.ID)
+	closeTask := func(ok bool, result string) {
+		longTurn.Stop()
+		taskMu.Lock()
+		t := mtask
+		taskMu.Unlock()
+		if t == nil {
+			return
+		}
+		if err := w.deps.Coord.CloseMentionTask(t.ID, w.deps.AgentID, ok, truncateLine(result, 4000)); err != nil {
+			log.Printf("mentions: close task %s: %v", t.ID, err)
+		}
+	}
+
 	sess.MarkRunning("channel: " + truncateLine(m.Body, 40))
 	w.live.Store(m.ID, sess)
 	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), prompt, sink)
@@ -281,6 +320,9 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 		// because retrying it forever would just burn the same three minutes.
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			log.Printf("mentions: %s interrupted by shutdown — leaving it unread for the next run", m.ID)
+			// The task stays open: the next run answers the same mention and
+			// finds it again by the message id.
+			longTurn.Stop()
 			w.finishProgress(progress, "")
 			return
 		}
@@ -294,6 +336,7 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 				"Nhờ lại và bảo mở task (`bomclaw task new --thread ...`), task chạy được lâu hơn và "+
 				"giữ tiến độ qua nhiều lượt.", mentionTurnTimeout)
 		}
+		closeTask(false, note)
 		w.finishProgress(progress, note)
 		clear("")
 		return
@@ -302,10 +345,19 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	reply := strings.TrimSpace(sink.Text())
 	if reply == "" {
 		// Nothing to say, so nothing should be left saying it is thinking.
+		closeTask(false, "the turn produced no reply")
 		w.finishProgress(progress, "")
 		clear("turn produced nothing to say")
 		return
 	}
+	closeTask(true, reply)
+	// Say where the work is recorded, once, under the answer: the board
+	// card and its trace are one click from the line that produced them.
+	taskMu.Lock()
+	if mtask != nil {
+		reply += fmt.Sprintf("\n\n_📋 task `%s` trên board_", mtask.ID)
+	}
+	taskMu.Unlock()
 
 	// The answer takes the place of the progress line: same message, same spot
 	// in the thread, so the conversation reads as one reply rather than a
@@ -703,6 +755,11 @@ type replySink struct {
 
 	preview *chat.StreamPreview
 	done    bool
+
+	// onWork is called on the first tool call: the turn is doing work, not
+	// just answering. Nil to ignore.
+	onWork   func()
+	workSeen bool
 }
 
 // progressView is one redraw of the progress line: what the turn has done,
@@ -724,6 +781,10 @@ func (r *replySink) stop() {
 }
 
 const progressEvery = 2 * time.Second
+
+// mentionTaskAfter is how long a mention turn runs before it counts as work
+// even without a tool call: long enough that a plain answer never crosses it.
+const mentionTaskAfter = 45 * time.Second
 
 // thinkingRedraw is how much new thinking justifies a redraw before the
 // interval is up: about a sentence. Thinking arrives as a stream of small
@@ -752,7 +813,13 @@ func (r *replySink) NoteTool(label string) {
 	if len(r.tools) == 0 || r.tools[len(r.tools)-1] != label {
 		r.tools = append(r.tools, label)
 	}
+	work := r.onWork
+	first := !r.workSeen
+	r.workSeen = true
 	r.mu.Unlock()
+	if first && work != nil {
+		work()
+	}
 	r.report(true)
 }
 
