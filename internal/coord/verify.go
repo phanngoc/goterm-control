@@ -85,7 +85,7 @@ func (db *DB) NeedsVerification(limit int) ([]Task, error) {
 // Better to leave the goal plainly unverified than to stamp it with a check
 // worth nothing.
 func (db *DB) OpenVerification(goal Task, peers []Agent) (*Task, error) {
-	checker := pickChecker(goal, peers)
+	checker := pickChecker(goal, peers, db.Judge())
 	if checker == "" {
 		return nil, nil
 	}
@@ -104,14 +104,25 @@ func (db *DB) OpenVerification(goal Task, peers []Agent) (*Task, error) {
 	})
 }
 
-// pickChecker chooses who reads the work: anyone but whoever did it, online
-// first. Deliberately not the "best" peer — there is no measure of that here,
-// and a routing table invented for one question is a routing table nobody
-// maintains.
-func pickChecker(goal Task, peers []Agent) string {
+// pickChecker chooses who reads the work: the fleet's judge when one is set
+// and it did not do this work, otherwise anyone but whoever did it, online
+// first.
+//
+// A fixed judge is what makes scores comparable. Each agent grading whoever
+// it happened to be paired with gives three rulers; one third party reading
+// everyone's work gives one. When the judge is the one who did the work, the
+// rule above still wins: nobody grades themselves.
+func pickChecker(goal Task, peers []Agent, judge string) string {
 	did := goal.ClaimedBy
 	if did == "" {
 		did = goal.AssignedTo
+	}
+	if judge != "" && judge != did {
+		for _, p := range peers {
+			if p.ID == judge {
+				return judge
+			}
+		}
 	}
 	var offline string
 	for _, p := range peers {
@@ -126,6 +137,46 @@ func pickChecker(goal Task, peers []Agent) string {
 		}
 	}
 	return offline
+}
+
+// judgeKey is where the fleet's judge lives: in the shared database, so the
+// three gateways that run the verification sweep agree on it without three
+// config files having to.
+const judgeKey = "judge_agent"
+
+// Judge is the agent that grades finished goals, or "" for "any peer".
+func (db *DB) Judge() string {
+	var v string
+	if err := db.conn.QueryRow(`SELECT value FROM meta WHERE key = ?`, judgeKey).Scan(&v); err != nil {
+		return ""
+	}
+	return v
+}
+
+// SetJudge names the grading agent; "" goes back to any peer.
+func (db *DB) SetJudge(agentID string) error {
+	_, err := db.conn.Exec(`INSERT INTO meta (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, judgeKey, strings.TrimSpace(agentID))
+	if err != nil {
+		return fmt.Errorf("set judge: %w", err)
+	}
+	return nil
+}
+
+// SetScore records a verification's grade of the goal it read.
+func (db *DB) SetScore(taskID string, score int) error {
+	if score < 1 || score > 10 {
+		return fmt.Errorf("coord: a score is 1–10, not %d", score)
+	}
+	res, err := db.conn.Exec(`UPDATE tasks SET score = ?, updated_at = ? WHERE id = ? AND kind = ?`,
+		score, ts(time.Now()), taskID, KindVerify)
+	if err != nil {
+		return fmt.Errorf("score %s: %w", taskID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("coord: %s is not a verification; only a verification is scored", taskID)
+	}
+	return nil
 }
 
 func verifyBody(goal Task) string {
@@ -143,9 +194,16 @@ func verifyBody(goal Task) string {
 	}
 	fmt.Fprintf(&b, "\nRead what it actually produced, not only what it said about it: "+
 		"`bomclaw artifact list --task %s --tree` and `bomclaw task tree --id %s`.\n\n", goal.ID, goal.ID)
-	b.WriteString("Then, in one run:\n" +
-		"  meets every criterion → `bomclaw task done --id <this task> --result \"pass: <how you checked>\"`\n" +
-		"  falls short of any    → `bomclaw task reject --id <this task> --result \"<which criterion, and what is missing>\"`\n\n" +
+	b.WriteString("Grade it 1–10 with --score, against the criteria and nothing else:\n" +
+		"  10 every criterion met, with evidence you checked; nothing to fix\n" +
+		"   8 met, with small things a careful reviewer would still mention\n" +
+		"   6 met at the letter, thin in substance, or checked only by its own report\n" +
+		"   4 one criterion short\n" +
+		"   2 most of it missing, or not what was asked\n" +
+		"The score is compared across agents, so judge the work, not the effort it took.\n\n" +
+		"Then, in one run:\n" +
+		"  meets every criterion → `bomclaw task done --id <this task> --score <1-10> --result \"pass: <how you checked>\"`\n" +
+		"  falls short of any    → `bomclaw task reject --id <this task> --score <1-10> --result \"<which criterion, and what is missing>\"`\n\n" +
 		"A rejection opens follow-up work for the agent that did the original, carrying your words, " +
 		"so name the criterion and what is missing rather than describing the work in general. " +
 		"Being unable to check something is a third answer: say so in a pass, do not reject for it.")

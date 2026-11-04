@@ -218,10 +218,28 @@ func runTask(args []string) {
 		id := fs.String("id", "", "Task id (required)")
 		result := fs.String("result", "", "What came of it")
 		attempts := fs.Int("attempts", 0, "The attempts value from claim — guards against a lost lease")
+		score := fs.Int("score", 0, "A verification's grade of the goal it read, 1–10")
 		fs.Parse(rest)
 
 		db := openCoord(*dbPath)
 		defer db.Close()
+
+		// A verification's verdict carries a grade: pass/fail says whether
+		// the bar was met, the score says by how much, and the economics
+		// report compares agents on it. Asked for here rather than trusted to
+		// the prompt, so a verdict without one is sent back at once.
+		if t, err := db.GetTask(*id); err == nil && t.Kind == coord.KindVerify && sub != "fail" {
+			if *score == 0 {
+				fmt.Fprintf(os.Stderr, "task %s: %s is a verification: add --score 1-10 (see the rubric in its body)\n", sub, *id)
+				os.Exit(1)
+			}
+			if err := db.SetScore(*id, *score); err != nil {
+				fmt.Fprintf(os.Stderr, "task %s: %v\n", sub, err)
+				os.Exit(1)
+			}
+		} else if *score != 0 {
+			fmt.Fprintf(os.Stderr, "task %s: --score is only for verifications; ignored\n", sub)
+		}
 
 		state := coord.TaskCompleted
 		switch sub {

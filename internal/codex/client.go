@@ -257,6 +257,9 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 			sess.IncrementMessages()
 			if ev.Usage != nil {
 				sess.AddTokens(ev.Usage.InputTokens, ev.Usage.OutputTokens)
+				// Codex's input count already includes its cached part; record
+				// that part too so the report can say how much was a cache hit.
+				sess.AddUsage(ev.Usage.CachedInputTokens, 0, 0)
 				// Context size proxy for the threshold memory flush: what this
 				// call actually carried, cached prompt tokens included.
 				sess.SetLastContextTokens(ev.Usage.InputTokens + ev.Usage.CachedInputTokens)

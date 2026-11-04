@@ -111,6 +111,9 @@ const ProviderName = "claude"
 // --- stream-json event types from claude CLI ---
 
 type streamEvent struct {
+	// TotalCostUSD is the CLI's own figure for the call, on the result line.
+	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
+
 	Type      string      `json:"type"`
 	Message   *cliMessage `json:"message,omitempty"`
 	SessionID string      `json:"session_id,omitempty"`
@@ -360,6 +363,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 			sess.IncrementMessages()
 			if ev.Usage != nil {
 				sess.AddTokens(ev.Usage.InputTokens, ev.Usage.OutputTokens)
+				sess.AddUsage(ev.Usage.CacheReadInputTokens, ev.Usage.CacheCreationInputTokens, ev.TotalCostUSD)
 				// Context size proxy for the threshold memory flush: what the
 				// last call actually carried, including cached prompt tokens.
 				sess.SetLastContextTokens(ev.Usage.InputTokens +

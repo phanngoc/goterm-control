@@ -8,6 +8,7 @@ import NotesPane from './NotesPane'
 import SettingsPane from './SettingsPane'
 import SchedulesPane from './SchedulesPane'
 import SkillsPane from './SkillsPane'
+import EconomicsPane from './EconomicsPane'
 import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -16,6 +17,7 @@ type Call = (method: string, params?: any) => Promise<any>
 // reach the address bar without also getting a tab to click.
 const LABELS: Record<Pane, string> = {
   overview: 'Overview',
+  economics: 'Economics',
   traces: 'Traces',
   tasks: 'Tasks',
   schedules: 'Schedules',
@@ -115,6 +117,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
 
       <div className="flex-1 min-h-0">
         {pane === 'overview' && <Overview data={data} />}
+        {pane === 'economics' && <EconomicsPane call={call} agents={agentIDs} />}
         {pane === 'traces' && <TraceExplorer call={call} agents={agentIDs} />}
         {pane === 'tasks' && (
           <TaskBoard

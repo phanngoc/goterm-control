@@ -224,6 +224,10 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleAdminRestartOn(deps, params)
 		case "admin.overview":
 			return handleAdminOverview(deps)
+		case "economics.get":
+			return handleEconomics(deps, params)
+		case "economics.judge":
+			return handleEconomicsJudge(deps, params)
 		case "traces.list":
 			return handleTracesList(deps, params)
 		case "traces.get":

@@ -240,6 +240,7 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 			if ev.Part != nil && ev.Part.Tokens != nil {
 				u := ev.Part.Tokens
 				sess.AddTokens(u.Input, u.Output)
+				sess.AddUsage(u.Cache.Read, u.Cache.Write, ev.Part.Cost)
 				sess.SetLastContextTokens(u.Input + u.Cache.Read)
 			}
 

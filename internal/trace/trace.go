@@ -192,6 +192,20 @@ func (r *Recorder) insert(s *Span, parentID, name, runType string) {
 	})
 }
 
+// SetUsage records the call's cache tokens and cost on its run. Written when
+// the span ends, after the run's token counts.
+func (s *Span) SetUsage(u coord.Usage) {
+	if s == nil || s.rec == nil || u == (coord.Usage{}) {
+		return
+	}
+	rec, id := s.rec, s.id
+	rec.submit(func() {
+		if err := rec.db.SetRunUsage(id, u); err != nil {
+			log.Printf("trace: run usage: %v", err)
+		}
+	})
+}
+
 // SetInputs attaches the run's input payload. Recorded on End so a single
 // UPDATE carries both, and so a caller may refine inputs mid-run.
 func (s *Span) SetInputs(inputs string) {

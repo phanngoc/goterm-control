@@ -42,14 +42,20 @@ type Session struct {
 	//
 	// Not persisted: it describes where the session came from this run, and a
 	// session adopted by another lane would otherwise wear the old lane's tags.
-	TraceTags      []string `json:"-"`
-	MessageCount   int      `json:"message_count"`
-	InputTokens    int      `json:"input_tokens"`
-	OutputTokens   int      `json:"output_tokens"`
-	CompactSummary string   `json:"compact_summary,omitempty"`
-	Label          string   `json:"label,omitempty"`
-	Seq            int      `json:"seq"`
-	MemoryFlushed  bool     `json:"memory_flushed,omitempty"` // threshold flush already ran this session
+	TraceTags    []string `json:"-"`
+	MessageCount int      `json:"message_count"`
+	InputTokens  int      `json:"input_tokens"`
+	OutputTokens int      `json:"output_tokens"`
+	// Prompt-cache traffic and the CLI's own cost figure, summed like the
+	// token counts. Not persisted: a trace span reads the delta across one
+	// call, which is all anything here needs.
+	CacheReadTokens  int     `json:"-"`
+	CacheWriteTokens int     `json:"-"`
+	CostUSD          float64 `json:"-"`
+	CompactSummary   string  `json:"compact_summary,omitempty"`
+	Label            string  `json:"label,omitempty"`
+	Seq              int     `json:"seq"`
+	MemoryFlushed    bool    `json:"memory_flushed,omitempty"` // threshold flush already ran this session
 
 	mu       sync.Mutex `json:"-"`
 	cancelFn func()     `json:"-"`
@@ -256,6 +262,22 @@ func (s *Session) AddTokens(input, output int) {
 	s.InputTokens += input
 	s.OutputTokens += output
 	s.UpdatedAt = time.Now()
+}
+
+// AddUsage records prompt-cache tokens and cost from a run.
+func (s *Session) AddUsage(cacheRead, cacheWrite int, costUSD float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CacheReadTokens += cacheRead
+	s.CacheWriteTokens += cacheWrite
+	s.CostUSD += costUSD
+}
+
+// Usage returns the running cache and cost totals for this session.
+func (s *Session) Usage() (cacheRead, cacheWrite int, costUSD float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.CacheReadTokens, s.CacheWriteTokens, s.CostUSD
 }
 
 // Tokens returns the running input/output totals for this session.

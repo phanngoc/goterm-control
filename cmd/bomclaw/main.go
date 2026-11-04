@@ -134,6 +134,8 @@ func main() {
 		runAgents(os.Args[2:])
 	case "bench":
 		runBench(os.Args[2:])
+	case "econ":
+		runEcon(os.Args[2:])
 	case "models":
 		runModels(os.Args[2:])
 	case "chat":
@@ -174,6 +176,7 @@ Commands:
   accounts           Show the credential pool and which accounts are healthy
   agents             List agents registered in the shared database
   bench              Measure the agents: value delivered against a person's attention
+  econ               Agents' economics: token burn, cost, task completion, judge scores
   task               Create, claim and finish work shared between agents
   schedule           Timed work: run a task or a command on a cron, interval or one-shot
   heartbeat          This agent's scratchpad and its periodic look at it

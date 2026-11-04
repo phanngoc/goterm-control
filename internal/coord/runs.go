@@ -104,6 +104,27 @@ func (db *DB) EndRun(id string, end time.Time, outputs, errMsg string, inTok, ou
 	return nil
 }
 
+// Usage is what one LLM call cost beyond its plain token counts.
+type Usage struct {
+	CacheRead  int
+	CacheWrite int
+	CostUSD    float64
+}
+
+// SetRunUsage records cache tokens and the CLI's cost for a run. Separate from
+// EndRun so the many callers that only know input/output stay as they are.
+func (db *DB) SetRunUsage(id string, u Usage) error {
+	if u == (Usage{}) {
+		return nil
+	}
+	_, err := db.conn.Exec(`UPDATE runs SET cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?
+		WHERE id = ?`, u.CacheRead, u.CacheWrite, u.CostUSD, id)
+	if err != nil {
+		return fmt.Errorf("run usage %s: %w", id, err)
+	}
+	return nil
+}
+
 // TraceFilter narrows a trace listing.
 type TraceFilter struct {
 	AgentID string

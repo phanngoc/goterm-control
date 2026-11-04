@@ -523,6 +523,8 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		},
 	})
 	in, out := sess.Tokens()
+	cr, cw, cost := sess.Usage()
+	call.SetUsage(coord.Usage{CacheRead: cr, CacheWrite: cw, CostUSD: cost})
 	call.EndWithTokens(reply.String(), sendErr, in, out)
 
 	// What did the agent do to the task while it ran? Its own commands
