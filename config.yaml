@@ -68,6 +68,7 @@ heartbeat:
 # and they are the same identity, so rotating achieves nothing.
 accounts:
   cooldown_minutes: 15        # after a rate limit, new sessions skip that account this long
+  rotate_every: 0             # >0: claude setup-token accounts take turns, this many turns each
   pool: []
   # pool:
   #   # claude on separate OAuth subscriptions
@@ -78,6 +79,12 @@ accounts:
   #   # claude on plain API keys instead (api_key_env keeps the secret out of this file)
   #   - name: "key-a"
   #     api_key_env: "ANTHROPIC_KEY_A"
+  #   # claude setup-tokens (`claude setup-token`) — rotate per turn with rotate_every;
+  #   # tokens live in .env, e.g. CLAUDE_TOKEN_A=sk-ant-oat01-…
+  #   - name: "tok-a"
+  #     oauth_token_env: "CLAUDE_TOKEN_A"
+  #   - name: "tok-b"
+  #     oauth_token_env: "CLAUDE_TOKEN_B"
   #   # codex accounts — only used by an agent whose provider is codex
   #   - name: "codex-main"
   #     provider: "codex"

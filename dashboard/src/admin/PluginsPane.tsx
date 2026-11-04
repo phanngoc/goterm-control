@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { AgentPlugins, HubPlugin, HubSetting, PluginStatus } from './types'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import type { AgentPlugins, HubPlugin, HubSetting, PluginSkill, PluginStatus } from './types'
 
 type Call = (method: string, params?: any) => Promise<any>
+
+// Monaco is heavy; the file browser loads only when a plugin is opened.
+const PluginFiles = lazy(() => import('./PluginFiles'))
+// Skills are read and edited where they live: inside their plugin.
+const SkillModal = lazy(() => import('./SkillModal'))
 
 // The plugins hub.
 //
@@ -49,7 +54,7 @@ function Chip({ children, title, tone = 'gray' }: { children: React.ReactNode; t
 function Contributions({ p }: { p: HubPlugin }) {
   if (p.kind === 'skill') return null
   const items: [string, string | undefined][] = []
-  if (p.skills?.length) items.push([`${p.skills.length} skill`, p.skills.join(', ')])
+  // Skills are listed under the row, so a chip for them would say it twice.
   if (p.commands?.length) items.push([`${p.commands.length} lệnh`, p.commands.join(', ')])
   if (p.mcp?.length) items.push([`${p.mcp.length} MCP`, p.mcp.join(', ')])
   if (p.hooks?.length) items.push([`${p.hooks.length} hook`, p.hooks.join('\n')])
@@ -139,9 +144,49 @@ function SettingsForm({ settings, onSave, busy }: {
   )
 }
 
-function PluginRow({ p, agent, peers, busy, act }: {
+// SkillList is a plugin's skills, each opening its SKILL.md to read or edit.
+// Most plugins carry exactly one, named like the plugin: then the row already
+// says the name, and only the description and marks are worth a line.
+function SkillList({ skills, plugin, onOpen }: {
+  skills: PluginSkill[]; plugin: string; onOpen: (name: string) => void
+}) {
+  return (
+    <ul className="mt-1 space-y-0.5">
+      {skills.map(s => (
+        <li key={s.name}>
+          <button
+            onClick={() => onOpen(s.name)}
+            title="Đọc hoặc sửa SKILL.md — có hiệu lực ở lượt kế tiếp"
+            className="group w-full text-left rounded px-1.5 py-1 -mx-1.5 hover:bg-gray-800/50"
+          >
+            <span className="flex items-baseline gap-1.5">
+              <span className="text-[10px] text-sky-400/80">skill</span>
+              {s.name !== plugin && <span className="text-xs text-gray-200 group-hover:text-sky-300">{s.name}</span>}
+              {s.edited && (
+                <span
+                  title="Bản của agent này đã khác bản gốc — nó học được điều gì đó các con khác chưa có"
+                  className="text-[10px] px-1 rounded ring-1 ring-amber-500/30 bg-amber-500/10 text-amber-300"
+                >
+                  đã sửa
+                </span>
+              )}
+              <span className="text-[10px] text-sky-300/0 group-hover:text-sky-300/80">đọc / sửa</span>
+            </span>
+            {s.description && (
+              <span className="block text-[11px] text-gray-500 leading-snug line-clamp-2">{s.description}</span>
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function PluginRow({ p, agent, peers, busy, act, onBrowse, onSkill }: {
   p: HubPlugin; agent: string; peers: string[]; busy: boolean
   act: (method: string, params: any, confirmText?: string) => Promise<void>
+  onBrowse: () => void
+  onSkill: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const enabled = p.status !== 'disabled'
@@ -164,12 +209,19 @@ function PluginRow({ p, agent, peers, busy, act }: {
         {p.version && <span className="text-[10px] text-gray-600 font-mono">v{p.version}</span>}
 
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={onBrowse}
+            title="Xem plugin gồm những file gì và đọc nội dung từng file"
+            className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+          >
+            file
+          </button>
           {p.needs_trust && (
             <button
               disabled={busy}
               onClick={() => act('plugins.set', { ...base, trusted: !p.trusted },
                 p.trusted ? undefined
-                  : `Tin cậy "${p.name}" trên ${agent}?\n\nLệnh, biến môi trường, MCP server và hook của nó sẽ chạy ở mọi lượt kế tiếp của agent${p.hooks?.length ? ' — hook chạy trước MỌI lần agent gọi tool khớp' : ''}. Đây là code của người khác — hãy đọc nó trước.\n\n${p.dir}`)}
+                  : `Tin cậy "${p.name}" trên ${agent}?\n\nLệnh, biến môi trường, MCP server và hook của nó sẽ chạy ở mọi lượt kế tiếp của agent${p.hooks?.length ? ' — hook chạy trước MỌI lần agent gọi tool khớp' : ''}. Đây là code của người khác — hãy bấm "file" để đọc nó trước.\n\n${p.dir}`)}
               className={`px-1.5 py-0.5 text-[11px] rounded ring-1 ${p.trusted
                 ? 'ring-gray-800 text-gray-500 hover:text-amber-300'
                 : 'ring-amber-500/40 text-amber-300 hover:bg-amber-500/10'}`}
@@ -188,7 +240,10 @@ function PluginRow({ p, agent, peers, busy, act }: {
         </div>
       </div>
 
-      {p.description && <p className="mt-0.5 text-xs text-gray-500 leading-snug">{p.description}</p>}
+      {p.description && !(p.skills?.length === 1 && p.skills[0].name === p.name && p.skills[0].description === p.description) && (
+        <p className="mt-0.5 text-xs text-gray-500 leading-snug">{p.description}</p>
+      )}
+      {p.skills?.length ? <SkillList skills={p.skills} plugin={p.name} onOpen={onSkill} /> : null}
 
       {p.status !== 'active' && p.status !== 'disabled' && p.reasons?.map(r => (
         <p key={r} className={`mt-0.5 text-[11px] ${p.status === 'broken' ? 'text-red-300' : 'text-amber-300'}`}>• {r}</p>
@@ -344,6 +399,10 @@ export default function PluginsPane({ call }: { call: Call }) {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
+  // Which plugin's files are open in the browser.
+  const [browsing, setBrowsing] = useState<{ agent: string; name: string } | null>(null)
+  // Which skill's SKILL.md is open.
+  const [skill, setSkill] = useState<{ agent: string; name: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -374,7 +433,7 @@ export default function PluginsPane({ call }: { call: Call }) {
   const shown = useMemo(() => (list: HubPlugin[]) => list.filter(p => {
     switch (filter) {
       case 'plugin': return p.kind === 'plugin'
-      case 'skill': return p.kind === 'skill'
+      case 'skill': return (p.skills?.length ?? 0) > 0
       case 'attention': return p.status === 'pending' || p.status === 'broken' || p.untrusted
       default: return true
     }
@@ -388,8 +447,9 @@ export default function PluginsPane({ call }: { call: Call }) {
       <div className="mb-4 max-w-2xl">
         <h2 className="text-sm text-gray-200 font-medium">Plugins</h2>
         <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-          Mọi thứ agent làm được ngoài công cụ có sẵn của CLI đều là plugin: lệnh, MCP server, cấu hình,
-          prompt — và cả skill trơn. Plugin thiếu thứ gì thì ở trạng thái <span className="text-amber-300">đang chờ</span>{' '}
+          Mọi thứ agent làm được ngoài công cụ có sẵn của CLI đều là plugin: lệnh, MCP server, hook, cấu hình,
+          prompt — và skill. Bấm vào một skill để đọc hoặc sửa; mỗi agent giữ bản riêng, dấu{' '}
+          <span className="text-amber-300">đã sửa</span> là chỗ nó tự học khác bản gốc. Plugin thiếu thứ gì thì ở trạng thái <span className="text-amber-300">đang chờ</span>{' '}
           kèm lý do, và tự chạy khi thứ đó có.
         </p>
         <p className="mt-1 text-xs text-gray-600">Mọi thay đổi có hiệu lực ở lượt kế tiếp của agent, không cần restart.</p>
@@ -435,16 +495,48 @@ export default function PluginsPane({ call }: { call: Call }) {
                   {list.map(p => (
                     <PluginRow
                       key={p.name} p={p} agent={r.agent_id} busy={busy} act={act}
+                      onBrowse={() => setBrowsing({ agent: r.agent_id, name: p.name })}
+                      onSkill={name => setSkill({ agent: r.agent_id, name })}
                       peers={agentIDs.filter(a => a !== r.agent_id)}
                     />
                   ))}
                 </ul>
+              )}
+              {(r.missing?.length ?? 0) > 0 && (
+                <div className="pt-2 mt-1 border-t border-gray-800">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1">mặc định chưa có</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {r.missing!.map(n => (
+                      <button
+                        key={n}
+                        disabled={busy}
+                        onClick={() => act('skills.install', { agent_id: r.agent_id, name: n })}
+                        title="Cài lại plugin mặc định đi kèm"
+                        className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+                      >
+                        + {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
               {r.warnings?.map(w => <p key={w} className="pt-1 text-[11px] text-amber-300/80">⚠ {w}</p>)}
             </section>
           )
         })}
       </div>
+
+      {skill && (
+        <Suspense fallback={null}>
+          <SkillModal call={call} agent={skill.agent} name={skill.name} onClose={() => setSkill(null)} onSaved={load} />
+        </Suspense>
+      )}
+
+      {browsing && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center text-sm text-gray-400">Đang mở…</div>}>
+          <PluginFiles call={call} agent={browsing.agent} name={browsing.name} onClose={() => setBrowsing(null)} />
+        </Suspense>
+      )}
     </div>
   )
 }

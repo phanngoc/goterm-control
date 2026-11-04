@@ -69,7 +69,9 @@ func (c *Client) account(sess *session.Session) (credentials.Account, error) {
 		return credentials.Account{}, err
 	}
 	if pinned == "" && acct.Name != "" {
-		sess.SetAccount(acct.Name)
+		// A session on the rotation pins to the rotation, not to whichever
+		// account it happened to start on (see credentials.GroupPin).
+		sess.SetAccount(c.pool.PinFor(acct))
 		c.pool.MarkStarted(acct.Name)
 		log.Printf("codex: session %s pinned to account %s", sess.ID, acct.Name)
 	}

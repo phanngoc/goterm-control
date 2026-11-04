@@ -76,6 +76,111 @@ can describe both backends:
       config_dir: "~/.codex"
 ```
 
+## Setup-tokens: rotating per turn
+
+A login (`config_dir`) carries its own session store, so it can only rotate
+**per session**. A **setup-token** is different: it is authentication alone.
+Every token account that shares one session store can answer any conversation
+in it. So tokens can take turns **within** a conversation.
+
+```bash
+claude setup-token          # once per subscription; prints a one-year token
+```
+
+Keep each token in the agent's `.env`, not in `config.yaml`:
+
+```bash
+CLAUDE_TOKEN_A=sk-ant-oat01-…
+CLAUDE_TOKEN_B=sk-ant-oat01-…
+CLAUDE_TOKEN_C=sk-ant-oat01-…
+```
+
+```yaml
+accounts:
+  rotate_every: 5        # each token serves 5 turns, then the next one does
+  pool:
+    - name: "tok-a"
+      oauth_token_env: "CLAUDE_TOKEN_A"
+    - name: "tok-b"
+      oauth_token_env: "CLAUDE_TOKEN_B"
+    - name: "tok-c"
+      oauth_token_env: "CLAUDE_TOKEN_C"
+```
+
+How it behaves:
+
+- **The count is per agent.** Every turn of every conversation advances it:
+  turns 1–5 go to `tok-a`, 6–10 to `tok-b`, 11–15 to `tok-c`, and then back
+  to `tok-a`.
+- **A capped or refused token is skipped.** Messages like `You've hit your
+  session limit`, a 429, or `OAuth token revoked/expired` take the token out of
+  the rotation, for `cooldown_minutes` or 6 hours respectively.
+- **The turn that hit the cap moves to the next token.** It is retried there
+  at once, provided nothing had been shown to the person yet. The conversation
+  continues on the new token because the session store is shared. Once output
+  has streamed, the error stands rather than a second answer appearing under
+  the first.
+- **A token whose variable is empty is skipped** and reported by
+  `bomclaw accounts`.
+- **What doesn't move.** Logins and `rotate: false` accounts keep per-session
+  pinning. Tokens only rotate among accounts with the same `config_dir`
+  (usually none, which means the default store).
+- **The cost: prompt cache.** The API cache is kept per organization, so the
+  first turn on a new subscription re-reads the whole conversation without a
+  cache hit. Rotating every 5 turns means one uncached turn in five. A larger
+  `rotate_every` trades evenness for cache.
+- **Precedence.** An `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in the
+  environment outranks a setup-token in the CLI, so both are removed for token
+  turns. A config-dir login likewise never sees an ambient
+  `CLAUDE_CODE_OAUTH_TOKEN`.
+
+`bomclaw accounts` marks the current token and how many turns it has used:
+
+```
+  ACCOUNT  KIND   SESSIONS  TURNS  LAST USED  STATE
+  tok-a    token  3         10     14:22:01   ready
+  tok-b    token  0         7      14:31:40   current (2 used) · ready
+  tok-c    token  0         5      14:19:44   cooling 12m0s
+```
+
+## Managing tokens from the dashboard
+
+**Admin → Accounts** keeps the credentials agents rotate through, per
+provider, without editing `config.yaml`:
+
+| Provider | Kinds | Reaches the CLI as |
+|---|---|---|
+| Claude Code | setup-token, API key | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` |
+| Codex | access token, API key | `CODEX_ACCESS_TOKEN`, `CODEX_API_KEY` |
+
+- **Storage.** Tokens live in `tokens.yaml`, next to the coordination
+  database (`~/.goterm-shared/data/tokens.yaml` by default), with mode 0600.
+  The page never gets a value back. It shows a mask such as
+  `sk-ant-oat01-…abcd`, and an edit with an empty value field keeps the
+  current one.
+- **Sharing.** Every agent running that provider uses the provider's tokens.
+- **Taking effect.** A gateway re-reads the file before its next turn when it
+  has changed, so adding, editing or deleting a token needs no restart.
+- **Rotation length.** "Đổi token sau N lượt" is the provider's
+  `rotate_every`. It overrides the config value; 0 defers to the config.
+- **Opting out.** A token outside the rotation ("ngoài vòng xoay") is the
+  equivalent of `rotate: false`.
+- **Live status.** Each token shows how every agent is using it right now:
+  current or not, turns served, cooldown, and the last error. The page reads
+  this from each agent's `/api/status`.
+- **Config accounts.** Accounts from `config.yaml` are listed read-only below
+  the tokens. A stored token whose name matches a config account is ignored
+  for that agent.
+
+**Which accounts rotate together.** Every account that shares a session store
+can answer any conversation in it. That covers tokens, API keys, and the
+default login, meaning the subscription you logged into with plain `claude`
+(or `codex`). With a rotation set, all of these take turns. A login with a
+`config_dir` of its own keeps its own conversations.
+
+A conversation on the rotation is pinned to the rotation (`@rotation`), not
+to the token it started on, so deleting that token does not strand it.
+
 ## How an account is chosen
 
 - **New session** → the least recently used account that is not cooling down,

@@ -1,11 +1,14 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/ngocp/goterm-control/internal/plugins"
+	"github.com/ngocp/goterm-control/internal/skills"
 )
 
 // The plugins hub: every agent's toolkit, as the agent's next turn will see
@@ -24,8 +27,11 @@ type AgentPlugins struct {
 	Online    bool        `json:"online"`
 	Provider  string      `json:"provider,omitempty"`
 	Plugins   []HubPlugin `json:"plugins"`
-	Warnings  []string    `json:"warnings,omitempty"`
-	Error     string      `json:"error,omitempty"`
+	// Missing names bundled defaults this agent no longer has, so the hub
+	// can offer to put them back.
+	Missing  []string `json:"missing,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	Error    string   `json:"error,omitempty"`
 }
 
 // HubPlugin is a plugin as the hub shows it. Settings are listed with their
@@ -42,7 +48,7 @@ type HubPlugin struct {
 	Trusted     bool            `json:"trusted"`
 	Untrusted   bool            `json:"untrusted"`
 	NeedsTrust  bool            `json:"needs_trust"`
-	Skills      []string        `json:"skills,omitempty"`
+	Skills      []PluginSkill   `json:"skills,omitempty"`
 	Commands    []string        `json:"commands,omitempty"`
 	MCP         []string        `json:"mcp,omitempty"`
 	Hooks       []string        `json:"hooks,omitempty"` // "pre_tool bash", "post_tool *"
@@ -51,6 +57,19 @@ type HubPlugin struct {
 	Injects     []string        `json:"injects,omitempty"`
 	Source      *plugins.Source `json:"source,omitempty"`
 	Settings    []HubSetting    `json:"settings,omitempty"`
+}
+
+// PluginSkill is one skill a plugin carries, as the hub lists it. Skills
+// live inside plugins now, so this is where they are read and managed.
+type PluginSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Path        string `json:"path"`
+	// Bundled says a default of this name ships with bomclaw; Edited says
+	// the agent's copy no longer matches it — the mark of something this
+	// agent learned that its peers have not.
+	Bundled bool `json:"bundled,omitempty"`
+	Edited  bool `json:"edited,omitempty"`
 }
 
 // HubSetting is one field of a plugin's config schema and its current value.
@@ -89,6 +108,7 @@ func handlePluginsList(deps Deps, _ json.RawMessage) (json.RawMessage, error) {
 			continue
 		}
 		row.Plugins, row.Warnings = hubPlugins(a.Workspace)
+		row.Missing = missingDefaults(row.Plugins)
 		out = append(out, row)
 	}
 	return json.Marshal(out)
@@ -114,7 +134,14 @@ func hubPlugins(workspace string) ([]HubPlugin, []string) {
 			Commands:   p.Commands, Prompt: p.PromptText, Provides: p.Provides,
 		}
 		for _, s := range p.SkillList {
-			h.Skills = append(h.Skills, s.Name)
+			ps := PluginSkill{Name: s.Name, Description: s.Description, Path: s.Path}
+			if orig, err := skills.Default(s.Name); err == nil {
+				ps.Bundled = true
+				if body, err := os.ReadFile(s.Path); err == nil {
+					ps.Edited = !bytes.Equal(bytes.TrimSpace(body), bytes.TrimSpace(orig))
+				}
+			}
+			h.Skills = append(h.Skills, ps)
 		}
 		for name := range p.Servers {
 			h.MCP = append(h.MCP, name)
@@ -276,4 +303,64 @@ func setPluginConfig(ws, name string, values map[string]string) error {
 		st.SetConfig(name, key, v)
 	}
 	return st.Save(ws)
+}
+
+type pluginFilesParams struct {
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name"`
+	// Path set reads that file; empty lists the whole plugin.
+	Path string `json:"path,omitempty"`
+}
+
+// handlePluginFiles lets the hub look inside a plugin: the whole tree in one
+// call (plugins are small), then one file at a time. Read-only.
+func handlePluginFiles(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p pluginFilesParams
+	if err := decodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	ws, err := workspaceOf(deps, p.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	pl := plugins.Load(ws, "").Find(p.Name)
+	if pl == nil {
+		return nil, fmt.Errorf("%s has no plugin %q", p.AgentID, p.Name)
+	}
+	if p.Path == "" {
+		entries, truncated, err := plugins.Tree(pl.Dir)
+		if err != nil {
+			return nil, err
+		}
+		if entries == nil {
+			entries = []plugins.Entry{}
+		}
+		return json.Marshal(map[string]any{"dir": pl.Dir, "entries": entries, "truncated": truncated})
+	}
+	body, truncated, binary, err := plugins.ReadFile(pl.Dir, p.Path)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"path": p.Path, "body": body, "truncated": truncated, "binary": binary})
+}
+
+// missingDefaults lists the bundled defaults no plugin of this agent carries.
+func missingDefaults(list []HubPlugin) []string {
+	has := map[string]bool{}
+	for _, p := range list {
+		has[p.Name] = true
+		for _, s := range p.Skills {
+			has[s.Name] = true
+		}
+	}
+	var out []string
+	for _, n := range skills.DefaultNames() {
+		if !has[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }

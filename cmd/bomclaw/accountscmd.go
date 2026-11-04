@@ -52,7 +52,7 @@ func runAccounts(args []string) {
 
 	fmt.Printf("%s · provider %s\n\n", orAny(agent, "agent"), st.Accounts[0].Provider)
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "  ACCOUNT\tSESSIONS\tLAST USED\tSTATE")
+	fmt.Fprintln(w, "  ACCOUNT\tKIND\tSESSIONS\tTURNS\tLAST USED\tSTATE")
 	now := time.Now()
 	for _, a := range st.Accounts {
 		state := "ready"
@@ -63,7 +63,12 @@ func runAccounts(args []string) {
 				state = "cooling"
 			}
 		}
-		fmt.Fprintf(w, "  %s\t%d\t%s\t%s\n", a.Name, a.Sessions, clockOr(a.LastUsed, "never"), state)
+		if a.Current {
+			// The token turns are going to now, and how far into its run.
+			state = fmt.Sprintf("current (%d used) · %s", a.Uses, state)
+		}
+		fmt.Fprintf(w, "  %s\t%s\t%d\t%d\t%s\t%s\n", a.Name, orAny(a.Kind, "login"), a.Sessions, a.Turns,
+			clockOr(a.LastUsed, "never"), state)
 	}
 	w.Flush()
 
