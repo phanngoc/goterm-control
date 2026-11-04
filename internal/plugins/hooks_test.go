@@ -101,7 +101,7 @@ hooks:
 	}
 	pre := settings.Hooks["PreToolUse"]
 	if len(pre) != 1 || pre[0].Matcher != "*" ||
-		pre[0].Hooks[0].Command != `'/opt/bom claw/bomclaw' hook pre_tool --backend claude` ||
+		pre[0].Hooks[0].Command != shellQuote("/opt/bom claw/bomclaw")+" hook pre_tool --backend claude" ||
 		pre[0].Hooks[0].Timeout != 12 {
 		t.Fatalf("claude PreToolUse = %+v", pre)
 	}
@@ -111,7 +111,8 @@ hooks:
 
 	codex := strings.Join(k.CodexHookArgs(), " ")
 	for _, want := range []string{"--dangerously-bypass-hook-trust", "features.hooks=true",
-		`hooks.PreToolUse=[{matcher="*", hooks=[{type="command", command="'/opt/bom claw/bomclaw' hook pre_tool --backend codex"}]}]`} {
+		`hooks.PreToolUse=[{matcher="*", hooks=[{type="command", command=` +
+			tomlString(shellQuote("/opt/bom claw/bomclaw")+" hook pre_tool --backend codex") + `}]}]`} {
 		if !strings.Contains(codex, want) {
 			t.Errorf("codex args lack %q:\n%s", want, codex)
 		}
