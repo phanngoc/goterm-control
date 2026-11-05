@@ -186,26 +186,70 @@ func (c *Client) SendMessage(ctx context.Context, sess *session.Session, modelID
 	if err != nil {
 		return err
 	}
+	prompt := userText
+	retriedCrash := false
 	for attempt := 0; ; attempt++ {
 		var emitted bool
-		err = c.sendOnce(ctx, sess, modelID, userText, memoryContext, markEmitted(cb, &emitted), acct)
-		// A setup-token that is throttled or refused, before anything reached
-		// the person, hands the turn to the next token in its rotation: the
-		// session store is shared, so the conversation continues there. Once
-		// output has streamed, retrying would show the person a second answer
-		// under the first — so the error stands.
-		if err == nil || emitted || ctx.Err() != nil || attempt >= maxTokenFailovers {
+		err = c.sendOnce(ctx, sess, modelID, prompt, memoryContext, markEmitted(cb, &emitted), acct)
+		if err == nil || ctx.Err() != nil || attempt >= maxTokenFailovers {
 			c.recordOutcome(acct, err)
 			return err
 		}
-		next, ok := c.pool.Failover(acct, err)
-		if !ok {
+		// A capped or refused token benches itself (until the reset the
+		// error names) and hands the turn to the next token: the session
+		// store is shared, so the conversation continues there. A CLI that
+		// was killed from outside — exit 143/137, no fault of the account —
+		// is run once more on the same one.
+		from := acct.Name
+		if next, ok := c.pool.Failover(acct, err); ok {
+			acct = next
+		} else if !retriedCrash && IsInterrupted(err) {
+			retriedCrash = true
+		} else {
 			c.recordOutcome(acct, err)
 			return err
 		}
-		log.Printf("claude: account %s failed (%v); retrying the turn on %s", acct.Name, firstLine(err), next.Name)
-		acct = next
+		log.Printf("claude: turn failed on %s (%v); retrying on %s", from, firstLine(err), acct.Name)
+		if emitted {
+			// Part of the answer already reached the person, and the session
+			// holds what was done. Sending the question again would answer it
+			// twice; ask the session to carry on instead, and say so.
+			if cb.OnText != nil {
+				cb.OnText(fmt.Sprintf("\n\n↻ _lượt bị ngắt (%s), chạy tiếp trên %s_\n\n", shortReason(err), acct.Name))
+			}
+			prompt = continuePrompt(err)
+		}
 	}
+}
+
+// IsInterrupted reports a CLI that was killed rather than one that failed:
+// SIGTERM (143) or SIGKILL (137) from outside the turn. Worth one more try;
+// nothing about the account is at fault.
+func IsInterrupted(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	return strings.Contains(m, "exit status 143") || strings.Contains(m, "exit status 137") ||
+		strings.Contains(m, "signal: terminated") || strings.Contains(m, "signal: killed")
+}
+
+// continuePrompt resumes a turn that was cut off after it had started
+// answering. The session already holds the half-done work.
+func continuePrompt(err error) string {
+	return "[system] This turn was cut off part-way (" + shortReason(err) + ") and has been resumed, " +
+		"possibly on another account. Continue the same request from where it stopped. Do not redo steps " +
+		"that already finished and do not repeat what you already said; if the work was already complete, " +
+		"just give the result."
+}
+
+func shortReason(err error) string {
+	s := firstLine(err)
+	s = strings.TrimPrefix(s, "claude error: ")
+	if len(s) > 80 {
+		s = s[:80] + "…"
+	}
+	return s
 }
 
 // maxTokenFailovers bounds how many tokens one turn may try after the first.

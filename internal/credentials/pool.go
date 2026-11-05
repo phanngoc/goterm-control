@@ -238,6 +238,12 @@ type accountState struct {
 	turns     int
 	coolUntil time.Time
 	lastErr   string
+	// sharedErr is the error another agent benched this credential for,
+	// shown when this agent has none of its own to show.
+	sharedErr string
+	// inShared marks a bench the shared state knows about. When the shared
+	// row goes away — another agent's turn on it succeeded — so does this.
+	inShared bool
 }
 
 // Pool holds the accounts for ONE provider — an agent runs one backend, and
@@ -256,6 +262,15 @@ type Pool struct {
 	rotateEvery int
 	tokCursor   int // index into the token group of the current token
 	tokUses     int // turns the current token has served
+
+	// tokStarted is false until this agent's rotation has chosen its first
+	// token, which it then chooses by load like any later one rather than
+	// starting every restart on the same first token.
+	tokStarted bool
+
+	// shared is the state the agents on this machine keep in common:
+	// cooldowns and recent load per credential. Nil runs on local state only.
+	shared *Shared
 
 	// The token store, when attached: re-read when its file changes.
 	store      *TokenStore
@@ -279,6 +294,44 @@ func (p *Pool) PinFor(acct Account) string {
 		return GroupPin
 	}
 	return acct.Name
+}
+
+// AttachShared makes this pool read and write the cooldowns and load the
+// agents on this machine share. Nil detaches it.
+func (p *Pool) AttachShared(s *Shared) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.shared = s
+}
+
+// syncSharedLocked folds the other agents' cooldowns into this pool's view.
+// A shared bench only ever lengthens a local one. Caller holds p.mu.
+func (p *Pool) syncSharedLocked(now time.Time) {
+	if p.shared == nil {
+		return
+	}
+	cool := p.shared.Cooldowns(now)
+	for _, s := range p.accts {
+		c, ok := cool[s.acct.Key()]
+		if !ok {
+			if s.inShared {
+				s.coolUntil, s.lastErr, s.inShared = time.Time{}, "", false
+			}
+			s.sharedErr = ""
+			continue
+		}
+		s.inShared = true
+		if c.Until.After(s.coolUntil) {
+			s.coolUntil = c.Until
+		}
+		s.sharedErr = c.Reason
+		if c.Agent != "" {
+			s.sharedErr += " (seen by " + c.Agent + ")"
+		}
+	}
 }
 
 // AttachStore makes the dashboard's token store part of this pool. Its
@@ -394,15 +447,27 @@ func (p *Pool) rotateToken(anchor *accountState) *accountState {
 		return s.acct.usable() && !now.Before(s.coolUntil)
 	}
 	cur := p.tokCursor % len(group)
-	if p.tokUses >= p.rotateEvery || !usable(group[cur]) {
+	if !p.tokStarted || p.tokUses >= p.rotateEvery || !usable(group[cur]) {
 		// Look from the next one round to the current one itself, so a
-		// group with one usable token keeps using it.
+		// group with one usable token keeps using it. With shared load, the
+		// least-used usable token across every agent wins; ties keep the
+		// round-robin order. The current token only competes on the first
+		// pick, when there is no run to end.
+		load := p.shared.Load(now)
 		found := -1
-		for i := 1; i <= len(group); i++ {
+		// Order of preference on a tie: after the current token when a run
+		// ends, the current token itself first when there is no run yet.
+		start, end := 1, len(group)
+		if !p.tokStarted {
+			start, end = 0, len(group)-1
+		}
+		for i := start; i <= end; i++ {
 			j := (cur + i) % len(group)
-			if usable(group[j]) {
+			if !usable(group[j]) {
+				continue
+			}
+			if found < 0 || load[group[j].acct.Key()] < load[group[found].acct.Key()] {
 				found = j
-				break
 			}
 		}
 		if found < 0 {
@@ -420,11 +485,13 @@ func (p *Pool) rotateToken(anchor *accountState) *accountState {
 		} else if p.tokUses >= p.rotateEvery {
 			p.tokUses = 0 // the only usable token starts a fresh run
 		}
+		p.tokStarted = true
 	}
 	s := group[p.tokCursor%len(group)]
 	p.tokUses++
 	s.lastUsed = now
 	s.turns++
+	p.shared.RecordTurn(s.acct.Key(), now)
 	return s
 }
 
@@ -503,6 +570,7 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.syncLocked()
+	p.syncSharedLocked(time.Now())
 
 	if len(p.accts) == 0 {
 		return Account{}, nil // ambient credentials
@@ -523,6 +591,7 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 				}
 				s.lastUsed = time.Now()
 				s.turns++
+				p.shared.RecordTurn(s.acct.Key(), s.lastUsed)
 				return s.acct, nil
 			}
 		}
@@ -577,6 +646,7 @@ func (p *Pool) Pick(pinned string) (Account, error) {
 	}
 	best.lastUsed = now
 	best.turns++
+	p.shared.RecordTurn(best.acct.Key(), now)
 	return best.acct, nil
 }
 
@@ -612,6 +682,7 @@ func (p *Pool) Failover(from Account, err error) (Account, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
+	p.syncSharedLocked(now)
 	for _, s := range p.tokenGroup(from) {
 		if s.acct.Name != from.Name && s.acct.usable() && !now.Before(s.coolUntil) {
 			// Make it current, so the turns after this one stay on it too.
@@ -620,8 +691,10 @@ func (p *Pool) Failover(from Account, err error) (Account, bool) {
 					p.tokCursor, p.tokUses = i, 1
 				}
 			}
+			p.tokStarted = true
 			s.lastUsed = now
 			s.turns++
+			p.shared.RecordTurn(s.acct.Key(), now)
 			return s.acct, true
 		}
 	}
@@ -640,27 +713,44 @@ func (p *Pool) MarkFailure(name string, err error) {
 	if err == nil {
 		return
 	}
+	var key, reason string
+	var until time.Time
 	p.each(name, func(s *accountState) {
 		s.lastErr = truncateErr(err.Error())
-		switch {
-		case IsRateLimit(err):
-			s.coolUntil = time.Now().Add(p.cooldown)
-		case IsAuthFailure(err) && s.acct.envCredential():
-			// Only a token is benched for this: a config-dir login that
-			// says "not logged in" is the one login there is, and benching
-			// it would change nothing but the message.
-			s.coolUntil = time.Now().Add(AuthCooldown)
+		// Only a token is benched for an auth failure: a config-dir login
+		// that says "not logged in" is the one login there is, and benching
+		// it would change nothing but the message.
+		if IsAuthFailure(err) && !IsRateLimit(err) && !s.acct.envCredential() {
+			return
+		}
+		if u, ok := p.coolFor(err, time.Now()); ok {
+			if u.After(s.coolUntil) {
+				s.coolUntil = u
+			}
+			key, until, reason = s.acct.Key(), s.coolUntil, s.lastErr
+			s.inShared = p.shared != nil
 		}
 	})
+	if key != "" {
+		p.shared.Bench(key, until, reason)
+		log.Printf("credentials: %s benched until %s: %s", name, until.Format("15:04 Jan 2"), reason)
+	}
 }
 
 // MarkSuccess clears a recorded error and lifts any cooldown: the account
 // evidently works again.
 func (p *Pool) MarkSuccess(name string) {
+	var lift string
 	p.each(name, func(s *accountState) {
+		if !s.coolUntil.IsZero() || s.sharedErr != "" {
+			lift = s.acct.Key()
+		}
 		s.lastErr = ""
+		s.sharedErr = ""
+		s.inShared = false
 		s.coolUntil = time.Time{}
 	})
+	p.shared.Lift(lift)
 }
 
 func (p *Pool) each(name string, fn func(*accountState)) {
@@ -686,6 +776,7 @@ func (p *Pool) Status() []Status {
 	defer p.mu.Unlock()
 	p.syncLocked()
 	now := time.Now()
+	p.syncSharedLocked(now)
 	out := make([]Status, 0, len(p.accts))
 	for _, s := range p.accts {
 		st := Status{
@@ -722,6 +813,9 @@ func (p *Pool) Status() []Status {
 		}
 		if now.Before(s.coolUntil) {
 			st.CoolingHint = s.coolUntil.Format(time.RFC3339)
+			if st.LastError == "" {
+				st.LastError = s.sharedErr
+			}
 		}
 		out = append(out, st)
 	}
