@@ -988,3 +988,40 @@ func (db *DB) nextMessageTime(channelID string) time.Time {
 	}
 	return now
 }
+
+// ConversationThread is where a task is talked about: its own thread, the
+// thread of the mention it records, or — for a sub-task or a verify with no
+// thread of its own — the thread of the work it belongs to, walking up the
+// parent chain. A verifier answering in the thread where the work was asked is
+// what a team does; a verifier answering nowhere is what the board did until
+// 2026-11-05, when 58 of 68 tasks in ch_phim-ngan-25d ran without a word in
+// the room.
+func (db *DB) ConversationThread(t *Task) (rootID, channelID string, err error) {
+	for i, cur := 0, t; cur != nil && i < MaxDepth+2; i++ {
+		root, ch, err := db.TaskThread(cur.ID)
+		if err != nil {
+			return "", "", err
+		}
+		if root != "" {
+			return root, ch, nil
+		}
+		if r, c := db.MentionThread(cur); r != "" {
+			return r, c, nil
+		}
+		if cur.ParentID == "" {
+			break
+		}
+		if cur, err = db.GetTask(cur.ParentID); err != nil {
+			break // a parent gone missing is no thread, not an error
+		}
+	}
+	return "", "", nil
+}
+
+// Quiet defuses @mentions in text an agent posts on someone else's behalf — a
+// task title or result echoed into a room. Echoing "@bomclaw2 please review"
+// from a result must not wake bomclaw2: that is a summons nobody decided to
+// send, and the start of agents answering each other's reports.
+func Quiet(s string) string {
+	return mentionPattern.ReplaceAllString(s, "@​$1")
+}

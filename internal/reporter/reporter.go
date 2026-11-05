@@ -222,7 +222,7 @@ func (r *Reporter) reportToThread(t *coord.Task) {
 	if author == "" {
 		author = r.cfg.AgentID
 	}
-	body := Format(t) + r.artifactIndex(t)
+	body := coord.Quiet(Format(t)) + r.artifactIndex(t)
 	if _, _, err := r.db.PostMessage(coord.NewChannelMessage{
 		ChannelID: channelID, ThreadRoot: rootID, AuthorID: author, Body: body,
 	}); err != nil {
