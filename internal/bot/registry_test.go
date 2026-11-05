@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,6 +71,9 @@ func err(v any) string {
 // and nothing says so.
 func TestPoolsAreBuiltPerProvider(t *testing.T) {
 	c := cfgFor(config.ProviderClaude, "claude-opus-5")
+	// The dashboard's token store lives next to coord.db and joins the pool;
+	// without this the test counted whatever tokens this machine has stored.
+	c.Coord.Path = filepath.Join(t.TempDir(), "coord.db")
 	c.Accounts.Pool = []config.AccountConfig{
 		{Name: "default", ConfigDir: "~/.claude"},
 		{Name: "tam", ConfigDir: "~/.claude-tam"},

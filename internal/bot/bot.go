@@ -194,6 +194,23 @@ func NewChatClientWithPool(cfg *config.Config, executor *tools.Executor, pool *c
 	return c
 }
 
+// botPool is the pool the bot's turns run on: the one it was given, or, with
+// none, its own from config. Split out of NewWithPool, which needs a live
+// Telegram token, so the sharing can be tested.
+func botPool(cfg *config.Config, given *credentials.Pool) (*credentials.Pool, error) {
+	if given != nil {
+		return given, nil
+	}
+	pool, err := PoolFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	if !pool.Empty() {
+		log.Printf("bot: credential pool for %s: %s", cfg.Provider, strings.Join(pool.Names(), ", "))
+	}
+	return pool, nil
+}
+
 // PoolFromConfig builds this agent's credential pool from config. Accounts for
 // the other backend are ignored: an agent runs one CLI, and a codex login is
 // unreadable by claude.
@@ -251,6 +268,19 @@ func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
 }
 
 func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *session.Manager) (*Bot, error) {
+	return NewWithPool(cfg, db, coordDB, sessions, nil)
+}
+
+// NewWithPool is New with the agent's credential pool handed in.
+//
+// The gateway builds one pool and must give this one to the bot. A second
+// pool built here is a second rotation: chat and @mention turns counted on
+// one, task-runner turns on the other, so rotate_every was never what it
+// said, a token capped on one side kept being picked by the other, and
+// `bomclaw accounts` (which reads the gateway's) never saw a chat turn.
+// That is what ran from #243 until this fix. A nil pool builds one from
+// config, for callers with nobody to share with (cmd/goterm).
+func NewWithPool(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *session.Manager, pool *credentials.Pool) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
 		return nil, err
@@ -302,12 +332,9 @@ func New(cfg *config.Config, db *storage.DB, coordDB *coord.DB, sessions *sessio
 	// Nil coordDB (coord disabled) yields a nil recorder, which is a no-op.
 	rec := trace.New(coordDB, cfg.Agent.ID)
 
-	pool, err := PoolFromConfig(cfg)
+	pool, err = botPool(cfg, pool)
 	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-	if !pool.Empty() {
-		log.Printf("bot: credential pool for %s: %s", cfg.Provider, strings.Join(pool.Names(), ", "))
+		return nil, err
 	}
 	llm := NewChatClientWithPool(cfg, executor, pool)
 
