@@ -585,6 +585,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		// The agent (or a person) moved the task to a terminal state during the
 		// run — `bomclaw task done` from inside it, say. The ledger has the run.
 		log.Printf("taskrunner: %s → %s (set during the run)", task.ID, final.State)
+		progress.Finish(final, r.reporterPosts(final))
 	case finishErr != nil:
 		log.Printf("taskrunner: finish run %s: %v", run.ID, finishErr)
 	default:
@@ -593,6 +594,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		if final.State == coord.TaskBlocked && final.BlockedOn == coord.BlockedOnHuman {
 			r.stuck(*final)
 		}
+		progress.Finish(final, r.reporterPosts(final))
 		msg := fmt.Sprintf("taskrunner: %s run %s → task %s", task.ID, outcome.Liveness, final.State)
 		if final.State == coord.TaskSubmitted {
 			msg += fmt.Sprintf(" (continuation %d/%d, pinned to %s)", final.Continuations, final.MaxContinuations, final.AssignedTo)
@@ -602,6 +604,26 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		}
 		log.Print(msg)
 	}
+}
+
+// reporterPosts says whether the reporter will put t's outcome in its thread:
+// the same conditions PendingReports selects on, and a creator that is an
+// agent — only an agent's gateway runs a reporter, so work created by
+// "system" or "owner" is never reported anywhere but here.
+func (r *Runner) reporterPosts(t *coord.Task) bool {
+	if t == nil || t.CreatedBy == t.ClaimedBy || t.ScheduleID != "" || t.ParentID != "" {
+		return false
+	}
+	agents, err := r.db.ListAgents()
+	if err != nil {
+		return false // saying it twice beats not saying it
+	}
+	for _, a := range agents {
+		if a.ID == t.CreatedBy {
+			return true
+		}
+	}
+	return false
 }
 
 // classify turns how the run ended into a RunOutcome. Order matters: the

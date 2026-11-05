@@ -241,7 +241,11 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if prog, err := deps.Coord.ContextProgress(task.ContextID); err == nil {
 		contextOpen, contextRuns = len(prog.Open), prog.Runs
 	}
-	threadRoot, _, err := deps.Coord.TaskThread(p.ID)
+	// The conversation this task is part of: its own thread, its mention's,
+	// or its parent's — a verify or a sub-task is discussed where the work
+	// it belongs to was asked, and its private CLI session is not somewhere a
+	// person can read the team's exchange.
+	threadRoot, _, err := deps.Coord.ConversationThread(task)
 	if err != nil {
 		return nil, err
 	}
@@ -251,9 +255,6 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	sessionID := coord.TaskSessionID(task.ID)
 	if task.Kind == coord.KindMention {
 		sessionID = ""
-		if threadRoot == "" {
-			threadRoot, _ = deps.Coord.MentionThread(task)
-		}
 	}
 	var live *LiveRun
 	if deps.Runs != nil {

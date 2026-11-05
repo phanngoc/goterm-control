@@ -126,6 +126,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
             call={call} agents={agentIDs}
             openTaskID={taskId} onOpenTask={onTaskId}
             onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
+            onOpenChannel={id => { onChannelId(id); onPane('messages') }}
             // The project's editor page, with the running project beside it.
             onOpenFiles={channelID => window.open(`/files/${encodeURIComponent(channelID)}?preview=1`, '_blank', 'noopener')}
           />

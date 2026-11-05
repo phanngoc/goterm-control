@@ -319,10 +319,11 @@ function Project({ call, detail, projects, onChanged, onOpenFiles }: {
   )
 }
 
-function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask, onOpenThread, onOpenFiles }: {
+function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask, onOpenThread, onOpenChannel, onOpenFiles }: {
   call: Call; id: string; agents: string[]; projects: Channel[]
   onClose: () => void; onChanged: () => void
   onOpenTask: (id: string) => void; onOpenThread?: (rootID: string) => void
+  onOpenChannel?: (channelID: string) => void
   onOpenFiles?: (channelID: string) => void
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
@@ -556,6 +557,26 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                     </a>
                   )}
                 </div>
+              ) : detail.project && onOpenChannel ? (
+                // Work that belongs to a room but never had a thread — queued
+                // before tasks opened one on their own. The room is still where
+                // the team talked about it; the CLI session is only the runs.
+                <div className="space-y-1">
+                  <button
+                    onClick={() => onOpenChannel(detail.project!.id)}
+                    className="block text-left text-xs text-sky-300 hover:underline"
+                  >
+                    → mở channel #{detail.project.name} (nơi đội trao đổi về việc này)
+                  </button>
+                  {detail.session_id && (
+                    <a
+                      href={`/chat/${encodeURIComponent(detail.session_id)}`}
+                      className="block text-[11px] text-gray-500 hover:text-gray-300 hover:underline"
+                    >
+                      phiên CLI riêng của các lượt chạy task
+                    </a>
+                  )}
+                </div>
               ) : detail.session_id ? (
                 <a
                   href={`/chat/${encodeURIComponent(detail.session_id)}`}
@@ -762,12 +783,13 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
   )
 }
 
-export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpenThread, onOpenFiles }: {
+export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpenThread, onOpenChannel, onOpenFiles }: {
   call: Call; agents: string[]
   /** openTaskID is which task's detail is showing; it lives in the URL, so a
    *  task can be linked to instead of described. */
   openTaskID?: string; onOpenTask: (id: string) => void
   onOpenThread?: (rootID: string) => void
+  onOpenChannel?: (channelID: string) => void
   /** onOpenFiles takes you to a project's folder — where a task's work lands. */
   onOpenFiles?: (channelID: string) => void
 }) {
@@ -903,7 +925,7 @@ export default function TaskBoard({ call, agents, openTaskID, onOpenTask, onOpen
       </div>
 
       {openID && (
-        <TaskDrawer call={call} id={openID} agents={agents} projects={projects} onClose={() => onOpenTask('')} onChanged={() => { load(); loadProjects() }} onOpenTask={onOpenTask} onOpenThread={onOpenThread} onOpenFiles={onOpenFiles} />
+        <TaskDrawer call={call} id={openID} agents={agents} projects={projects} onClose={() => onOpenTask('')} onChanged={() => { load(); loadProjects() }} onOpenTask={onOpenTask} onOpenThread={onOpenThread} onOpenChannel={onOpenChannel} onOpenFiles={onOpenFiles} />
       )}
     </div>
   )

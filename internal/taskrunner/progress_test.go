@@ -162,3 +162,101 @@ func TestTheRoomSeesTheAnswerForming(t *testing.T) {
 		t.Error("the progress line stopped announcing itself as one")
 	}
 }
+
+// Work that belongs to a room but came from no conversation — `task new`, a
+// verify, a rework — opens a thread of its own and talks there: who picked it
+// up, what it is doing, how it ended. 58 of 68 tasks in ch_phim-ngan-25d ran
+// without a word in the room before this.
+func TestARoomTaskWithNoThreadOpensOneAndSaysHowItEnded(t *testing.T) {
+	db := progressDB(t)
+	if err := db.RegisterAgent(coord.Agent{ID: "a2", DisplayName: "a2", WSAddr: "ws://127.0.0.1:0/ws"}); err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.CreateTask(coord.NewTask{CreatedBy: "system", Title: "Verify: phim @a2",
+		AssignedTo: "a1", Kind: coord.KindVerify, ChannelID: coord.GeneralChannelID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := db.ClaimTask("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := openProgress(db, claimed)
+	if p == nil {
+		t.Fatal("a room task with no thread said nothing")
+	}
+	root, ch, _ := db.TaskThread(task.ID)
+	if root == "" || ch != coord.GeneralChannelID {
+		t.Fatalf("no thread bound to the task: %q %q", root, ch)
+	}
+	rootMsg, _ := db.GetMessage(root)
+	if !strings.Contains(rootMsg.Body, "a1 kiểm tra") || !strings.Contains(rootMsg.Body, "giao bởi system") {
+		t.Errorf("the claim does not say who picked what up: %q", rootMsg.Body)
+	}
+	if ms, _ := db.UnreadMentions(coord.MemberAgent, "a2", 10); len(ms) != 0 {
+		t.Errorf("echoing a title woke an agent: %+v", ms)
+	}
+
+	p.Close()
+	done := *claimed
+	done.State, done.Result = coord.TaskCompleted, "pass: ổn"
+	p.Finish(&done, false)
+	thread, _ := db.ThreadMessages(root)
+	last := thread[len(thread)-1]
+	if !strings.Contains(last.Body, "pass: ổn") || strings.HasPrefix(last.Body, progressPrefix) {
+		t.Fatalf("the thread does not say how it ended: %+v", thread)
+	}
+}
+
+// A sub-task talks in the thread its parent was asked in — where the people
+// waiting on the parent are reading — rather than opening a second one.
+func TestASubTaskTalksInItsParentsThread(t *testing.T) {
+	db := progressDB(t)
+	ask, _, _ := db.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "làm phim",
+	})
+	parent, _ := db.CreateTask(coord.NewTask{CreatedBy: "a1", Title: "phim", ChannelID: coord.GeneralChannelID})
+	if err := db.BindThreadToTask(ask.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	child, err := db.CreateTask(coord.NewTask{CreatedBy: "system", Title: "Verify: phim", AssignedTo: "a1",
+		Kind: coord.KindVerify, ParentID: parent.ID, ChannelID: coord.GeneralChannelID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, _ := db.ClaimTask("a1")
+	if claimed.ID != child.ID {
+		claimed, _ = db.ClaimTask("a1")
+	}
+	p := openProgress(db, claimed)
+	if p == nil || p.rootID != ask.ID || p.ownThread {
+		t.Fatalf("the sub-task did not join its parent's thread: %+v", p)
+	}
+	if own, _, _ := db.TaskThread(child.ID); own != "" {
+		t.Error("the sub-task opened a thread of its own as well")
+	}
+	thread, _ := db.ThreadMessages(ask.ID)
+	if len(thread) < 3 || !strings.Contains(thread[1].Body, "kiểm tra") {
+		t.Fatalf("no claim line in the parent's thread: %+v", thread)
+	}
+}
+
+// When the reporter will post the result in the task's own thread, Finish
+// stays quiet: one result, not two.
+func TestFinishLeavesADelegatedResultToTheReporter(t *testing.T) {
+	db := progressDB(t)
+	task, _ := db.CreateTask(coord.NewTask{CreatedBy: "a2", Title: "x", AssignedTo: "a1", ChannelID: coord.GeneralChannelID})
+	claimed, _ := db.ClaimTask("a1")
+	p := openProgress(db, claimed)
+	p.Close()
+	done := *claimed
+	done.State, done.Result = coord.TaskCompleted, "kết quả"
+	p.Finish(&done, true)
+	root, _, _ := db.TaskThread(task.ID)
+	thread, _ := db.ThreadMessages(root)
+	for _, m := range thread {
+		if strings.Contains(m.Body, "kết quả") {
+			t.Fatal("Finish posted a result the reporter is about to post")
+		}
+	}
+}
