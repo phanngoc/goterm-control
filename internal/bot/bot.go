@@ -219,6 +219,13 @@ func PoolFromConfig(cfg *config.Config) (*credentials.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The other providers' pools are not handed to anyone: release what
+	// they opened (the shared credential state) rather than leak it.
+	for provider, p := range pools {
+		if provider != cfg.Provider {
+			p.Close()
+		}
+	}
 	return pools[cfg.Provider], nil
 }
 
