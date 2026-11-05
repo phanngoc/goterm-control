@@ -477,7 +477,7 @@ func runGateway(args []string) {
 	if cfg.Telegram.Token != "" {
 		// Share db + session manager with the gateway so session renames and
 		// turn counters show up in the dashboard without a reload.
-		tgBot, err = bot.New(cfg, db, coordDB, sessions)
+		tgBot, err = bot.NewWithPool(cfg, db, coordDB, sessions, credPool)
 		if err != nil {
 			log.Printf("gateway: telegram bot init failed: %v", err)
 			tgBot = nil
