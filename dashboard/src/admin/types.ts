@@ -412,7 +412,7 @@ export interface PluginSource {
   installed_at: string
 }
 
-export type PluginStatus = 'active' | 'pending' | 'disabled' | 'broken'
+export type PluginStatus = 'active' | 'pending' | 'disabled' | 'broken' | 'elsewhere'
 
 export interface HubPlugin {
   name: string
@@ -435,6 +435,16 @@ export interface HubPlugin {
   injects?: string[]
   source?: PluginSource
   settings?: HubSetting[]
+  // Pinned to these projects; absent = global (every turn has it).
+  only?: ProjectRef[]
+  // Lives in this project's repo; loads only for turns in it.
+  project?: ProjectRef
+}
+
+export interface ProjectRef {
+  channel_id?: string
+  name: string
+  dir: string
 }
 
 export interface PluginSkill {

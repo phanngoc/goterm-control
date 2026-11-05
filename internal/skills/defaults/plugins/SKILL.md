@@ -71,6 +71,24 @@ Every decision is logged in `.bomclaw/hooks.log` in your workspace.
   missing.
 - **disabled**: switched off with `bomclaw plugins disable`.
 - **broken**: the manifest did not parse. The reason is the parse error.
+- **elsewhere**: pinned to projects this turn is not in (`only in …`).
+
+## Global or per project
+
+Every plugin in your workspace is **global**: it rides along on every turn, in
+every room. A toolkit costs attention on each of those turns, so a plugin made
+for one project's work belongs to that project:
+
+- **Best: in the project's repo**, at `plugins/<name>/` or
+  `.agents/plugins/<name>/`. It loads only for turns in that project's folder,
+  for every agent at once, and a merge to the repo is the update — nothing to
+  copy into three workspaces. Its commands still need the owner's trust.
+- **A plugin you keep in your workspace** but only one project needs: pin it,
+  `bomclaw plugins scope <name> ch_<project>` (several projects allowed;
+  `--global` undoes it). The dashboard's Plugins pane has the same switch
+  (*phạm vi*).
+
+Keep global only what helps in any room: channels, tasks, artifacts, browser.
 
 ## Rules
 

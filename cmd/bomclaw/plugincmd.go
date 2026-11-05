@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/ngocp/goterm-control/internal/config"
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/plugins"
 )
 
@@ -31,6 +33,8 @@ const pluginsUsage = `Usage: bomclaw plugins <command> [flags]
   enable|disable <name>      Turn a plugin (or a bare skill) on or off
   trust|untrust <name>       Let a project's plugin run commands/MCP, or stop it
   config <name> [k=v ...]    Show settings, or set them (k= clears one)
+  scope <name> [project ...] Pin a plugin to projects (channel id or folder);
+                             --global, or no project, makes it global again
 
 Flags: --workspace <dir> (the agent's; default $BOMCLAW_AGENT_WORKSPACE, then config)
        --project <dir>   (the turn's folder; default the current directory)
@@ -49,6 +53,8 @@ func runPlugins(args []string) {
 	asName := fs.String("name", "", "install: install under this name")
 	replace := fs.Bool("replace", false, "install: overwrite an existing plugin of that name")
 	trust := fs.Bool("trust", false, "install/update: let its commands, env and MCP servers run")
+	global := fs.Bool("global", false, "scope: make the plugin global again")
+	dbPath := fs.String("db", coord.DefaultPath(), "scope: shared coordination database, to resolve channel ids")
 	fs.Usage = func() { fmt.Fprintln(os.Stderr, pluginsUsage) }
 
 	sub, rest := "list", args
@@ -145,6 +151,22 @@ func runPlugins(args []string) {
 			}
 		})
 		pluginConfig(plugins.Load(ws, turn), pos[0])
+	case "scope":
+		need(1)
+		var dirs []string
+		if !*global {
+			for _, ref := range pos[1:] {
+				dir, err := projectFolder(*dbPath, ref)
+				exitIf(err)
+				dirs = append(dirs, dir)
+			}
+		}
+		updateState(ws, func(st *plugins.State) { st.SetOnly(pos[0], dirs) })
+		if len(dirs) == 0 {
+			fmt.Printf("%s is global — every turn has it, from the next turn\n", pos[0])
+		} else {
+			fmt.Printf("%s only in %s — from the next turn\n", pos[0], strings.Join(dirs, ", "))
+		}
 	case "help", "-h", "--help":
 		fs.Usage()
 	default:
@@ -378,4 +400,27 @@ func reportInstall(inst *plugins.Installed, verb string) {
 	} else {
 		fmt.Printf("  NOT trusted: skills and prompt apply now; read it, then `bomclaw plugins trust %s`\n", inst.Name)
 	}
+}
+
+// projectFolder turns what a person calls a project — a channel id, a room's
+// name, or a folder — into the folder a turn in it runs in, which is what a
+// pin is checked against.
+func projectFolder(dbPath, ref string) (string, error) {
+	if st, err := os.Stat(ref); err == nil && st.IsDir() {
+		return filepath.Abs(ref)
+	}
+	db, err := coord.Open(dbPath)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	for _, id := range []string{ref, "ch_" + strings.TrimPrefix(ref, "#")} {
+		if c, err := db.GetChannel(id); err == nil {
+			if c.Workspace == "" {
+				return "", fmt.Errorf("%s has no project folder — a plugin can only be pinned to a room that is a project", c.ID)
+			}
+			return c.Workspace, nil
+		}
+	}
+	return "", fmt.Errorf("%q is neither a folder nor a channel", ref)
 }

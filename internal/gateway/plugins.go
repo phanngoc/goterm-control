@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
+	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/plugins"
 	"github.com/ngocp/goterm-control/internal/skills"
 )
@@ -57,6 +60,19 @@ type HubPlugin struct {
 	Injects     []string        `json:"injects,omitempty"`
 	Source      *plugins.Source `json:"source,omitempty"`
 	Settings    []HubSetting    `json:"settings,omitempty"`
+	// Only: the projects this agent plugin is pinned to; empty = global.
+	Only []ProjectRef `json:"only,omitempty"`
+	// Project: for a plugin that lives in a project's repo, that project. It
+	// loads only for turns in it — the other way a plugin is per project.
+	Project *ProjectRef `json:"project,omitempty"`
+}
+
+// ProjectRef names a project by its room, as people know it, and its folder,
+// which is what loading checks against.
+type ProjectRef struct {
+	ChannelID string `json:"channel_id,omitempty"`
+	Name      string `json:"name"`
+	Dir       string `json:"dir"`
 }
 
 // PluginSkill is one skill a plugin carries, as the hub lists it. Skills
@@ -98,6 +114,7 @@ func handlePluginsList(deps Deps, _ json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	projects := projectRooms(deps)
 	out := make([]AgentPlugins, 0, len(agents))
 	for _, a := range agents {
 		row := AgentPlugins{AgentID: a.ID, Workspace: a.Workspace, Online: a.Online,
@@ -107,7 +124,7 @@ func handlePluginsList(deps Deps, _ json.RawMessage) (json.RawMessage, error) {
 			out = append(out, row)
 			continue
 		}
-		row.Plugins, row.Warnings = hubPlugins(a.Workspace)
+		row.Plugins, row.Warnings = hubPlugins(a.Workspace, projects)
 		row.Missing = missingDefaults(row.Plugins)
 		out = append(out, row)
 	}
@@ -117,15 +134,78 @@ func handlePluginsList(deps Deps, _ json.RawMessage) (json.RawMessage, error) {
 // hubPlugins is one workspace's toolkit, shaped for the hub. Only the agent's
 // own folder: a project's plugins depend on which project a turn is in, and
 // those show up on that project's turns, not in the agent's standing kit.
-func hubPlugins(workspace string) ([]HubPlugin, []string) {
+func hubPlugins(workspace string, projects []coord.Channel) ([]HubPlugin, []string) {
 	k := plugins.Load(workspace, "")
 	st, _ := plugins.LoadState(workspace)
+	list := make([]HubPlugin, 0, len(k.Plugins))
+	for _, p := range k.Plugins {
+		// A pinned plugin is "elsewhere" from nowhere, which is where the hub
+		// looks from. Show it as it is where it applies — a pin is a place,
+		// not a fault — and say where that is.
+		if p.Status == plugins.Elsewhere && len(p.Only) > 0 {
+			if q := plugins.Load(workspace, p.Only[0]).Find(p.Name); q != nil && q.Dir == p.Dir {
+				p = q
+			}
+		}
+		h := hubRow(p, st)
+		for _, d := range p.Only {
+			h.Only = append(h.Only, projectRef(d, projects))
+		}
+		list = append(list, h)
+	}
+	// What each project's repo brings. These are not in the agent's standing
+	// kit — they load only inside their project — so without this the hub
+	// never showed the film plugin the film room actually runs.
+	for _, c := range projects {
+		for _, p := range plugins.Load(workspace, c.Workspace).Plugins {
+			if p.Scope != plugins.ScopeProject || !inside(p.Dir, c.Workspace) {
+				continue
+			}
+			h := hubRow(p, st)
+			ref := projectRef(c.Workspace, projects)
+			h.Project = &ref
+			list = append(list, h)
+		}
+	}
+	return list, k.Errors
+}
+
+// projectRooms lists the rooms that are projects. Best effort: a hub that
+// cannot list rooms still shows every agent's own plugins.
+func projectRooms(deps Deps) []coord.Channel {
+	all, err := deps.Coord.ListChannels("", "")
+	if err != nil {
+		return nil
+	}
+	var out []coord.Channel
+	for _, c := range all {
+		if c.Workspace != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func projectRef(dir string, projects []coord.Channel) ProjectRef {
+	for _, c := range projects {
+		if filepath.Clean(c.Workspace) == filepath.Clean(dir) {
+			return ProjectRef{ChannelID: c.ID, Name: c.Name, Dir: dir}
+		}
+	}
+	return ProjectRef{Name: filepath.Base(dir), Dir: dir}
+}
+
+func inside(path, dir string) bool {
+	path, dir = filepath.Clean(path), filepath.Clean(dir)
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
+}
+
+func hubRow(p *plugins.Plugin, st plugins.State) HubPlugin {
 	trusted := map[string]bool{}
 	for _, n := range st.Trust {
 		trusted[n] = true
 	}
-	list := make([]HubPlugin, 0, len(k.Plugins))
-	for _, p := range k.Plugins {
+	{
 		h := HubPlugin{
 			Name: p.Name, Kind: p.Kind, Scope: p.Scope, Status: p.Status, Reasons: p.Reasons,
 			Description: p.Description, Version: p.Version, Dir: p.Dir,
@@ -181,9 +261,8 @@ func hubPlugins(workspace string) ([]HubPlugin, []string) {
 			}
 			h.Settings = append(h.Settings, s)
 		}
-		list = append(list, h)
+		return h
 	}
-	return list, k.Errors
 }
 
 type pluginParams struct {
@@ -192,6 +271,8 @@ type pluginParams struct {
 	// plugins.set: either or both.
 	Enabled *bool `json:"enabled,omitempty"`
 	Trusted *bool `json:"trusted,omitempty"`
+	// plugins.set: pin to these project rooms (ids); an empty list = global.
+	Projects *[]string `json:"projects,omitempty"`
 	// plugins.config: key → value; "" clears a setting.
 	Values map[string]string `json:"values,omitempty"`
 	// plugins.install
@@ -223,8 +304,21 @@ func handlePluginsMutate(deps Deps, method string, params json.RawMessage) (json
 
 	switch method {
 	case "plugins.set":
-		if p.Name == "" || (p.Enabled == nil && p.Trusted == nil) {
-			return nil, fmt.Errorf("name and enabled or trusted are required")
+		if p.Name == "" || (p.Enabled == nil && p.Trusted == nil && p.Projects == nil) {
+			return nil, fmt.Errorf("name and enabled, trusted or projects are required")
+		}
+		var pinTo []string
+		if p.Projects != nil {
+			for _, id := range *p.Projects {
+				c, err := deps.Coord.GetChannel(id)
+				if err != nil {
+					return nil, err
+				}
+				if c.Workspace == "" {
+					return nil, fmt.Errorf("%s is not a project — it has no folder to pin a plugin to", id)
+				}
+				pinTo = append(pinTo, c.Workspace)
+			}
 		}
 		st, err := plugins.LoadState(ws)
 		if err != nil {
@@ -235,6 +329,9 @@ func handlePluginsMutate(deps Deps, method string, params json.RawMessage) (json
 		}
 		if p.Trusted != nil {
 			st.SetTrusted(p.Name, *p.Trusted)
+		}
+		if p.Projects != nil {
+			st.SetOnly(p.Name, pinTo)
 		}
 		if err := st.Save(ws); err != nil {
 			return nil, err
@@ -274,7 +371,7 @@ func handlePluginsMutate(deps Deps, method string, params json.RawMessage) (json
 		return nil, fmt.Errorf("unknown method %s", method)
 	}
 
-	list, warnings := hubPlugins(ws)
+	list, warnings := hubPlugins(ws, projectRooms(deps))
 	result["plugins"], result["warnings"] = list, warnings
 	return json.Marshal(result)
 }

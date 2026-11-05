@@ -28,6 +28,8 @@ const (
 	Pending  Status = "pending"  // something it needs is missing; see Reasons
 	Disabled Status = "disabled" // turned off in the agent's state
 	Broken   Status = "broken"   // its manifest could not be read
+	// Elsewhere: pinned to projects this turn is not in (State.Only).
+	Elsewhere Status = "elsewhere"
 )
 
 // Scope says whose a plugin is, which decides what it may contribute.
@@ -68,6 +70,8 @@ type Plugin struct {
 	EnvVars    map[string]string    `json:"-"` // expanded env
 	HookList   []Hook               `json:"-"` // expanded hooks
 	PromptText string               `json:"-"`
+	// Only lists the project folders this plugin is pinned to; empty = global.
+	Only []string `json:"only,omitempty"`
 }
 
 // Load resolves the toolkit for one turn: the agent's plugins, the turn
@@ -168,7 +172,7 @@ func Load(agentWorkspace, turnWorkspace string) *Kit {
 		k.Plugins = append(k.Plugins, byName[name])
 	}
 	sort.Slice(k.Plugins, func(i, j int) bool { return k.Plugins[i].Name < k.Plugins[j].Name })
-	resolve(k.Plugins, st)
+	resolve(k.Plugins, st, turnWorkspace)
 	k.build()
 	return k
 }
@@ -252,13 +256,23 @@ func configValues(m Manifest, set map[string]string) map[string]string {
 // plugins fail to provide. A plugin waiting on a pending plugin is pending
 // too, with the chain spelled out, so the fix is always findable from the one
 // you are looking at.
-func resolve(list []*Plugin, st State) {
+func resolve(list []*Plugin, st State, turn string) {
 	for _, p := range list {
+		p.Only = st.Only[p.Name]
 		if p.Status == Broken {
 			continue
 		}
 		if st.disabled(p.Name) {
 			p.Status = Disabled
+			continue
+		}
+		if st.pinnedAway(p.Name, turn) {
+			p.Status = Elsewhere
+			names := make([]string, len(p.Only))
+			for i, d := range p.Only {
+				names[i] = filepath.Base(d)
+			}
+			p.Reasons = append(p.Reasons, "only in "+strings.Join(names, ", "))
 			continue
 		}
 		p.Reasons = append(p.Reasons, unmet(p)...)
