@@ -83,6 +83,10 @@ func TestPoolsAreBuiltPerProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, p := range pools {
+		p := p
+		t.Cleanup(func() { p.Close() })
+	}
 	claudePool := pools[config.ProviderClaude]
 	if claudePool == nil || len(claudePool.Names()) != 2 {
 		t.Fatalf("claude pool should hold the two claude logins, got %v", claudePool.Names())
@@ -96,6 +100,7 @@ func TestPoolsAreBuiltPerProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { one.Close() })
 	if len(one.Names()) != 2 {
 		t.Fatalf("PoolFromConfig should return this agent's provider pool, got %v", one.Names())
 	}

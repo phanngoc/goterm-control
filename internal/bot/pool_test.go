@@ -18,6 +18,7 @@ func TestTheBotRunsOnTheGatewaysPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { shared.Close() })
 	got, err := botPool(c, shared)
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +32,7 @@ func TestTheBotRunsOnTheGatewaysPool(t *testing.T) {
 	if err != nil || own == nil {
 		t.Fatalf("botPool(nil) = %v, %v; want a pool from config", own, err)
 	}
+	own.Close()
 }
 
 // TestOneRotationAcrossChatAndTasks is what sharing buys: chat turns and task

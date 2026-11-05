@@ -307,6 +307,20 @@ func (p *Pool) AttachShared(s *Shared) {
 	p.shared = s
 }
 
+// Close releases the shared state, if one is attached. A pool lives as long
+// as its gateway, so only tests need this — and on Windows they do, because an
+// open database file cannot be deleted with the temp dir it sits in.
+func (p *Pool) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s := p.shared
+	p.shared = nil
+	return s.Close()
+}
+
 // syncSharedLocked folds the other agents' cooldowns into this pool's view.
 // A shared bench only ever lengthens a local one. Caller holds p.mu.
 func (p *Pool) syncSharedLocked(now time.Time) {
