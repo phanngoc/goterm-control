@@ -219,6 +219,13 @@ func PoolFromConfig(cfg *config.Config) (*credentials.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The other providers' pools are not handed to anyone: release what
+	// they opened (the shared credential state) rather than leak it.
+	for provider, p := range pools {
+		if provider != cfg.Provider {
+			p.Close()
+		}
+	}
 	return pools[cfg.Provider], nil
 }
 
@@ -262,6 +269,15 @@ func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
 			coordPath = coord.DefaultPath()
 		}
 		p.AttachStore(credentials.NewTokenStore(credentials.TokenStorePath(coordPath)))
+		// Cooldowns and load are shared with the other agents on this
+		// machine: a cap one of them hits benches the token for all, and a
+		// new run starts on the token they have used least. Without the
+		// file the pool still works, on what this agent alone has seen.
+		if sh, err := credentials.OpenShared(credentials.SharedStatePath(coordPath), cfg.Agent.ID); err != nil {
+			log.Printf("credentials: shared state unavailable, running on local state only: %v", err)
+		} else {
+			p.AttachShared(sh)
+		}
 		out[provider] = p
 	}
 	return out, nil
