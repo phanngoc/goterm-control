@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import type { AgentPlugins, HubPlugin, HubSetting, PluginSkill, PluginStatus } from './types'
+import type { AgentPlugins, Channel, HubPlugin, HubSetting, PluginSkill, PluginStatus } from './types'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -23,6 +23,7 @@ const STATUS_STYLE: Record<PluginStatus, string> = {
   pending: 'ring-amber-500/30 bg-amber-500/10 text-amber-300',
   disabled: 'ring-gray-700 text-gray-500',
   broken: 'ring-red-500/30 bg-red-500/10 text-red-300',
+  elsewhere: 'ring-gray-700 text-gray-500',
 }
 
 const STATUS_LABEL: Record<PluginStatus, string> = {
@@ -30,6 +31,7 @@ const STATUS_LABEL: Record<PluginStatus, string> = {
   pending: 'đang chờ',
   disabled: 'đã tắt',
   broken: 'hỏng',
+  elsewhere: 'ngoài phạm vi',
 }
 
 const SCOPE_TITLE: Record<HubPlugin['scope'], string> = {
@@ -182,13 +184,53 @@ function SkillList({ skills, plugin, onOpen }: {
   )
 }
 
-function PluginRow({ p, agent, peers, busy, act, onBrowse, onSkill }: {
-  p: HubPlugin; agent: string; peers: string[]; busy: boolean
+// Scope: where a plugin is loaded. Global plugins ride along on every turn of
+// the agent, whatever the room; a toolkit is attention, so the film kit in a
+// trading room is a cost on every one of its turns. Pinning one to projects
+// keeps it out of the rest. (A plugin in a project's own repo is per project
+// already — it is listed under that project.)
+function ScopeEditor({ p, agent, projects, busy, act, onDone }: {
+  p: HubPlugin; agent: string; projects: Channel[]; busy: boolean
+  act: (method: string, params: any) => Promise<void>
+  onDone: () => void
+}) {
+  const [picked, setPicked] = useState<string[]>(() => (p.only ?? []).map(o => o.channel_id ?? '').filter(Boolean))
+  const toggle = (id: string) => setPicked(l => l.includes(id) ? l.filter(x => x !== id) : [...l, id])
+  const save = async (ids: string[]) => {
+    await act('plugins.set', { agent_id: agent, name: p.name, projects: ids })
+    onDone()
+  }
+  return (
+    <div className="mt-1.5 rounded ring-1 ring-gray-800 bg-gray-950/50 p-2 text-[11px]">
+      <div className="text-gray-400 mb-1">Chỉ nạp khi agent làm việc trong:</div>
+      {projects.length === 0 && <div className="text-gray-600">chưa có dự án nào có thư mục</div>}
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {projects.map(c => (
+          <label key={c.id} className="flex items-center gap-1 text-gray-300">
+            <input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)} />
+            #{c.name}
+          </label>
+        ))}
+      </div>
+      <div className="mt-2 flex gap-1.5">
+        <button disabled={busy || picked.length === 0} onClick={() => save(picked)}
+          className="px-1.5 py-0.5 rounded ring-1 ring-sky-500/40 text-sky-300 disabled:opacity-40">chỉ các dự án đã chọn</button>
+        <button disabled={busy} onClick={() => save([])}
+          className="px-1.5 py-0.5 rounded ring-1 ring-gray-800 text-gray-400 hover:text-gray-200">global (mọi nơi)</button>
+        <button onClick={onDone} className="ml-auto px-1.5 py-0.5 text-gray-500 hover:text-gray-300">đóng</button>
+      </div>
+    </div>
+  )
+}
+
+function PluginRow({ p, agent, peers, projects, busy, act, onBrowse, onSkill }: {
+  p: HubPlugin; agent: string; peers: string[]; projects: Channel[]; busy: boolean
   act: (method: string, params: any, confirmText?: string) => Promise<void>
   onBrowse: () => void
   onSkill: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [scoping, setScoping] = useState(false)
   const enabled = p.status !== 'disabled'
   const removable = p.kind === 'plugin' && p.scope !== 'project'
   const base = { agent_id: agent, name: p.name }
@@ -206,9 +248,21 @@ function PluginRow({ p, agent, peers, busy, act, onBrowse, onSkill }: {
         <span className={`text-[10px] px-1.5 py-0.5 rounded ring-1 ${STATUS_STYLE[p.status]}`}>{STATUS_LABEL[p.status]}</span>
         {p.kind === 'skill' && <Chip title="Một thư mục skill trơn — cũng là plugin, chỉ đóng góp chính skill đó">skill</Chip>}
         {p.scope !== 'agent' && <Chip title={SCOPE_TITLE[p.scope]} tone="amber">{p.scope === 'installed' ? 'cài ngoài' : 'repo'}</Chip>}
+        {!p.project && (p.only?.length
+          ? <Chip tone="sky" title="Chỉ nạp cho lượt chạy trong các dự án này">chỉ {p.only.map(o => '#' + o.name).join(', ')}</Chip>
+          : <Chip title="Nạp ở mọi lượt của agent, trong mọi channel">global</Chip>)}
         {p.version && <span className="text-[10px] text-gray-600 font-mono">v{p.version}</span>}
 
         <div className="ml-auto flex items-center gap-1.5">
+          {!p.project && (
+            <button
+              onClick={() => setScoping(s => !s)}
+              title="Plugin này nạp ở đâu: mọi nơi, hay chỉ trong vài dự án"
+              className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+            >
+              phạm vi
+            </button>
+          )}
           <button
             onClick={onBrowse}
             title="Xem plugin gồm những file gì và đọc nội dung từng file"
@@ -239,6 +293,8 @@ function PluginRow({ p, agent, peers, busy, act, onBrowse, onSkill }: {
           </button>
         </div>
       </div>
+
+      {scoping && <ScopeEditor p={p} agent={agent} projects={projects} busy={busy} act={act} onDone={() => setScoping(false)} />}
 
       {p.description && !(p.skills?.length === 1 && p.skills[0].name === p.name && p.skills[0].description === p.description) && (
         <p className="mt-0.5 text-xs text-gray-500 leading-snug">{p.description}</p>
@@ -404,6 +460,11 @@ export default function PluginsPane({ call }: { call: Call }) {
   // Which skill's SKILL.md is open.
   const [skill, setSkill] = useState<{ agent: string; name: string } | null>(null)
 
+  const [projects, setProjects] = useState<Channel[]>([])
+  useEffect(() => {
+    call('channels.list').then((l: Channel[]) => setProjects((l || []).filter(c => c.workspace))).catch(() => {})
+  }, [call])
+
   const load = useCallback(async () => {
     try {
       setRows((await call('plugins.list')) || [])
@@ -490,17 +551,43 @@ export default function PluginsPane({ call }: { call: Call }) {
               {r.error ? (
                 <p className="pt-2 text-xs text-red-300">{r.error}</p>
               ) : (
-                <ul className="pt-1">
-                  {list.length === 0 && <li className="py-3 text-xs text-gray-600">không có gì ở đây</li>}
-                  {list.map(p => (
-                    <PluginRow
-                      key={p.name} p={p} agent={r.agent_id} busy={busy} act={act}
-                      onBrowse={() => setBrowsing({ agent: r.agent_id, name: p.name })}
-                      onSkill={name => setSkill({ agent: r.agent_id, name })}
-                      peers={agentIDs.filter(a => a !== r.agent_id)}
-                    />
-                  ))}
-                </ul>
+                <>
+                  <ul className="pt-1">
+                    {list.filter(p => !p.project).length === 0 && <li className="py-3 text-xs text-gray-600">không có gì ở đây</li>}
+                    {list.filter(p => !p.project).map(p => (
+                      <PluginRow
+                        key={p.name} p={p} agent={r.agent_id} busy={busy} act={act} projects={projects}
+                        onBrowse={() => setBrowsing({ agent: r.agent_id, name: p.name })}
+                        onSkill={name => setSkill({ agent: r.agent_id, name })}
+                        peers={agentIDs.filter(a => a !== r.agent_id)}
+                      />
+                    ))}
+                  </ul>
+                  {/* A project's own plugins: they come with its repo and load
+                      only for turns inside it, so they are grouped by project.
+                      Their files are the project's — opened in its editor. */}
+                  {[...new Set(list.filter(p => p.project).map(p => p.project!.dir))].map(dir => {
+                    const group = list.filter(p => p.project?.dir === dir)
+                    const ref = group[0].project!
+                    const openFiles = () => ref.channel_id && window.open(`/files/${encodeURIComponent(ref.channel_id)}`, '_blank', 'noopener')
+                    return (
+                      <div key={dir} className="pt-2 mt-1 border-t border-gray-800">
+                        <div className="text-[10px] uppercase tracking-wider text-gray-600" title={dir}>
+                          đi kèm dự án #{ref.name} — chỉ nạp trong dự án này
+                        </div>
+                        <ul>
+                          {group.map(p => (
+                            <PluginRow
+                              key={dir + p.name} p={p} agent={r.agent_id} busy={busy} act={act} projects={projects}
+                              onBrowse={openFiles} onSkill={openFiles}
+                              peers={[]}
+                            />
+                          ))}
+                        </ul>
+                      </div>
+                    )
+                  })}
+                </>
               )}
               {(r.missing?.length ?? 0) > 0 && (
                 <div className="pt-2 mt-1 border-t border-gray-800">

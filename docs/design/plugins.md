@@ -181,3 +181,24 @@ Rules:
   - opencode was checked at the config layer: `opencode mcp list` with the
     kit's `OPENCODE_CONFIG_CONTENT` reports the server connected. The live
     turn could not run because this machine's opencode API key has expired.
+
+## Global and per-project plugins (2026-11-05)
+
+A plugin in an agent's workspace is global: every turn loads it, whatever the
+room. On 2026-11-05 agent 1 carried the film kit (6 skills and a prompt) and
+five game skills into ch_trading and every other room. Two ways to make a
+plugin per project:
+
+1. **Live in the project's repo** (`plugins/` or `.agents/plugins/` at the
+   project root). Channel turns and tasks run in the project's folder, so the
+   repo's plugins load there and nowhere else, for all agents, and a merge is
+   the update. This was always supported; the hub now lists these under their
+   project.
+2. **Pin an agent plugin**: `State.Only` (`only:` in `plugins.yaml`) maps a
+   plugin to project folders. Outside them it is `elsewhere` — it contributes
+   nothing and is not mentioned in the prompt. Set with
+   `bomclaw plugins scope <name> <channel|folder>...` / `--global`, or
+   `plugins.set {projects: [...]}` from the hub.
+
+The pin is per agent, like every other switch. Trust is still by name, so
+trusting an installed plugin also trusts a project plugin of the same name.

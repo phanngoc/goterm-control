@@ -194,3 +194,55 @@ func TestPluginsHubManagesSkills(t *testing.T) {
 		t.Fatalf("missing = %v", mine.Missing)
 	}
 }
+
+// Per-project plugins, both kinds: an agent plugin pinned to a room shows
+// where it applies (and is active there, not "elsewhere"), and a plugin that
+// lives in a project's repo shows under that project — it never appeared in
+// the hub before, though it is what the room's turns actually load.
+func TestPluginsHubShowsPerProjectPlugins(t *testing.T) {
+	deps, wsA, _ := hubFixture(t)
+	root := t.TempDir()
+	film, err := deps.Coord.CreateProject("Phim", "films", "owner", root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePlugin(t, filepath.Join(wsA, "plugins", "game-kit"), "description: games\n")
+	writePlugin(t, filepath.Join(film.Workspace, "plugins", "film-studio"), "description: films\n")
+
+	yes := []string{film.ID}
+	if _, err := pluginsCall(t, deps, "plugins.set", map[string]any{"agent_id": "bomclaw", "name": "game-kit", "projects": yes}); err != nil {
+		t.Fatal(err)
+	}
+	mine := func() []HubPlugin {
+		var rows []AgentPlugins
+		out, err := pluginsCall(t, deps, "plugins.list", nil)
+		if err != nil || json.Unmarshal(out, &rows) != nil {
+			t.Fatalf("list: %v", err)
+		}
+		for _, r := range rows {
+			if r.AgentID == "bomclaw" {
+				return r.Plugins
+			}
+		}
+		return nil
+	}
+	g := findHub(t, mine(), "game-kit")
+	if g.Status != "active" || len(g.Only) != 1 || g.Only[0].ChannelID != film.ID {
+		t.Fatalf("pinned plugin: %+v", g)
+	}
+	f := findHub(t, mine(), "film-studio")
+	if f.Project == nil || f.Project.ChannelID != film.ID || f.Scope != "project" {
+		t.Fatalf("project plugin: %+v", f)
+	}
+
+	none := []string{}
+	if _, err := pluginsCall(t, deps, "plugins.set", map[string]any{"agent_id": "bomclaw", "name": "game-kit", "projects": none}); err != nil {
+		t.Fatal(err)
+	}
+	if g := findHub(t, mine(), "game-kit"); len(g.Only) != 0 {
+		t.Fatalf("not global again: %+v", g)
+	}
+	if _, err := pluginsCall(t, deps, "plugins.set", map[string]any{"agent_id": "bomclaw", "name": "game-kit", "projects": []string{"ch_general"}}); err == nil {
+		t.Error("pinned to a room with no folder")
+	}
+}

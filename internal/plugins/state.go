@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -27,6 +28,53 @@ type State struct {
 	// to put programs in front of the agent until the agent's owner says so.
 	Trust  []string                     `yaml:"trust,omitempty"`
 	Config map[string]map[string]string `yaml:"config,omitempty"`
+	// Only pins a plugin to projects: it loads only for a turn inside one of
+	// these folders. A plugin with no entry is global — every turn has it.
+	//
+	// Because a toolkit is attention. On 2026-11-05 agent 1 carried six film
+	// skills and five game skills into every room, trading included, though
+	// only ch_phim-ngan-25d and the arcade ever used them. Every turn reads
+	// the index; a skill nobody in the room needs is a cost on every turn and
+	// a wrong turn waiting to happen.
+	Only map[string][]string `yaml:"only,omitempty"`
+}
+
+// SetOnly pins name to the given project folders; none makes it global again.
+func (st *State) SetOnly(name string, dirs []string) {
+	if st.Only == nil {
+		st.Only = map[string][]string{}
+	}
+	var clean []string
+	for _, d := range dirs {
+		if d = absOrEmpty(d); d != "" && !contains(clean, d) {
+			clean = append(clean, d)
+		}
+	}
+	sort.Strings(clean)
+	if len(clean) == 0 {
+		delete(st.Only, name)
+	} else {
+		st.Only[name] = clean
+	}
+	if len(st.Only) == 0 {
+		st.Only = nil
+	}
+}
+
+// pinnedAway says name is pinned to projects and turn is in none of them.
+// An empty turn — the hub's view, or a turn outside any project — is outside
+// every project.
+func (st State) pinnedAway(name, turn string) bool {
+	dirs := st.Only[name]
+	if len(dirs) == 0 {
+		return false
+	}
+	for _, d := range dirs {
+		if turn != "" && (turn == d || strings.HasPrefix(turn, d+string(filepath.Separator))) {
+			return false
+		}
+	}
+	return true
 }
 
 // LoadState reads an agent's state. A missing file is the empty state.
