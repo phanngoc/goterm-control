@@ -98,6 +98,24 @@ are already partway through in chat, open the room, write the brief with what
 is already done and where it lives, and open the task for what remains. Do not
 move files that a running site or job depends on without asking.
 
+## A service that keeps running goes in pm2
+
+A project's long-running process (a site, an API, a bot, a studio) runs under
+pm2, never as `nohup …&` or a one-off terminal: a hand-started server dies with
+the next reboot or crash and nobody restarts it, and nobody can see it either.
+
+- One ecosystem file per project: `~/.goterm-shared/pm2/<project>.config.cjs`,
+  every app with `namespace: '<project>'`, `cwd` = the project folder, an
+  explicit `interpreter` and its own `out_file`/`error_file`.
+- `pm2 start ~/.goterm-shared/pm2/<project>.config.cjs && pm2 save`; after a
+  code change, `pm2 restart <app>`.
+- `bomclaw infra ls` shows every pm2 app by project, every LaunchAgent and every
+  listening port, and flags servers nothing manages. Check it before starting a
+  port; if a stray server of your project holds it, move it into pm2 rather
+  than starting a second copy.
+- The room's Preview button (`bomclaw preview`) is separate: the gateway starts
+  and stops that server itself. Do not also put it in pm2.
+
 ## Mapping requests to commands
 
 | The person says | You do |
