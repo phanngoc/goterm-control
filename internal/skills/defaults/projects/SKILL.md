@@ -105,8 +105,11 @@ pm2, never as `nohup …&` or a one-off terminal: a hand-started server dies wit
 the next reboot or crash and nobody restarts it, and nobody can see it either.
 
 - One ecosystem file per project: `~/.goterm-shared/pm2/<project>.config.cjs`,
-  every app with `namespace: '<project>'`, `cwd` = the project folder, an
-  explicit `interpreter` and its own `out_file`/`error_file`.
+  every app with `namespace: '<project>'`, `cwd` = the project folder and its
+  own `out_file`/`error_file`. Run the program itself: `script` = absolute
+  node/python3, `args` = its arguments, `interpreter: 'none'`. pm2's wrapper
+  require()s the script otherwise, and an ESM/.ts server then never listens
+  while pm2 reports it `online`. Copy a working file there as the template.
 - `pm2 start ~/.goterm-shared/pm2/<project>.config.cjs && pm2 save`; after a
   code change, `pm2 restart <app>`.
 - `bomclaw infra ls` shows every pm2 app by project, every LaunchAgent and every
