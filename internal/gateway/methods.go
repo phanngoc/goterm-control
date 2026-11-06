@@ -276,6 +276,12 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleSkillsList(deps, params)
 		case "plugins.list":
 			return handlePluginsList(deps, params)
+		case "infra.snapshot":
+			return handleInfraSnapshot(deps, params)
+		case "infra.action":
+			return handleInfraAction(deps, params)
+		case "infra.logs":
+			return handleInfraLogs(deps, params)
 		case "tokens.list":
 			return handleTokensList(deps, params)
 		case "tokens.save", "tokens.delete", "tokens.settings":

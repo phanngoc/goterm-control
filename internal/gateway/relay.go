@@ -123,6 +123,12 @@ var DetachedMethods = map[string]bool{
 	"preview.start":  true,
 	"preview.stop":   true,
 	"preview.logs":   true,
+
+	// The machine itself, answered here so it keeps working while the agents
+	// it restarts are down.
+	"infra.snapshot": true,
+	"infra.action":   true,
+	"infra.logs":     true,
 }
 
 // SetRelay turns this server into a dashboard server. Call before Start.

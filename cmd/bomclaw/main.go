@@ -131,6 +131,8 @@ func main() {
 		runSkills(os.Args[2:])
 	case "plugins", "plugin":
 		runPlugins(os.Args[2:])
+	case "infra":
+		runInfra(os.Args[2:])
 	case "hook":
 		runHook(os.Args[2:])
 	case "artifact":
