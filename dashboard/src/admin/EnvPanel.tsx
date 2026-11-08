@@ -139,7 +139,10 @@ export default function EnvPanel({ call, channelID, channelName, onClose }: {
                   </code>
                 </div>
               ) : !p?.connected ? (
-                <div className="text-xs text-amber-300">{p?.error}</div>
+                <div className="text-xs text-amber-300 space-y-1">
+                  <div>{p?.error}</div>
+                  <a href="/admin/connections" className="inline-block text-sky-300 hover:underline">Mở trang Kết nối ▸</a>
+                </div>
               ) : (
                 <>
                   <Row label="Trạng thái">

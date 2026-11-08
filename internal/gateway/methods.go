@@ -327,6 +327,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handlePreview(deps, method, params)
 		case "env.status", "env.deploy", "env.logs":
 			return handleEnv(ctx, deps, method, params)
+		case "secrets.list", "secrets.set", "secrets.unset", "secrets.verify":
+			return handleSecrets(ctx, deps, method, params)
 		case "tasks.poke":
 			if deps.PokeTasks != nil {
 				deps.PokeTasks()

@@ -47,24 +47,24 @@ func init() {
 
 // NewFly reads FLY_API_TOKEN (flyctl's own name for it), FLY_ORG and FLY_REGION.
 func NewFly() *Fly {
-	org := strings.TrimSpace(os.Getenv("FLY_ORG"))
+	org := Lookup("FLY_ORG")
 	if org == "" {
 		org = "personal"
 	}
-	region := strings.TrimSpace(os.Getenv("FLY_REGION"))
+	region := Lookup("FLY_REGION")
 	if region == "" {
 		region = "sin"
 	}
 	return &Fly{
-		Token: strings.TrimSpace(os.Getenv("FLY_API_TOKEN")), Org: org, Region: region,
+		Token: Lookup("FLY_API_TOKEN"), Org: org, Region: region,
 		Machines: "https://api.machines.dev/v1", GraphQL: "https://api.fly.io/graphql",
 		HTTP: &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
 // ErrNoFly says what to set.
-var ErrNoFly = errors.New("Fly.io is not connected: set FLY_API_TOKEN (flyctl tokens create org, or fly auth token) " +
-	"and optionally FLY_ORG / FLY_REGION in the gateway's .env, install flyctl (brew install flyctl), and restart")
+var ErrNoFly = errors.New("Fly.io is not connected: add the API token on the dashboard (Admin → Connections), " +
+	"or `bomclaw secrets set fly FLY_API_TOKEN=…`; deploys also need flyctl installed (brew install flyctl)")
 
 func (f *Fly) Name() string  { return "fly" }
 func (f *Fly) Title() string { return "Fly.io" }
@@ -361,4 +361,22 @@ primary_region = %q
   auto_start_machines = true
   min_machines_running = 0
 `, app, region, port)
+}
+
+// Verify checks that the token can list the organization's apps.
+func (f *Fly) Verify(ctx context.Context) (string, error) {
+	if ok, hint := f.Connected(); !ok {
+		return "", errors.New(hint)
+	}
+	var out struct {
+		TotalApps int `json:"total_apps"`
+	}
+	if _, err := f.api(ctx, http.MethodGet, "/apps?org_slug="+url.QueryEscape(f.Org), nil, &out); err != nil {
+		return "", fmt.Errorf("the token was refused for org %s: %v", f.Org, err)
+	}
+	msg := fmt.Sprintf("token active · org %s · %d app(s) · region %s", f.Org, out.TotalApps, f.Region)
+	if _, err := f.flyctl(); err != nil {
+		msg += " · flyctl NOT installed (needed to deploy)"
+	}
+	return msg, nil
 }
