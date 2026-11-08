@@ -83,7 +83,7 @@ export default function Overview({ data }: { data: OverviewData | null }) {
   const errorRate = s.traces_24h > 0 ? (s.errors_24h / s.traces_24h) * 100 : 0
 
   return (
-    <div className="p-6 space-y-6 overflow-y-auto h-full">
+    <div className="p-6 pb-0 space-y-6">
       <section>
         <h2 className="text-xs uppercase tracking-wider text-gray-500 mb-3">Last 24 hours</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
