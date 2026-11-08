@@ -9,16 +9,14 @@
 // Kept as pure functions on purpose — routing is the kind of thing that is
 // easier to test than to debug through a browser.
 
-// One screen and the editor page. 'chat' and 'status' were tabs of their own
-// until the dashboard became channel > thread > message with every other page
-// in the same sidebar; their addresses still resolve, to where that went.
-export type Tab = 'admin' | 'files'
+export type Tab = 'chat' | 'status' | 'admin' | 'files'
 export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'plugins' | 'accounts' | 'connections' | 'infra' | 'settings'
 
 export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'plugins', 'accounts', 'connections', 'infra', 'settings']
 
 export interface Route {
   tab: Tab
+  sessionId?: string
   adminPane?: AdminPane
   /** taskId opens that task's detail on the Tasks pane: /admin/tasks/<id>.
    *  A drawer that lives only in component state cannot be sent to anybody —
@@ -42,12 +40,11 @@ export function parseRoute(pathname: string): Route {
 
   switch (parts[0]) {
     case 'chat':
-      // The web chat was the owner's conversation with agent 1, which the
-      // Direct room carries now — Telegram included.
-      return HOME
+      // /chat/<id> opens that session; bare /chat is the composer.
+      return parts[1] ? { tab: 'chat', sessionId: decodeURIComponent(parts[1]) } : { tab: 'chat' }
 
     case 'status':
-      return { tab: 'admin', adminPane: 'overview' }
+      return { tab: 'status' }
 
     case 'files':
       // /files/<channel>[/<path…>]. Without a channel there is nothing to
@@ -87,6 +84,11 @@ export const HOME: Route = { tab: 'admin', adminPane: 'messages' }
 /** pathFor is parseRoute's inverse: the address a view should be showing. */
 export function pathFor(r: Route): string {
   switch (r.tab) {
+    case 'chat':
+      // "new" is the composer's placeholder id, not a session that exists.
+      return r.sessionId && r.sessionId !== 'new' ? `/chat/${encodeURIComponent(r.sessionId)}` : '/chat'
+    case 'status':
+      return '/status'
     case 'files':
       return filesPath(r.channelId ?? '', r.filePath)
     case 'admin':
@@ -129,5 +131,6 @@ export function lineFromHash(hash: string): number | undefined {
  */
 export function isRefinement(here: string, path: string): boolean {
   if (here === '/' || !path.startsWith(here + '/')) return false
+  if (!here.startsWith('/admin')) return true // /chat, which this was written for
   return here === '/admin/messages'
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
@@ -21,11 +21,7 @@ type Call = (method: string, params?: any) => Promise<any>
 
 const PAGE = 30
 
-/** A tool in the sidebar's System section: a page that replaces the room on
- *  screen while the rooms stay where they are. */
-export interface SidebarTool { key: string; label: string; badge?: number }
-
-export default function ChannelView({ call, agents, selfID, bots, channelID, onChannel, openThreadID, onOpenedThread, onOpenTask, tools, tool, onTool, toolPane, brand, footer }: {
+export default function ChannelView({ call, agents, selfID, bots, channelID, onChannel, openThreadID, onOpenedThread, onOpenTask }: {
   call: Call; agents: string[]; selfID: string
   /** channelID is the room on screen, and onChannel is how it changes. The
    *  selection lives in the address bar rather than in this component, so a
@@ -36,22 +32,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
    *  offer the private chat that agent actually answers on. */
   bots?: Record<string, string>
   openThreadID?: string; onOpenedThread?: () => void; onOpenTask?: (taskID: string) => void
-  /** The rest of the dashboard lives in this sidebar too, under the rooms: one
-   *  screen rather than a top bar of separate apps. tool is the one on screen
-   *  ('' = the room), toolPane its content. Picking a room leaves the tool. */
-  tools?: SidebarTool[]; tool?: string; onTool?: (key: string) => void; toolPane?: ReactNode
-  /** brand sits above the rooms, footer below everything (who is signed in). */
-  brand?: ReactNode; footer?: ReactNode
 }) {
-  // The System section folds away; most of the time it is the rooms that
-  // matter. Remembered per viewer.
-  const [toolsOpen, setToolsOpenState] = useState<boolean>(() => {
-    try { return localStorage.getItem('bomclaw.toolsOpen') !== '0' } catch { return true }
-  })
-  const setToolsOpen = (v: boolean) => {
-    setToolsOpenState(v)
-    try { localStorage.setItem('bomclaw.toolsOpen', v ? '1' : '0') } catch { /* storage unavailable */ }
-  }
   const [channels, setChannels] = useState<Channel[]>([])
   const active = channelID
   const setActive = onChannel
@@ -309,79 +290,35 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   }
 
   const ordered = useMemo(() => [...msgs].reverse(), [msgs])
-  const pickRoom = (id: string) => {
-    setActive(id); setThread(null); setThreadRoot('')
-    if (tool) onTool?.('')
-  }
   const current = channels.find(c => c.id === active)
   const roomGateways = gateways.filter(g => g.channel_id === active)
 
   return (
     <div className="h-full flex min-h-0">
       {/* Rooms */}
-      <aside className="w-60 shrink-0 border-r border-gray-800 bg-gray-900/30 flex flex-col min-h-0">
-        {brand}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+      <aside className="w-56 shrink-0 border-r border-gray-800 bg-gray-900/30 overflow-y-auto">
         <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-gray-500">Channels</div>
         {channels.filter(c => c.kind === 'channel').map(c => (
-          <ChannelRow key={c.id} c={c} active={!tool && c.id === active} onPick={() => pickRoom(c.id)} />
+          <ChannelRow key={c.id} c={c} active={c.id === active} onPick={() => { setActive(c.id); setThread(null); setThreadRoot('') }} />
         ))}
         <div className="px-3 py-2 mt-2 text-[11px] uppercase tracking-wide text-gray-500">Direct</div>
         {channels.filter(c => c.kind === 'dm').map(c => (
           <ChannelRow
-            key={c.id} c={c} active={!tool && c.id === active} bot={bots?.[c.name]}
-            onPick={() => pickRoom(c.id)}
+            key={c.id} c={c} active={c.id === active} bot={bots?.[c.name]}
+            onPick={() => { setActive(c.id); setThread(null); setThreadRoot('') }}
           />
         ))}
         {channels.length === 0 && (
           <div className="px-3 py-2 text-xs text-gray-600">No channels yet.</div>
         )}
         <NewProject call={call} onCreated={loadChannels} />
-
-        {tools && tools.length > 0 && (
-          <>
-            <button
-              onClick={() => setToolsOpen(!toolsOpen)}
-              aria-expanded={toolsOpen}
-              className="w-full flex items-center gap-1 px-3 py-2 mt-3 text-[11px] uppercase tracking-wide text-gray-500 hover:text-gray-300"
-            >
-              <span className={`inline-block transition-transform ${toolsOpen ? 'rotate-90' : ''}`}>▸</span>
-              Hệ thống
-              {!toolsOpen && tools.some(t => t.badge) && (
-                <span className="ml-auto normal-case tracking-normal text-[10px] px-1.5 rounded-full bg-amber-500/20 text-amber-300">
-                  {tools.reduce((n, t) => n + (t.badge ?? 0), 0)}
-                </span>
-              )}
-            </button>
-            {/* The one on screen stays listed even folded, so you can see where you are. */}
-            {tools.filter(t => toolsOpen || t.key === tool).map(t => (
-              <button
-                key={t.key}
-                onClick={() => onTool?.(t.key)}
-                className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 ${
-                  t.key === tool ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'
-                }`}
-              >
-                <span className="truncate">{t.label}</span>
-                {!!t.badge && (
-                  <span className="ml-auto text-[10px] px-1.5 rounded-full bg-amber-500/20 text-amber-300">{t.badge}</span>
-                )}
-              </button>
-            ))}
-          </>
-        )}
-        </div>
-        {footer}
       </aside>
 
-      {tool && <div className="flex-1 min-w-0 min-h-0 overflow-hidden">{toolPane}</div>}
-
-      {/* Main line — kept mounted under a tool, so coming back finds the room
-          scrolled where you left it. */}
-      <div className={tool ? 'hidden' : 'flex-1 min-w-0 flex flex-col'}>
-        <header className="px-4 py-2 border-b border-gray-800 flex items-center gap-3 min-w-0">
-          <span className="text-sm text-gray-200 font-medium whitespace-nowrap shrink-0">{current?.name ?? '—'}</span>
-          {current?.purpose && <span className="text-xs text-gray-500 truncate min-w-0">{current.purpose}</span>}
+      {/* Main line */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <header className="px-4 py-2 border-b border-gray-800 flex items-baseline gap-3">
+          <span className="text-sm text-gray-200 font-medium">{current?.name ?? '—'}</span>
+          {current?.purpose && <span className="text-xs text-gray-500 truncate">{current.purpose}</span>}
           {current?.workspace && (
             // The running project — its dev server, from bomclaw.json — beside
             // its code, on the editor's own page.
@@ -390,7 +327,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               target="_blank"
               rel="noopener noreferrer"
               title="Chạy dự án (bomclaw.json) và xem bên cạnh code"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
             >
               Preview ▸
             </a>
@@ -399,7 +336,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             <button
               onClick={() => setEnvFor(current.id)}
               title="DEV (máy này) và PROD (Cloudflare) của dự án"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-orange-300 hover:ring-orange-500/40"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-orange-300 hover:ring-orange-500/40"
             >
               DEV · PROD
             </button>
@@ -408,7 +345,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             <button
               onClick={() => setBriefFor(current.id)}
               title={current.workspace}
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
             >
               AGENTS.md
             </button>
@@ -416,7 +353,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           {current && (() => {
             const primary = repos.find(r => r.role === 'primary')
             return (
-              <span className="shrink-0 whitespace-nowrap flex items-center rounded ring-1 ring-gray-700 text-[11px] text-gray-400">
+              <span className="flex items-center rounded ring-1 ring-gray-700 text-[11px] text-gray-400">
                 {primary && (
                   <a href={primary.url} target="_blank" rel="noopener noreferrer" title={`Mở ${primary.repo} trên GitHub`}
                     className="flex items-center gap-1 px-1.5 font-mono hover:text-sky-300">
@@ -438,7 +375,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             <button
               onClick={() => setGatewaysFor(current.id)}
               title="Nơi phòng này nói ra ngoài dashboard"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
             >
               Gateways
               {roomGateways.length > 0 && (
@@ -450,7 +387,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               )}
             </button>
           )}
-          <span className="ml-auto text-[11px] text-gray-600 font-mono truncate min-w-0 shrink">
+          <span className="ml-auto text-[11px] text-gray-600 font-mono">
             {current?.members?.map(m => m.id).join(' · ')}
           </span>
         </header>
@@ -517,7 +454,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       )}
 
       {/* Thread */}
-      {thread && !tool && (
+      {thread && (
         <aside className="w-96 shrink-0 border-l border-gray-800 bg-gray-900/30 flex flex-col min-h-0">
           <header className="px-3 py-2 border-b border-gray-800 flex items-center">
             <span className="text-xs uppercase tracking-wide text-gray-500">Thread</span>

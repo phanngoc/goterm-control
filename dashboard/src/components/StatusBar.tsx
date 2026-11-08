@@ -1,8 +1,5 @@
 import { useStore } from '../stores/store'
 
-// What the old Status tab showed — this gateway, its sessions in total, the
-// browser bridge — now under Status in the sidebar, below the agents' overview.
-// The per-session table went: conversations are read in their rooms.
 export default function StatusBar() {
   const status = useStore(s => s.status)
   const connected = useStore(s => s.connected)
@@ -12,8 +9,8 @@ export default function StatusBar() {
   const totalTurns = sessions.reduce((sum, s) => sum + s.message_count, 0)
 
   return (
-    <div className="px-6 py-6">
-      <h3 className="text-sm font-medium text-gray-400 mb-2">Gateway</h3>
+    <div className="h-full overflow-y-auto p-4">
+      <h2 className="text-lg font-medium text-gray-300 mb-4">Status</h2>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <StatCard
@@ -42,6 +39,29 @@ export default function StatusBar() {
         ))}
       </div>
 
+      <h3 className="text-sm font-medium text-gray-400 mt-6 mb-2">Sessions Detail</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left">
+          <thead className="text-xs text-gray-500 border-b border-gray-800">
+            <tr>
+              <th className="py-2 pr-4">ID</th>
+              <th className="py-2 pr-4">Turns</th>
+              <th className="py-2 pr-4">Tokens</th>
+              <th className="py-2">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map(s => (
+              <tr key={s.id} className="border-b border-gray-800/50">
+                <td className="py-2 pr-4 font-mono text-gray-300">{s.id}</td>
+                <td className="py-2 pr-4 text-gray-400">{s.message_count}</td>
+                <td className="py-2 pr-4 text-gray-400">{(s.input_tokens + s.output_tokens).toLocaleString()}</td>
+                <td className="py-2 text-gray-500">{new Date(s.updated_at).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

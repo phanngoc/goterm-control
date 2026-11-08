@@ -12,22 +12,20 @@ import AccountsPane from './AccountsPane'
 import EconomicsPane from './EconomicsPane'
 import InfraPane from './InfraPane'
 import ConnectionsPane from './ConnectionsPane'
-import StatusBar from '../components/StatusBar'
-import { type AdminPane as Pane } from '../lib/route'
-import type { ReactNode } from 'react'
+import { ADMIN_PANES, type AdminPane as Pane } from '../lib/route'
 
 type Call = (method: string, params?: any) => Promise<any>
 
 // Keyed by Pane rather than listed, so a pane added to the route table cannot
-// reach the address bar without also getting an entry to click.
+// reach the address bar without also getting a tab to click.
 const LABELS: Record<Pane, string> = {
-  messages: 'Messages',
+  overview: 'Overview',
+  economics: 'Economics',
+  traces: 'Traces',
   tasks: 'Tasks',
   schedules: 'Schedules',
-  overview: 'Status',
-  traces: 'Traces',
-  economics: 'Economics',
   notes: 'Notes',
+  messages: 'Messages',
   plugins: 'Plugins',
   accounts: 'Accounts',
   connections: 'Kết nối',
@@ -35,22 +33,15 @@ const LABELS: Record<Pane, string> = {
   settings: 'Settings',
 }
 
-// The sidebar's System section, in the order work reaches for them: what is
-// being done, what will run, how the machine is, then configuration.
-const TOOL_ORDER: Pane[] = ['tasks', 'schedules', 'overview', 'traces', 'economics', 'notes', 'plugins', 'accounts', 'connections', 'infra', 'settings']
+const PANES = ADMIN_PANES.map(key => ({ key, label: LABELS[key] }))
 
-// The whole dashboard is one screen: rooms, threads and messages, with every
-// other page a tool in the same sidebar. It used to be four apps in a top bar
-// (Messages, Chat, Status, Admin) and a second bar of panes under Admin, while
-// the work itself had moved into channel > thread > message.
-export default function AdminView({ call, pane, onPane, taskId, onTaskId, channelId, onChannelId, brand, footer }: {
+export default function AdminView({ call, pane, onPane, taskId, onTaskId, channelId, onChannelId }: {
   call: Call; pane: Pane; onPane: (p: Pane) => void
   /** taskId is the task whose detail is open, owned by the address bar. */
   taskId: string; onTaskId: (id: string) => void
   /** channelId is the room the Messages pane is showing, owned by the address
    *  bar the same way. */
   channelId: string; onChannelId: (id: string) => void
-  brand?: ReactNode; footer?: ReactNode
 }) {
   const [data, setData] = useState<OverviewData | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -104,52 +95,62 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
   }
   const selfID = data?.agent_id ?? ''
 
-  const tools = TOOL_ORDER.map(key => ({
-    key, label: LABELS[key],
-    badge: key === 'tasks' ? data?.stats.open_tasks || undefined : undefined,
-  }))
-
-  const toolPane = (
-    <div className="h-full min-h-0">
-      {pane === 'overview' && (
-        <div className="h-full overflow-y-auto">
-          <Overview data={data} />
-          <StatusBar />
-        </div>
-      )}
-      {pane === 'economics' && <EconomicsPane call={call} agents={agentIDs} />}
-      {pane === 'traces' && <TraceExplorer call={call} agents={agentIDs} />}
-      {pane === 'tasks' && (
-        <TaskBoard
-          call={call} agents={agentIDs}
-          openTaskID={taskId} onOpenTask={onTaskId}
-          onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
-          onOpenChannel={id => { onChannelId(id); onPane('messages') }}
-          // The project's editor page, with the running project beside it.
-          onOpenFiles={channelID => window.open(`/files/${encodeURIComponent(channelID)}?preview=1`, '_blank', 'noopener')}
-        />
-      )}
-      {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
-      {pane === 'notes' && <NotesPane call={call} />}
-      {pane === 'plugins' && <PluginsPane call={call} />}
-      {pane === 'accounts' && <AccountsPane call={call} />}
-      {pane === 'connections' && <ConnectionsPane call={call} />}
-      {pane === 'infra' && <InfraPane call={call} />}
-      {pane === 'settings' && <SettingsPane call={call} />}
-    </div>
-  )
-
   return (
-    <ChannelView
-      call={call} agents={agentIDs} selfID={selfID} bots={bots}
-      channelID={channelId} onChannel={onChannelId}
-      openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
-      onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
-      tools={tools}
-      tool={pane === 'messages' ? '' : pane}
-      onTool={key => onPane((key || 'messages') as Pane)}
-      toolPane={toolPane}
-      brand={brand} footer={footer}
-    />
+    <div className="h-full flex flex-col">
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-800 bg-gray-900/40">
+        {PANES.map(p => (
+          <button
+            key={p.key}
+            onClick={() => onPane(p.key)}
+            className={`px-3 py-1 text-sm rounded-md transition-colors ${
+              pane === p.key ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+            }`}
+          >
+            {p.label}
+            {p.key === 'tasks' && data && data.stats.open_tasks > 0 && (
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+                {data.stats.open_tasks}
+              </span>
+            )}
+            {p.key === 'messages' && data && data.stats.unread_messages > 0 && (
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300">
+                {data.stats.unread_messages}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 min-h-0">
+        {pane === 'overview' && <Overview data={data} />}
+        {pane === 'economics' && <EconomicsPane call={call} agents={agentIDs} />}
+        {pane === 'traces' && <TraceExplorer call={call} agents={agentIDs} />}
+        {pane === 'tasks' && (
+          <TaskBoard
+            call={call} agents={agentIDs}
+            openTaskID={taskId} onOpenTask={onTaskId}
+            onOpenThread={rootID => { setOpenThread(rootID); onPane('messages') }}
+            onOpenChannel={id => { onChannelId(id); onPane('messages') }}
+            // The project's editor page, with the running project beside it.
+            onOpenFiles={channelID => window.open(`/files/${encodeURIComponent(channelID)}?preview=1`, '_blank', 'noopener')}
+          />
+        )}
+        {pane === 'schedules' && <SchedulesPane call={call} agents={agentIDs} />}
+        {pane === 'notes' && <NotesPane call={call} />}
+        {pane === 'plugins' && <PluginsPane call={call} />}
+        {pane === 'accounts' && <AccountsPane call={call} />}
+        {pane === 'connections' && <ConnectionsPane call={call} />}
+        {pane === 'infra' && <InfraPane call={call} />}
+        {pane === 'settings' && <SettingsPane call={call} />}
+        {pane === 'messages' && (
+          <ChannelView
+            call={call} agents={agentIDs} selfID={selfID} bots={bots}
+            channelID={channelId} onChannel={onChannelId}
+            openThreadID={openThread} onOpenedThread={() => setOpenThread('')}
+            onOpenTask={taskID => { onTaskId(taskID); onPane('tasks') }}
+          />
+        )}
+      </div>
+    </div>
   )
 }
