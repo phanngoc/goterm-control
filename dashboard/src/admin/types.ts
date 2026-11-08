@@ -292,6 +292,8 @@ export interface ChannelMessage {
   last_reply_at?: string
   last_reply_by?: string
   last_reply_text?: string
+  /** the thread's live progress, while an agent is mid-turn in it */
+  working?: import('./ProgressCard').Progress
 }
 
 // --- channel gateways -------------------------------------------------------
