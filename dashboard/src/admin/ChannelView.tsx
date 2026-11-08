@@ -4,6 +4,7 @@ import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { ArtifactModal, isPage } from './ArtifactView'
 import GatewayEditor from './GatewayEditor'
+import EnvPanel from './EnvPanel'
 import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
 import ProgressCard, { ProgressSummary, isProgressLine, parseProgress } from './ProgressCard'
 
@@ -67,6 +68,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // per room.
   const [gateways, setGateways] = useState<ChannelGateway[]>([])
   const [gatewaysFor, setGatewaysFor] = useState('')
+  const [envFor, setEnvFor] = useState('')
   // The room's GitHub repos, primary first — shown in the header like a
   // Lovable project's GitHub connection.
   const [repos, setRepos] = useState<ChannelRepo[]>([])
@@ -332,6 +334,15 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           )}
           {current?.workspace && (
             <button
+              onClick={() => setEnvFor(current.id)}
+              title="DEV (máy này) và PROD (Cloudflare) của dự án"
+              className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-orange-300 hover:ring-orange-500/40"
+            >
+              DEV · PROD
+            </button>
+          )}
+          {current?.workspace && (
+            <button
               onClick={() => setBriefFor(current.id)}
               title={current.workspace}
               className="text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
@@ -423,6 +434,13 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           channelName={channels.find(c => c.id === reposFor)?.name ?? reposFor}
           onChanged={list => { if (reposFor === active) setRepos(list) }}
           onClose={() => setReposFor('')}
+        />
+      )}
+      {envFor && (
+        <EnvPanel
+          call={call} channelID={envFor}
+          channelName={channels.find(c => c.id === envFor)?.name ?? envFor}
+          onClose={() => setEnvFor('')}
         />
       )}
       {gatewaysFor && (

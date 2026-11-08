@@ -127,6 +127,8 @@ func main() {
 		runChannel(os.Args[2:])
 	case "preview":
 		runPreview(os.Args[2:])
+	case "env":
+		runEnv(os.Args[2:])
 	case "skills", "skill":
 		runSkills(os.Args[2:])
 	case "plugins", "plugin":
