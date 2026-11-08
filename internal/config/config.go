@@ -247,6 +247,15 @@ type ExtensionConfig struct {
 	AllowEval          *bool    `yaml:"allow_eval"`           // default true; false removes `bomclaw browser eval`
 	CallTimeoutSeconds int      `yaml:"call_timeout_seconds"` // default 30
 	BlockedHosts       []string `yaml:"blocked_hosts"`        // sites the agent may never open; "*.example.com" allowed
+	// RequireToken makes even a loopback extension present the pairing token.
+	// Default false: a direct loopback connection is the user's own browser.
+	// A tunnelled or proxied connection must present the token regardless.
+	RequireToken bool `yaml:"require_token"`
+	// Master is the gateway that holds the extension, e.g.
+	// "http://127.0.0.1:18789" (agent 1). Set on every other agent: their
+	// browser calls run through it, each in a tab group of its own, so one
+	// extension serves all of them. Empty = this gateway holds the browser.
+	Master string `yaml:"master"`
 }
 
 // IsEnabled treats an absent flag as on: the endpoint only ever talks to an

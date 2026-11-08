@@ -7,29 +7,19 @@ Full reference, wire protocol and security notes: [`docs/browser-bridge.md`](../
 
 ## Install
 
-1. Start the gateway. It prints the endpoint and, the first time, generates a
-   pairing token:
+1. Start the gateways. Agent 1 (`:18789`) is the master and holds the
+   extension; agents 2 and 3 set `browser.extension.master:
+   http://127.0.0.1:18789` and borrow it.
 
-   ```
-   browser bridge: extension endpoint at ws://127.0.0.1:18789/ext (eval=true)
-   ```
+2. Open `chrome://extensions`, enable **Developer mode**, click **Load
+   unpacked**, and choose this directory. Already loaded? Press the reload
+   icon — 0.3.0 adds the `tabGroups` permission.
 
-2. Get the token:
+3. That is all. The extension connects to `ws://127.0.0.1:18789/ext` with no
+   token. Each agent's tabs open in the background of your current window, in
+   a tab group of its own ("BomClaw · bomclaw2").
 
-   ```bash
-   bomclaw browser token
-   ```
-
-3. Open `chrome://extensions`, enable **Developer mode**, click **Load
-   unpacked**, and choose this directory.
-
-4. Click the extension icon, paste the endpoint and token, press **Pair**.
-
-   Running more than one agent? Repeat with that agent's own port and token
-   (agent 2 is usually `ws://127.0.0.1:18790/ext`). The extension holds one
-   connection per agent, and each agent drives its own tab.
-
-5. From the agent's shell:
+4. From the agent's shell:
 
    ```bash
    bomclaw browser status
@@ -41,10 +31,10 @@ Full reference, wire protocol and security notes: [`docs/browser-bridge.md`](../
 
 | File | Role |
 |---|---|
-| `manifest.json` | MV3 manifest: `tabs`, `scripting`, `storage`, `<all_urls>` |
+| `manifest.json` | MV3 manifest: `tabs`, `tabGroups`, `scripting`, `storage`, `<all_urls>` |
 | `background.js` | Service worker — the WebSocket client and action dispatcher |
 | `page.js` | Functions injected into pages to snapshot and act on them |
-| `popup.html` / `popup.js` / `popup.css` | Pairing UI and connection status |
+| `popup.html` / `popup.js` / `popup.css` | Connection status, per-agent tab groups, activity log |
 
 ## Why `page.js` repeats itself
 
@@ -61,7 +51,8 @@ whether the agent is driving the managed Chrome or this extension.
 |---|---|
 | `tabs` | List, open, focus and close tabs; read titles and URLs |
 | `scripting` | Run the snapshot/act functions in the page |
-| `storage` | Remember the endpoint and token between browser restarts |
+| `storage` | Remember the endpoint (and token, if one is set) between browser restarts |
+| `tabGroups` | Keep each agent's tabs in a named, coloured group of its own |
 | `activeTab` | Screenshot the visible tab |
 | `<all_urls>` | The agent may be asked to work on any site you name |
 

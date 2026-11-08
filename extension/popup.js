@@ -12,7 +12,7 @@ function renderAgents(list) {
   const host = $("agents");
   host.textContent = "";
   if (list.length === 0) {
-    const p = el("p", "empty", "No agent paired yet. Run `bomclaw browser token` and pair below.");
+    const p = el("p", "empty", "Not connected yet — the bridge connects to the master agent (ws://127.0.0.1:18789/ext) on its own.");
     host.appendChild(p);
     $("pair-box").open = true;
     return;
@@ -35,13 +35,19 @@ function agentCard(a) {
     : a.wantConnected ? "connecting…" : "disconnected";
   card.appendChild(el("div", "agent-meta", `${state}\n${a.url}`));
 
-  // Which page this agent is driving — the question the popup exists to
-  // answer once more than one agent is attached.
-  if (a.connected && a.tab) {
-    const t = el("div", "agent-tab");
-    t.appendChild(el("span", "t", a.tab.title || "(untitled tab)"));
-    t.appendChild(el("span", "u", a.tab.url || ""));
-    card.appendChild(t);
+  // Every agent driving this browser through the socket, each with its tab
+  // group colour and the page it is on — the question the popup exists to
+  // answer once more than one agent is at work.
+  for (const act of a.actors || []) {
+    const row = el("div", "agent-tab");
+    const head = el("span", "t", "");
+    head.appendChild(el("span", "swatch swatch-" + act.color, ""));
+    head.appendChild(document.createTextNode(
+      act.id + ` · ${act.actions} action${act.actions === 1 ? "" : "s"}` +
+      (act.lastAction ? ` · ${act.lastAction} ${ago(act.lastActionAt)}` : "")));
+    row.appendChild(head);
+    if (act.tab) row.appendChild(el("span", "u", (act.tab.title || "(untitled tab)") + " — " + (act.tab.url || "")));
+    card.appendChild(row);
   }
 
   if (a.lastError) card.appendChild(el("p", "error", a.lastError));
@@ -119,16 +125,17 @@ chrome.runtime.onMessage.addListener((msg) => { if (msg && msg.type === "status"
 
 chrome.storage.local.get(["agents"], (v) => {
   const used = new Set((v.agents || []).map((a) => a.url));
-  // Offer the next unpaired port rather than one already in the list, so
-  // pairing a second agent is one click and a token.
-  $("url").value = [DEFAULT_URL, "ws://127.0.0.1:18790/ext"].find((u) => !used.has(u)) || DEFAULT_URL;
+  // Every local agent goes through the master, so another endpoint is only
+  // ever a gateway on another machine.
+  $("url").value = used.has(DEFAULT_URL) ? "" : DEFAULT_URL;
 });
 
 $("pair").addEventListener("click", () => {
   const url = $("url").value.trim() || DEFAULT_URL;
   const token = $("token").value.trim();
   const err = $("pair-error");
-  if (!token) { err.hidden = false; err.textContent = "Paste a pairing token first."; return; }
+  // A token is optional: only a gateway with require_token, or one reached
+  // through a tunnel, asks for it.
   err.hidden = true;
   sendMsg({ type: "pair", url, token }).then(() => {
     $("token").value = "";

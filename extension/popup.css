@@ -64,3 +64,8 @@ code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; 
   details, #activity-box { border-color: #3a3a3a; }
   .act-detail { color: #bbb; }
 }
+
+.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; background: #888; }
+.swatch-blue { background: #1a73e8; } .swatch-purple { background: #a142f4; } .swatch-cyan { background: #12b5cb; }
+.swatch-orange { background: #fa903e; } .swatch-green { background: #1e8e3e; } .swatch-pink { background: #e52592; }
+.swatch-yellow { background: #f9ab00; } .swatch-red { background: #d93025; }

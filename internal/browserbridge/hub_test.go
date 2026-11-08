@@ -89,7 +89,7 @@ func waitConnected(t *testing.T, hub *Hub) {
 }
 
 func TestHubRejectsWrongToken(t *testing.T) {
-	hub, wsURL := newTestHub(t, nil)
+	hub, wsURL := newTestHub(t, func(o *Options) { o.RequireToken = true })
 	ws := fakeExtension(t, wsURL, "not-the-token")
 
 	_, err := readFrame(t, ws)

@@ -1,23 +1,33 @@
 // background.js — the BomClaw Browser Bridge service worker.
 //
-// It keeps one WebSocket open PER PAIRED AGENT and executes the actions each
-// one sends. A machine commonly runs several agents (agent 1 on :18789,
-// agent 2 on :18790, …); a single connection would mean whichever agent you
-// paired last owned the browser and the others were permanently unable to use
-// it. Each agent therefore gets its own connection, its own reconnect loop,
-// and — importantly — its own tab, so two agents working at once do not
-// navigate each other's page out from under them.
+// One socket, to the MASTER gateway (agent 1, ws://127.0.0.1:18789/ext). The
+// other agents on the machine borrow this browser through it: their gateways
+// relay each call to the master, which forwards it here naming the agent it is
+// for. Each named agent gets its own tab group in the window you are already
+// using — "BomClaw · bomclaw2" — so two agents working at once never steer the
+// same page, and nothing opens a window of its own. That is the shape Claude in
+// Chrome settled on, and the reason is the same: the agent's tabs stay where
+// you can see them, grouped, collapsible, out of the way.
+//
+// No token by default. The gateway accepts a hello straight from loopback; a
+// token is only needed if the gateway sets require_token, or the connection
+// goes through a tunnel.
 //
 // Wire protocol (see docs/browser-bridge.md):
-//   ext→gw {type:"hello",token,client,browser}
-//   gw→ext {type:"welcome",agent,name} | close 4001 on a bad token
-//   gw→ext {type:"call",id,action,params}
+//   ext→gw {type:"hello",token?,client,browser}
+//   gw→ext {type:"welcome",agent,name} | close 4001 unauthorized | 4004 not the master
+//   gw→ext {type:"call",id,agent,action,params}
 //   ext→gw {type:"result",id,ok,result|error}
 //   both   {type:"ping"} / {type:"pong"}
 
 importScripts("page.js");
 
-const CLIENT = "bomclaw-bridge/0.2.1";
+const CLIENT = "bomclaw-bridge/0.3.0";
+const MASTER_URL = "ws://127.0.0.1:18789/ext";
+
+// Tab-group colours, handed out per agent in order so each one is told apart
+// at a glance. Chrome's palette; "grey" is left for nobody.
+const GROUP_COLORS = ["blue", "purple", "cyan", "orange", "green", "pink", "yellow", "red"];
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30000;
 const LOG_MAX = 40;
@@ -51,8 +61,16 @@ async function doRestoreAgents() {
   // does not silently unpair the browser.
   if (list.length === 0 && cfg.url && cfg.token) {
     list = [{ url: cfg.url, token: cfg.token, autoConnect: cfg.autoConnect !== false }];
-    await storageSet({ agents: list });
   }
+  // Every agent now goes through the master, so the master is the only
+  // endpoint worth holding. A fresh install connects to it with nothing to
+  // paste; an older install that paired 18790 and 18791 separately drops
+  // those, because those gateways now refuse a browser (close 4004).
+  if (!list.some((a) => a.url === MASTER_URL)) {
+    list.unshift({ url: MASTER_URL, token: "", autoConnect: true });
+  }
+  list = list.filter((a) => a.url === MASTER_URL || !/^ws:\/\/127\.0\.0\.1:1879[01]\/ext$/.test(a.url));
+  await storageSet({ agents: list });
   for (const a of list) {
     upsertAgent(a.url, a.token, a.name);
     if (a.autoConnect !== false) connect(a.url);
@@ -84,8 +102,10 @@ function upsertAgent(url, token, name) {
       ws: null, connected: false, wantConnected: false,
       reconnectDelay: RECONNECT_MIN, reconnectTimer: null,
       lastError: "", actions: 0, lastAction: "", lastActionAt: 0,
-      // Each agent drives its own tab so concurrent agents do not fight.
-      agentTabId: null, currentTabId: null,
+      // actors are the agents whose calls arrive on this socket — the master
+      // and every agent borrowing the browser through it — each with its own
+      // tabs and tab group, so concurrent agents do not fight.
+      actors: new Map(),
     };
     agents.set(url, a);
   } else {
@@ -114,8 +134,8 @@ function connect(url) {
   a.wantConnected = true;
   clearTimeout(a.reconnectTimer);
 
-  if (!a.token || !a.url) {
-    a.lastError = "Set the endpoint and token first.";
+  if (!a.url) {
+    a.lastError = "Set the endpoint first.";
     broadcastStatus();
     return;
   }
@@ -141,7 +161,7 @@ function connect(url) {
   a.ws = ws;
   ws.onopen = () => {
     a.lastError = "";
-    send(a, { type: "hello", token: a.token, client: CLIENT, browser: navigator.userAgent });
+    send(a, { type: "hello", token: a.token || "", client: CLIENT, browser: navigator.userAgent });
   };
   ws.onmessage = (ev) => { if (a.ws === ws) onFrame(a, ev.data); };
   ws.onclose = (ev) => {
@@ -158,8 +178,16 @@ function connect(url) {
       broadcastStatus();
       return;
     }
+    if (ev.code === 4004) {
+      // Not the master: this agent borrows the browser from agent 1.
+      a.lastError = ev.reason || "This agent uses the browser through the master — connect to " + MASTER_URL + ".";
+      a.wantConnected = false;
+      persistAgents();
+      broadcastStatus();
+      return;
+    }
     if (ev.code === 4001) {
-      a.lastError = "The gateway rejected the pairing token. Copy a fresh one from `bomclaw browser token`.";
+      a.lastError = "The gateway wants a pairing token (require_token, or a tunnelled connection). Copy one from `bomclaw browser token`.";
       a.wantConnected = false; // a wrong token will not fix itself
       persistAgents();
       broadcastStatus();
@@ -218,20 +246,45 @@ function send(a, obj) {
 
 // --- action dispatch ---
 
+// actorFor is the per-agent state for calls named f.agent on socket a. A call
+// with no name (an older gateway) belongs to the agent the socket greeted.
+function actorFor(a, agentId) {
+  const id = agentId || a.agentId || "agent";
+  let act = a.actors.get(id);
+  if (!act) {
+    act = {
+      id, conn: a,
+      name: id,
+      agentTabId: null, currentTabId: null, groupId: null,
+      color: GROUP_COLORS[allActors().length % GROUP_COLORS.length],
+      actions: 0, lastAction: "", lastActionAt: 0,
+    };
+    a.actors.set(id, act);
+  }
+  return act;
+}
+
+function allActors() {
+  const out = [];
+  for (const a of agents.values()) for (const act of a.actors.values()) out.push(act);
+  return out;
+}
+
 async function handleCall(a, f) {
   const started = Date.now();
+  const act = actorFor(a, f.agent);
   try {
-    const result = await runAction(a, f.action, f.params || {});
+    const result = await runAction(act, f.action, f.params || {});
     if (result && result.error) {
-      note(a, f.action, f.params, result.error, started);
+      note(act, f.action, f.params, result.error, started);
       send(a, { type: "result", id: f.id, ok: false, error: result.error });
     } else {
-      note(a, f.action, f.params, "", started);
+      note(act, f.action, f.params, "", started);
       send(a, { type: "result", id: f.id, ok: true, result: result });
     }
   } catch (e) {
     const msg = String((e && e.message) || e);
-    note(a, f.action, f.params, msg, started);
+    note(act, f.action, f.params, msg, started);
     send(a, { type: "result", id: f.id, ok: false, error: msg });
   }
 }
@@ -239,16 +292,18 @@ async function handleCall(a, f) {
 // note records one action for the popup. The detail is the single most useful
 // parameter — a URL or a ref — because "click" alone says nothing about what
 // the agent is doing to your browser.
-function note(a, action, params, error, started) {
-  a.actions++;
-  a.lastAction = action;
-  a.lastActionAt = Date.now();
+function note(act, action, params, error, started) {
+  for (const o of [act, act.conn]) {
+    o.actions++;
+    o.lastAction = action;
+    o.lastActionAt = Date.now();
+  }
   const p = params || {};
   const detail = p.url || p.ref || p.expression || p.text || p.action || "";
   activity.unshift({
     at: Date.now(),
     ms: Date.now() - started,
-    agent: a.name || a.url,
+    agent: act.name,
     action,
     detail: String(detail).slice(0, 80),
     error: error || "",
@@ -290,12 +345,66 @@ async function tabExists(id) {
 }
 
 async function createAgentTab(a, url) {
-  // A separate window keeps the agent's page out of the user's tab strip.
-  const win = await chrome.windows.create({ url, focused: false });
-  const tab = win.tabs[0];
+  // In the window you are using, not a window of its own, and in the agent's
+  // tab group. Opened in the background: an agent starting work must not take
+  // the page you are reading away from you.
+  const tab = await openInGroup(a, url);
   a.agentTabId = tab.id;
   a.currentTabId = tab.id;
   return tab;
+}
+
+// userWindow is the normal window the user last focused. Popups, devtools and
+// app windows are not somewhere a tab group belongs.
+async function userWindow() {
+  try {
+    const w = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+    if (w && w.id != null && w.type === "normal") return w.id;
+  } catch (e) { /* no window focused yet */ }
+  const all = await chrome.windows.getAll({ windowTypes: ["normal"] });
+  if (all.length) return all[0].id;
+  return (await chrome.windows.create({ focused: false })).id; // no browser window at all
+}
+
+// openInGroup opens url as a background tab in the agent's tab group,
+// creating the group — "BomClaw · <agent>", in the agent's colour — the first
+// time. The group lives in whichever window it was made in; a group the user
+// closed or dragged away is simply made again.
+async function openInGroup(a, url) {
+  let windowId = null;
+  // Chrome unloads an idle service worker and its memory with it; the group
+  // is still on screen. Find it by title rather than start a second one.
+  if (a.groupId == null) {
+    try {
+      const [g] = await chrome.tabGroups.query({ title: "BomClaw · " + a.name });
+      if (g) { a.groupId = g.id; a.color = g.color; }
+    } catch (e) { /* no tab groups in this browser */ }
+  }
+  if (a.groupId != null) {
+    try { windowId = (await chrome.tabGroups.get(a.groupId)).windowId; }
+    catch (e) { a.groupId = null; }
+  }
+  if (windowId == null) windowId = await userWindow();
+  const tab = await chrome.tabs.create({ windowId, url, active: false });
+  await addToGroup(a, tab.id, windowId);
+  return tab;
+}
+
+async function addToGroup(a, tabId, windowId) {
+  try {
+    if (a.groupId != null) {
+      await chrome.tabs.group({ tabIds: [tabId], groupId: a.groupId });
+      return;
+    }
+  } catch (e) { a.groupId = null; }
+  try {
+    a.groupId = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId } });
+    await chrome.tabGroups.update(a.groupId, { title: "BomClaw · " + a.name, color: a.color, collapsed: false });
+  } catch (e) {
+    // Grouping is how the tabs are kept tidy, not what makes them work. A
+    // browser without tab groups still gets a working tab.
+    a.groupId = null;
+  }
 }
 
 async function navigate(a, url) {
@@ -335,11 +444,26 @@ async function waitFor(a, p) {
   throw new Error("timed out waiting for " + (p.ref || JSON.stringify(p.text)));
 }
 
+// screenshot captures the agent's tab. Chrome can only capture the tab that is
+// showing in its window, and the agent's tabs sit in the background of yours,
+// so the tab is brought forward for the capture and the one you were on is put
+// back straight after — a blink, not a page taken away.
 async function screenshot(a) {
   const tabId = await targetTab(a);
   const tab = await chrome.tabs.get(tabId);
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-  return { data: dataUrl.replace(/^data:image\/png;base64,/, ""), format: "png" };
+  let restore = null;
+  if (!tab.active) {
+    const [shown] = await chrome.tabs.query({ windowId: tab.windowId, active: true });
+    restore = shown ? shown.id : null;
+    await chrome.tabs.update(tabId, { active: true });
+    await sleep(150); // let the compositor paint the tab it just switched to
+  }
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    return { data: dataUrl.replace(/^data:image\/png;base64,/, ""), format: "png" };
+  } finally {
+    if (restore != null) { try { await chrome.tabs.update(restore, { active: true }); } catch (e) {} }
+  }
 }
 
 async function evalJS(a, expression) {
@@ -370,8 +494,13 @@ async function tabsAction(a, p) {
     case "list": {
       const tabs = await chrome.tabs.query({});
       const owners = new Map();
-      for (const other of agents.values()) {
-        if (other.agentTabId != null) owners.set(other.agentTabId, other.name || other.url);
+      for (const other of allActors()) {
+        if (other.agentTabId != null) owners.set(other.agentTabId, other.name);
+      }
+      // A tab in an agent's group is that agent's, whichever action opened it.
+      for (const t of tabs) {
+        const owner = allActors().find((o) => o.groupId != null && o.groupId === t.groupId);
+        if (owner && !owners.has(t.id)) owners.set(t.id, owner.name);
       }
       return {
         tabs: tabs.map((t) => ({
@@ -385,8 +514,9 @@ async function tabsAction(a, p) {
     }
     case "open": {
       if (!p.url) throw new Error("url is required");
-      const tab = await chrome.tabs.create({ url: p.url, active: false });
+      const tab = await openInGroup(a, p.url);
       a.currentTabId = tab.id;
+      if (a.agentTabId == null || !(await tabExists(a.agentTabId))) a.agentTabId = tab.id;
       await waitForLoad(tab.id, 15000);
       return { tabId: String(tab.id), message: "Opened tab " + tab.id };
     }
@@ -477,13 +607,21 @@ function waitForLoad(tabId, timeout) {
 async function statusPayload() {
   const list = [];
   for (const a of agents.values()) {
-    let tab = null;
-    if (a.currentTabId != null) {
-      try {
-        const t = await chrome.tabs.get(a.currentTabId);
-        tab = { id: String(t.id), title: t.title || "", url: t.url || "" };
-      } catch (e) { /* the tab went away; report none */ }
+    const actors = [];
+    for (const act of a.actors.values()) {
+      let tab = null;
+      if (act.currentTabId != null) {
+        try {
+          const t = await chrome.tabs.get(act.currentTabId);
+          tab = { id: String(t.id), title: t.title || "", url: t.url || "" };
+        } catch (e) { /* the tab went away; report none */ }
+      }
+      actors.push({
+        id: act.id, color: act.color, actions: act.actions,
+        lastAction: act.lastAction, lastActionAt: act.lastActionAt, tab,
+      });
     }
+    actors.sort((x, y) => x.id.localeCompare(y.id));
     list.push({
       url: a.url,
       name: a.name || "",
@@ -494,7 +632,7 @@ async function statusPayload() {
       actions: a.actions,
       lastAction: a.lastAction || "",
       lastActionAt: a.lastActionAt || 0,
-      tab,
+      actors,
     });
   }
   list.sort((x, y) => x.url.localeCompare(y.url));

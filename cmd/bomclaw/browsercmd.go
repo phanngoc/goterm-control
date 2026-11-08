@@ -295,6 +295,7 @@ func printBrowserStatus(raw json.RawMessage) {
 		LastAction   string `json:"last_action"`
 		LastActionAt string `json:"last_action_at"`
 		LastError    string `json:"last_error"`
+		Master       string `json:"master"`
 	}
 	if err := json.Unmarshal(raw, &st); err != nil {
 		fmt.Println(strings.TrimSpace(string(raw)))
@@ -305,10 +306,13 @@ func printBrowserStatus(raw json.RawMessage) {
 	if agent == "" {
 		agent = "this agent"
 	}
+	if st.Master != "" {
+		agent += " (via " + st.Master + ")"
+	}
 	if !st.Connected {
 		fmt.Printf("%s: no browser connected\n\n"+
-			"Pair the BomClaw Browser Bridge extension with the token from\n"+
-			"`bomclaw browser token`, then check the extension popup.\n", agent)
+			"Load the BomClaw Browser Bridge extension; it connects to the master\n"+
+			"agent at ws://127.0.0.1:18789/ext by itself. Then check its popup.\n", agent)
 		return
 	}
 

@@ -20,6 +20,9 @@ type BrowserAPI struct {
 }
 
 type browserCallRequest struct {
+	// Agent is who the call is for, when another agent relays it here because
+	// this gateway holds the browser. Empty means this agent.
+	Agent  string          `json:"agent,omitempty"`
 	Action string          `json:"action"`
 	Params json.RawMessage `json:"params"`
 }
@@ -44,7 +47,7 @@ func (a *BrowserAPI) HandleCall(w http.ResponseWriter, r *http.Request) {
 		writeBrowserJSON(w, http.StatusBadRequest, browserCallResponse{Error: "invalid request body: " + err.Error()})
 		return
 	}
-	result, err := a.Hub.Call(r.Context(), req.Action, req.Params)
+	result, err := a.Hub.CallAs(r.Context(), req.Agent, req.Action, req.Params)
 	if err != nil {
 		status := http.StatusOK
 		switch {

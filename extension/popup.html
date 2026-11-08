@@ -12,18 +12,18 @@
   <section id="agents"></section>
 
   <details id="pair-box">
-    <summary>Pair another agent</summary>
+    <summary>Connect another gateway</summary>
     <label>Gateway endpoint
       <input id="url" type="text" placeholder="ws://127.0.0.1:18789/ext" spellcheck="false" />
     </label>
-    <label>Pairing token
-      <input id="token" type="password" placeholder="from `bomclaw browser token`" spellcheck="false" />
+    <label>Pairing token (optional)
+      <input id="token" type="password" placeholder="only if the gateway sets require_token" spellcheck="false" />
     </label>
     <p id="pair-error" class="error" hidden></p>
-    <button id="pair" class="primary">Pair</button>
+    <button id="pair" class="primary">Connect</button>
     <p class="hint">
-      Each agent has its own token and port — agent 1 on 18789, agent 2 on
-      18790. Pair both and each drives its own tab.
+      Not needed on this machine: agent 1 (18789) is the master, and agents 2
+      and 3 drive this browser through it, each in its own tab group.
     </p>
   </details>
 
