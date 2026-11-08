@@ -52,46 +52,32 @@ cd dashboard
 npm run dev
 ```
 
-## Pages
+## Layout
 
-### Sessions
+One screen, no top bar. The sidebar is the whole navigation:
 
-The sessions page lists all active and past sessions with:
+- **Channels** and **Direct** — every room, its threads and messages. The
+  owner's Direct room with an agent is the same conversation as that agent's
+  Telegram chat, both ways. This replaced the separate Chat and Sessions pages.
+- **+ dự án mới** — a new project room.
+- **Hệ thống** (folds away) — Tasks, Schedules, Status, Traces, Economics,
+  Notes, Plugins, Accounts, Kết nối, Infra, Settings. Picking one replaces the
+  room on screen; the rooms stay in the sidebar, and picking a room goes back.
+  Status is the agents' overview plus this gateway's health and the browser
+  bridge (what the old Status tab showed).
 
-- Session ID
-- Creation time
-- Last update time
-- Message count
-
-Click a session to open its chat view, or create a new session.
-
-### Chat
-
-The chat view provides a full conversation interface:
-
-- **Message history** &mdash; All previous messages in the session
-- **Streaming responses** &mdash; Real-time token-by-token updates
-- **Tool badges** &mdash; Compact badges showing which tools were used (grouped, max 5 shown)
-- **Model selector** &mdash; Dropdown to switch models per-session
-- **Message input** &mdash; Send new messages to Claude
-
-### Status
-
-The status page shows:
-
-- Gateway health and uptime
-- Number of active sessions
-- Connection status
+The project editor opens on a page of its own (`/files/…`).
 
 ## URL Routing
 
-The dashboard uses client-side routing:
-
 | Path | Page |
 |---|---|
-| `/` | Sessions list |
-| `/chat/{session_id}` | Chat view for a specific session |
-| `/status` | Status and health |
+| `/` | The busiest room (mentions first) |
+| `/admin/messages/{channel}` | A room |
+| `/admin/tasks[/{task}]` | Tasks, optionally one task open |
+| `/admin/{tool}` | A tool from the Hệ thống section (`overview` is Status) |
+| `/files/{channel}[/{path}]#L{n}` | The project editor |
+| `/chat…`, `/status` | Old links: resolve to the rooms and to Status |
 
 The gateway handles SPA fallback &mdash; all unmatched routes return `index.html`.
 
