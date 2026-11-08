@@ -9,7 +9,7 @@
 // Kept as pure functions on purpose — routing is the kind of thing that is
 // easier to test than to debug through a browser.
 
-export type Tab = 'sessions' | 'chat' | 'status' | 'admin' | 'files'
+export type Tab = 'chat' | 'status' | 'admin' | 'files'
 export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'plugins' | 'accounts' | 'infra' | 'settings'
 
 export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'plugins', 'accounts', 'infra', 'settings']
@@ -48,8 +48,8 @@ export function parseRoute(pathname: string): Route {
 
     case 'files':
       // /files/<channel>[/<path…>]. Without a channel there is nothing to
-      // open, which is the sessions page's job to say, not a blank editor's.
-      if (!parts[1]) return { tab: 'sessions' }
+      // open, which is the rooms list's job to say, not a blank editor's.
+      if (!parts[1]) return HOME
       return {
         tab: 'files',
         channelId: decodeURIComponent(parts[1]),
@@ -72,9 +72,14 @@ export function parseRoute(pathname: string): Route {
     }
 
     default:
-      return { tab: 'sessions' }
+      return HOME
   }
 }
+
+/** HOME is where the bare address lands: every conversation, by room and
+ *  thread, with the owner's Direct rooms beside them. It replaced a Sessions
+ *  list that showed one channel's CLI sessions and nothing of the rooms. */
+export const HOME: Route = { tab: 'admin', adminPane: 'messages' }
 
 /** pathFor is parseRoute's inverse: the address a view should be showing. */
 export function pathFor(r: Route): string {
@@ -90,8 +95,6 @@ export function pathFor(r: Route): string {
       if (r.adminPane === 'tasks' && r.taskId) return `/admin/tasks/${encodeURIComponent(r.taskId)}`
       if (r.adminPane === 'messages' && r.channelId) return `/admin/messages/${encodeURIComponent(r.channelId)}`
       return `/admin/${r.adminPane ?? 'overview'}`
-    case 'sessions':
-      return '/'
   }
 }
 

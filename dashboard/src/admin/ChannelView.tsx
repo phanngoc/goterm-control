@@ -241,6 +241,13 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // same text — which is how the room ended up with a line in it twice.
   // One sender for two boxes: the channel's main line, and a thread. Which one
   // is decided by the caller, not by a mode the composer is left sitting in.
+  // The owner's Direct room with an agent is the same conversation as that
+  // agent's Telegram chat: a line at the top of it is answered at the top, on
+  // the conversation's own session, not in a thread under it.
+  // Its id is dm_<sorted pair>, and the owner's side of the pair is "owner".
+  const isOwnDirect = (id: string) =>
+    id.startsWith('dm_') && id.slice(3).split('__').includes('owner')
+
   const post = async (inThread: boolean) => {
     const text = (inThread ? threadBody : body).trim()
     if (!text || !active || !to || sending.current) return
@@ -255,7 +262,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       await loadMessages(active)
       if (inThread) {
         await loadThread(threadRoot)
-      } else if (posted?.mentions?.length) {
+      } else if (posted?.mentions?.length && !isOwnDirect(active)) {
         // Naming an agent is asking it something, and its answer goes into this
         // message's thread. Open that thread now so the reply arrives in view
         // instead of behind a click nobody knew to make.

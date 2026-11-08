@@ -190,6 +190,11 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 		return
 	}
 
+	if w.isOwnerDirect(m) {
+		w.answerDirect(ctx, m)
+		return
+	}
+
 	key := coord.ThreadKey(m)
 	mem, err := w.deps.Coord.GetThreadSession(key, w.deps.AgentID)
 	if err != nil {

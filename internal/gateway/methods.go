@@ -425,7 +425,13 @@ func handleSessionsList(deps Deps) (json.RawMessage, error) {
 	// the channel, and putting them here buries the real ones. The negative
 	// chat id is what marks them; see taskrunner and gateway/mentions.
 	all := make([]*session.Session, 0)
+	// known covers every session in the store, hidden ones included. Filling
+	// it from the visible list only made each hidden channel thread look
+	// "missing from the store" to the transcript scan below, which then put it
+	// back as an empty stub — the list filled with ch_cm_… rows at 0 turns.
+	known := make(map[string]bool)
 	for _, s := range deps.Sessions.List() {
+		known[s.ID] = true
 		if s.ChatID >= 0 {
 			all = append(all, s)
 		}
@@ -434,10 +440,6 @@ func handleSessionsList(deps Deps) (json.RawMessage, error) {
 	// Also scan transcript directory for sessions not in the store
 	transcriptDir := filepath.Join(deps.DataDir, "transcripts")
 	files, _ := transcript.ListTranscripts(transcriptDir)
-	known := make(map[string]bool, len(all))
-	for _, s := range all {
-		known[s.ID] = true
-	}
 	for _, f := range files {
 		base := filepath.Base(f)
 		sessionID := base[:len(base)-len(".jsonl")]
@@ -448,6 +450,11 @@ func handleSessionsList(deps Deps) (json.RawMessage, error) {
 			if err == nil && len(events) > 0 {
 				s.ChatID = events[0].ChatID
 				s.UpdatedAt = events[0].Timestamp
+			}
+			// The same rule as above, for transcripts whose session row is
+			// gone: a task run or a channel thread stays off this list.
+			if s.ChatID < 0 {
+				continue
 			}
 			all = append(all, s)
 		}

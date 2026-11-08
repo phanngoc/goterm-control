@@ -158,3 +158,35 @@ func TestArchivingHidesARoomAndKeepsItsMessages(t *testing.T) {
 		t.Error("archiving twice reported success")
 	}
 }
+
+// A Telegram chat reflected into the Direct room is a record of something
+// already answered. If the copy rang anybody, "@bomclaw2" typed on a phone
+// would summon a second agent, and the room's own agent would answer the same
+// question again.
+func TestAMirroredLineWakesNobody(t *testing.T) {
+	db := testDB(t)
+	registerTestAgents(t, db, "bomclaw", "bomclaw2")
+	dm, err := db.EnsureOwnerDM("bomclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, wake, err := db.PostMessage(NewChannelMessage{
+		ChannelID: dm.ID, AuthorKind: MemberUser, AuthorID: OwnerUserID,
+		Body: "@bomclaw @bomclaw2 xem giúp", Mirror: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wake) != 0 || len(m.Mentions) != 0 {
+		t.Fatalf("a mirrored line woke %v / mentioned %v", wake, m.Mentions)
+	}
+	for _, id := range []string{"bomclaw", "bomclaw2"} {
+		unread, err := db.UnreadMentions(MemberAgent, id, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(unread) != 0 {
+			t.Errorf("%s has %d unread mention(s) from a mirrored line", id, len(unread))
+		}
+	}
+}
