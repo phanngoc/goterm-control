@@ -128,6 +128,14 @@ type NewChannelMessage struct {
 	// that has not registered yet — a fresh install, a peer that is down —
 	// still has to receive it, which parsing alone cannot guarantee.
 	Notify []Member
+
+	// Mirror marks a copy of a line that was already said somewhere else —
+	// the owner's Telegram chat with an agent, reflected into their Direct
+	// room. It is a record, not a request: nobody is mentioned and nobody is
+	// woken, or an "@bomclaw2" typed on Telegram would summon an agent a
+	// second time and the agent this room belongs to would answer its own
+	// conversation twice.
+	Mirror bool
 }
 
 // DMChannelID is derived from the pair, sorted, so both directions resolve to
@@ -423,6 +431,10 @@ func (db *DB) PostMessage(n NewChannelMessage) (*ChannelMessage, []string, error
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.ChannelID, m.ThreadRoot, m.AuthorKind, m.AuthorID, m.Body, m.TaskID, ts(m.CreatedAt)); err != nil {
 		return nil, nil, fmt.Errorf("post to %s: %w", n.ChannelID, err)
+	}
+
+	if n.Mirror {
+		return m, nil, nil
 	}
 
 	named, err := db.resolveMentions(n.Body)

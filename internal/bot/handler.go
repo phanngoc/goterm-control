@@ -711,6 +711,7 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		}
 	}
 	h.notifyTurn(sess, chatID, "started")
+	h.mirrorToDirect(ctx, chatID, true, userText)
 
 	// assistantText accumulates ALL turns (for storage); turnText resets per
 	// iteration so the auto-continue heuristic only inspects the latest turn.
@@ -957,6 +958,8 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			log.Printf("handler: message store assistant error: %v", err)
 		}
 	}
+
+	h.mirrorToDirect(ctx, chatID, false, respText)
 
 	// Label the session: instant fallback from the first user message, then
 	// an async rename to a summary of the whole conversation.

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/execution"
 	"github.com/ngocp/goterm-control/internal/session"
@@ -24,6 +25,7 @@ type recordingTurn struct {
 	sessions []string
 	resumed  []string
 	tags     [][]string // the trace tags each turn's session carried
+	direct   []bool     // whether each turn was marked as typed in the Direct room
 	reply    string
 	newID    string
 	err      error
@@ -44,6 +46,7 @@ func (r *recordingTurn) RunTurn(ctx context.Context, sess *session.Session, chat
 	r.sessions = append(r.sessions, sess.ID)
 	r.resumed = append(r.resumed, sess.GetSessionID())
 	r.tags = append(r.tags, sess.GetTraceTags())
+	r.direct = append(r.direct, chat.IsFromDirectRoom(ctx))
 	reply, newID := r.reply, r.newID
 	r.mu.Unlock()
 
