@@ -2,12 +2,19 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { useStore } from './stores/store'
 import { useGateway } from './hooks/useGateway'
 import { eventsToMessages } from './lib/transcript'
-import SessionList from './components/SessionList'
 import ChatView from './components/ChatView'
 import StatusBar from './components/StatusBar'
 import AdminView from './admin/AdminView'
 import type { Me } from './Root'
 import { parseRoute, pathFor, isRefinement, lineFromHash, type AdminPane } from './lib/route'
+
+// Messages is the home: every room and thread, and the owner's Direct rooms,
+// which carry the Telegram conversation too. It is the Admin pane of the same
+// name, promoted to the top bar.
+const NAV = ['messages', 'chat', 'status', 'admin'] as const
+const NAV_LABEL: Record<(typeof NAV)[number], string> = {
+  messages: 'Messages', chat: 'Chat', status: 'Status', admin: 'Admin',
+}
 
 // Monaco is several MB; only the editor's own page and dialog load it.
 const ProjectEditor = lazy(() => import('./admin/ProjectEditor'))
@@ -28,7 +35,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
 
   // Which admin pane is on screen. Lifted out of AdminView so that one place
   // owns the address bar; AdminView is now told which pane to show.
-  const [adminPane, setAdminPane] = useState<AdminPane>('overview')
+  const [adminPane, setAdminPane] = useState<AdminPane>('messages')
   // Which task's detail is open, mirrored in the address bar. A drawer that
   // lives only in component state cannot be sent to anybody — "look at this
   // task" meant "open the board and find it".
@@ -109,7 +116,9 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
     })
     const here = location.pathname
     if (path === here) return
-    history[isRefinement(here, path) ? 'replaceState' : 'pushState'](null, '', path)
+    // The bare address is only ever a way in to Messages, so it is replaced
+    // rather than left behind for Back to bounce off.
+    history[here === '/' || isRefinement(here, path) ? 'replaceState' : 'pushState'](null, '', path)
   }, [tab, activeSessionId, adminPane, adminTask, adminChannel])
 
   // Load sessions + status on connect
@@ -172,6 +181,8 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       .catch(() => {})
   }, [tab, activeSessionId, sessions, setActiveSessionId, setMessages, call])
 
+  const goMessages = () => { setTab('admin'); setAdminPane('messages') }
+
   if (tab === 'files' && filesRoute) {
     return (
       <Suspense fallback={<div className="h-full flex items-center justify-center bg-[#1e1e1e] text-sm text-gray-500">Đang mở editor…</div>}>
@@ -193,23 +204,33 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">
       <header className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
         <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold tracking-tight cursor-pointer" onClick={() => { setTab('sessions'); setActiveSessionId(null) }}>
+          <h1 className="text-lg font-semibold tracking-tight cursor-pointer" onClick={goMessages}>
             BomClaw
           </h1>
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>
         <nav className="flex items-center gap-1">
-          {(['sessions', 'chat', 'status', 'admin'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => { setTab(t); if (t === 'sessions') setActiveSessionId(null) }}
-              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                tab === t ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
-              }`}
-            >
-              {t === 'sessions' ? 'Sessions' : t === 'chat' ? 'Chat' : t === 'status' ? 'Status' : 'Admin'}
-            </button>
-          ))}
+          {NAV.map(t => {
+            const on = t === 'messages' ? tab === 'admin' && adminPane === 'messages'
+              : t === 'admin' ? tab === 'admin' && adminPane !== 'messages'
+              : tab === t
+            return (
+              <button
+                key={t}
+                onClick={() => {
+                  if (t === 'messages') return goMessages()
+                  setTab(t)
+                  // Admin opens on its own panes; Messages has a tab of its own.
+                  if (t === 'admin' && adminPane === 'messages') setAdminPane('overview')
+                }}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  on ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                }`}
+              >
+                {NAV_LABEL[t]}
+              </button>
+            )
+          })}
           {onLogout && (
             <>
               <span className="ml-2 text-xs text-gray-500">{me.username}</span>
@@ -225,7 +246,6 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       </header>
 
       <main className="flex-1 overflow-hidden">
-        {tab === 'sessions' && <SessionList call={call} />}
         {tab === 'chat' && <ChatView call={call} />}
         {tab === 'status' && <StatusBar />}
         {tab === 'admin' && (

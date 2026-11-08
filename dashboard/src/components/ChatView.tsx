@@ -3,6 +3,7 @@ import { useStore, ChatMessage, TodoItem } from '../stores/store'
 import { eventsToMessages } from '../lib/transcript'
 import MessageMarkdown from './MessageMarkdown'
 import ChatInput, { type ChatInputHandle } from './ChatInput'
+import ChatHeader from './ChatHeader'
 
 export default function ChatView({ call }: { call: (m: string, p?: any) => Promise<any> }) {
   const messages = useStore(s => s.messages)
@@ -83,6 +84,7 @@ export default function ChatView({ call }: { call: (m: string, p?: any) => Promi
 
   return (
     <div className="h-full flex flex-col">
+      <ChatHeader call={call} />
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && (

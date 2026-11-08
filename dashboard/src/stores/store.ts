@@ -40,7 +40,7 @@ export type ChatMessage = {
   partial?: boolean // reply still streaming (or interrupted) — snapshot only
 }
 
-type Tab = 'chat' | 'sessions' | 'status' | 'admin' | 'files'
+type Tab = 'chat' | 'status' | 'admin' | 'files'
 
 interface Store {
   // Connection
@@ -103,7 +103,7 @@ export const useStore = create<Store>((set) => ({
   connected: false,
   setConnected: (connected) => set({ connected }),
 
-  tab: 'sessions',
+  tab: 'admin',
   setTab: (tab) => set({ tab }),
 
   sessions: [],
