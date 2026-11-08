@@ -38,47 +38,42 @@ the slot.
 
 ## Several agents, one browser
 
-A machine commonly runs more than one agent (agent 1 on `:18789`, agent 2 on
-`:18790`). Each has its own gateway, its own pairing token, and its own
-`/ext` endpoint, and the extension holds **a separate connection to each**.
-Pair them all from the popup: "Pair another agent", one token each.
+A machine commonly runs more than one agent (agent 1 on `:18789`, agents 2 and
+3 on `:18790`/`:18791`). **Agent 1 is the master**: it alone holds the
+extension's socket. The others set `browser.extension.master` and relay every
+browser call to agent 1's `/api/browser/call` over loopback, naming themselves.
+Agent 1 forwards the call to the extension with that name (`"agent"` in the
+`call` frame), so one extension and one socket serve every agent. A non-master
+gateway refuses an extension of its own with close code `4004`.
 
-Every agent drives **its own tab**, opened in its own window. Two agents
-working at the same time therefore never navigate each other's page out from
-under them. `bomclaw browser tabs` marks the tab the calling agent acts on with
-`*`, and labels tabs belonging to another agent with that agent's name — so
-`tabs focus <id>` onto a peer's tab is a deliberate choice rather than an
-accident.
+Every agent drives **its own tab group** — "BomClaw · bomclaw2", in its own
+colour — inside the window you are already using. Nothing opens a window of
+its own, and an agent's new tabs open in the background so your page stays
+where it is. Two agents working at the same time never navigate each other's
+page. `bomclaw browser tabs` marks the tab the calling agent acts on with `*`,
+and labels tabs in another agent's group with that agent's name.
 
-The popup shows, per agent: connection state, how many actions it has run, its
-last action and when, and the page it is currently on. Below that is a rolling
-log of what every agent did — action, target, duration, and any error. With one
-agent that is a convenience; with two it is the only way to tell which of them
-just navigated your browser.
+A screenshot briefly brings the agent's tab forward (Chrome can only capture
+the visible tab) and puts yours back straight after.
+
+The popup shows the socket, and under it every agent that has used the browser
+through it: its group colour, how many actions it ran, its last action, and the
+page it is on. Below that is a rolling log of what every agent did.
 
 ## Setup
 
-**1. Start the gateway.** With `browser.extension.enabled` on (the default) it
-logs the endpoint at startup:
+**1. Start the gateways.** Agent 1 logs the endpoint; the others log the master
+they borrow from:
 
 ```
-browser bridge: extension endpoint at ws://127.0.0.1:18789/ext (eval=true)
-browser bridge: generated a pairing token at ~/.goterm/data/browser-bridge.token
+browser bridge: extension endpoint at ws://127.0.0.1:18789/ext (eval=true, token required=false)
+browser bridge: using the browser held by http://127.0.0.1:18789 (eval=true)
 ```
 
-**2. Get the pairing token.**
-
-```bash
-bomclaw browser token
-```
-
-**3. Load the extension.** Open `chrome://extensions`, turn on **Developer
+**2. Load the extension.** Open `chrome://extensions`, turn on **Developer
 mode**, click **Load unpacked**, and pick the `extension/` directory of this
-repo.
-
-**4. Pair it.** Click the extension's toolbar icon, paste the endpoint and
-token, press **Pair**. The dot turns green and names your agent. Repeat for a
-second agent with its own port and token.
+repo. It connects to `ws://127.0.0.1:18789/ext` by itself — there is nothing to
+paste. The dot turns green and names agent 1.
 
 **5. Check it from the agent's side.**
 
@@ -132,13 +127,17 @@ into. Everything after that acts on the focused tab until you focus another.
 browser:
   extension:
     enabled: true
+    master: ""                  # agents 2+: "http://127.0.0.1:18789" — borrow agent 1's browser
+    require_token: false        # true: even a loopback extension must present the token
     token: ""                   # empty = generated into <data_dir>/browser-bridge.token
     allow_eval: true            # false removes `bomclaw browser eval`
     call_timeout_seconds: 30    # how long one action may take
     blocked_hosts: []           # e.g. ["*.bank.example"] — never opened
 ```
 
-`BOMCLAW_BROWSER_TOKEN` overrides `token`. A generated token is written
+The token is only asked for when `require_token` is on, or when the connection
+did not come straight from loopback (a tunnel or proxy). `BOMCLAW_BROWSER_TOKEN`
+overrides `token`. A generated token is written
 owner-only (`0600`) and never leaves the machine except when you paste it into
 the extension.
 
@@ -149,9 +148,14 @@ worth stating plainly.
 
 **What protects it**
 
-- **Pairing token.** The `/ext` endpoint accepts nothing without it, compared
-  in constant time. A wrong token is closed with code 4001 and the extension
-  stops retrying rather than hammering the port.
+- **Loopback-direct, or the token.** By default `/ext` accepts a connection
+  made straight from loopback with no proxy or tunnel headers (`CF-Connecting-IP`,
+  `X-Forwarded-*`) — the user's own browser on the user's own machine. Anything
+  else must present the pairing token, compared in constant time; a wrong one
+  is closed with 4001 and the extension stops retrying. `require_token: true`
+  demands the token from loopback too. The trade: any local process can now
+  attach as the browser, which on a single-user Mac is a process that could
+  already read your cookies.
 - **Loopback only.** The extension connects to `127.0.0.1`. The CLI routes sit
   behind the same rule as `/api/status`: a dashboard login session, or a direct
   loopback caller with no proxy headers — so tunnel traffic can never reach
@@ -192,9 +196,9 @@ One JSON object per WebSocket frame.
 
 | Direction | Frame |
 |---|---|
-| ext → gw | `{"type":"hello","token":"…","client":"…","browser":"…"}` |
-| gw → ext | `{"type":"welcome","agent":"…","name":"…"}`, or close `4001` |
-| gw → ext | `{"type":"call","id":"7","action":"click","params":{"ref":"n7"}}` |
+| ext → gw | `{"type":"hello","token":"…","client":"…","browser":"…"}` (token optional on loopback) |
+| gw → ext | `{"type":"welcome","agent":"…","name":"…"}`, or close `4001` (unauthorized) / `4004` (not the master) |
+| gw → ext | `{"type":"call","id":"7","agent":"bomclaw2","action":"click","params":{"ref":"n7"}}` |
 | ext → gw | `{"type":"result","id":"7","ok":true,"result":{…}}` |
 | ext → gw | `{"type":"result","id":"7","ok":false,"error":"element n7 not found"}` |
 | both | `{"type":"ping"}` / `{"type":"pong"}` |

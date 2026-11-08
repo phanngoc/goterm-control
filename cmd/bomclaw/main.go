@@ -444,6 +444,8 @@ func runGateway(args []string) {
 				CallTimeout:  time.Duration(cfg.Browser.Extension.CallTimeoutSeconds) * time.Second,
 				AllowEval:    cfg.Browser.Extension.EvalAllowed(),
 				BlockedHosts: cfg.Browser.Extension.BlockedHosts,
+				RequireToken: cfg.Browser.Extension.RequireToken,
+				Master:       cfg.Browser.Extension.Master,
 			})
 			extURL := fmt.Sprintf("ws://%s:%d/ext", *bind, *port)
 			browserAPI = &gateway.BrowserAPI{Hub: browserHub, Token: tok.Value, ExtURL: extURL}
@@ -459,7 +461,12 @@ func runGateway(args []string) {
 			if tok.Created {
 				log.Printf("browser bridge: generated a pairing token at %s (see `bomclaw browser token`)", tok.Path)
 			}
-			log.Printf("browser bridge: extension endpoint at %s (eval=%v)", extURL, cfg.Browser.Extension.EvalAllowed())
+			if m := cfg.Browser.Extension.Master; m != "" {
+				log.Printf("browser bridge: using the browser held by %s (eval=%v)", m, cfg.Browser.Extension.EvalAllowed())
+			} else {
+				log.Printf("browser bridge: extension endpoint at %s (eval=%v, token required=%v)",
+					extURL, cfg.Browser.Extension.EvalAllowed(), cfg.Browser.Extension.RequireToken)
+			}
 		}
 	}
 

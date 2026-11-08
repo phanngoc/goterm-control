@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "BomClaw Browser Bridge",
-  "version": "0.2.1",
-  "description": "Let your BomClaw agent drive this browser — with your logged-in sessions — over a paired, local connection.",
-  "permissions": ["tabs", "scripting", "activeTab", "storage"],
+  "version": "0.3.0",
+  "description": "Let your BomClaw agent drive this browser — with your logged-in sessions — over a local connection. One extension serves every agent on the machine, each in its own tab group.",
+  "permissions": ["tabs", "tabGroups", "scripting", "activeTab", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "action": {

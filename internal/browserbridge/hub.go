@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/ngocp/goterm-control/internal/auth"
 )
 
 const (
@@ -42,12 +44,13 @@ const (
 	closeUnauthorized = 4001
 	closeReplaced     = 4002
 	closeTimeout      = 4003
+	closeNotMaster    = 4004
 )
 
 var (
 	// ErrNoBrowser is returned when no extension is connected. Its text is
 	// what the agent will read, so it says what to do about it.
-	ErrNoBrowser = errors.New("no browser is connected — install the BomClaw Browser Bridge extension and pair it with the token from `bomclaw browser token`")
+	ErrNoBrowser = errors.New("no browser is connected — install the BomClaw Browser Bridge extension; it connects to the master agent (ws://127.0.0.1:18789/ext) by itself")
 	// ErrDisconnected is returned for calls in flight when the browser drops.
 	ErrDisconnected = errors.New("the browser disconnected while the action was running")
 	// ErrEvalDisabled is returned for eval when config turned it off.
@@ -65,7 +68,20 @@ func (e *ActionError) Error() string { return e.Action + ": " + e.Message }
 
 // Options configures a Hub.
 type Options struct {
-	Token        string // pairing secret the extension must present; required
+	// Token is the pairing secret. It is checked when RequireToken is set,
+	// and always for a connection that did not come straight from loopback.
+	Token string
+	// RequireToken makes every connection present Token, loopback included.
+	// Off by default: the gateway listens on loopback, the extension is the
+	// user's own, and a token to copy into every browser was the one step that
+	// kept people from using the bridge at all. A tunnelled or proxied request
+	// still has to present it — see allowedHello.
+	RequireToken bool
+	// Master, when set, is the base URL of the gateway that holds the
+	// extension (agent 1, normally http://127.0.0.1:18789). This hub then
+	// accepts no browser of its own: every Call is relayed there and runs in
+	// a tab group of this agent's own. One extension, one socket, every agent.
+	Master       string
 	AgentID      string
 	AgentName    string
 	CallTimeout  time.Duration // per action; default 30s ("wait" adds its own duration)
@@ -83,6 +99,9 @@ type Status struct {
 	Connected bool   `json:"connected"`
 	AgentID   string `json:"agent_id,omitempty"`
 	AgentName string `json:"agent_name,omitempty"`
+	// Master names the gateway this agent borrows the browser from, when it
+	// is not the one holding it.
+	Master string `json:"master,omitempty"`
 
 	Client      string `json:"client,omitempty"`
 	Browser     string `json:"browser,omitempty"`
@@ -121,24 +140,26 @@ type Hub struct {
 	opts     Options
 	upgrader websocket.Upgrader
 	seq      atomic.Uint64
+	client   *http.Client // to the master; nil when this hub holds the browser
 
 	mu   sync.Mutex
 	conn *conn
 }
 
-// New creates a Hub. It panics on an empty token: an unauthenticated bridge
-// would hand anyone who can reach the port control of the user's browser.
+// New creates a Hub. It panics when RequireToken is set without a token: that
+// combination would refuse every browser while looking configured.
 func New(opts Options) *Hub {
-	if opts.Token == "" {
-		panic("browserbridge: a pairing token is required")
+	if opts.RequireToken && opts.Token == "" {
+		panic("browserbridge: require_token is set but there is no token")
 	}
+	opts.Master = strings.TrimRight(strings.TrimSpace(opts.Master), "/")
 	if opts.CallTimeout <= 0 {
 		opts.CallTimeout = defaultCallWait
 	}
 	if opts.Logf == nil {
 		opts.Logf = log.Printf
 	}
-	return &Hub{
+	h := &Hub{
 		opts: opts,
 		upgrader: websocket.Upgrader{
 			// The extension's Origin is chrome-extension://<id>; the gateway's
@@ -146,6 +167,24 @@ func New(opts Options) *Hub {
 			CheckOrigin: allowOrigin,
 		},
 	}
+	if opts.Master != "" {
+		h.client = &http.Client{Timeout: maxCallTimeout + 10*time.Second}
+	}
+	return h
+}
+
+// IsMaster reports whether this hub holds the browser itself.
+func (h *Hub) IsMaster() bool { return h.opts.Master == "" }
+
+// allowedHello decides whether a hello may attach. Without RequireToken, a
+// connection made straight from loopback — no proxy or tunnel headers — needs
+// nothing: it is the user's own browser on the user's own machine. Anything
+// else, and everything when RequireToken is on, must present the token.
+func (h *Hub) allowedHello(r *http.Request, presented string) bool {
+	if !h.opts.RequireToken && auth.IsLocalDirect(r) {
+		return true
+	}
+	return h.opts.Token != "" && h.tokenMatches(presented)
 }
 
 func allowOrigin(r *http.Request) bool {
@@ -172,6 +211,12 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if !h.IsMaster() {
+		// Two sockets on two agents is the setup this replaced: the extension
+		// connects to the master, which runs every agent's calls.
+		closeWith(ws, closeNotMaster, "this agent uses the browser through "+h.opts.Master+" — connect the extension there")
+		return
+	}
 
 	_ = ws.SetReadDeadline(time.Now().Add(helloTimeout))
 	var hello frame
@@ -179,8 +224,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		closeWith(ws, closeBadHandshake, "expected a hello frame")
 		return
 	}
-	if !h.tokenMatches(hello.Token) {
-		h.opts.Logf("browser bridge: rejected a connection from %s (wrong pairing token)", r.RemoteAddr)
+	if !h.allowedHello(r, hello.Token) {
+		h.opts.Logf("browser bridge: rejected a connection from %s (not loopback-direct, and no valid pairing token)", r.RemoteAddr)
 		closeWith(ws, closeUnauthorized, "unauthorized")
 		return
 	}
@@ -260,6 +305,9 @@ func (h *Hub) Connected() bool { return h.current() != nil }
 
 // Status describes the attached browser.
 func (h *Hub) Status() Status {
+	if !h.IsMaster() {
+		return h.remoteStatus()
+	}
 	c := h.current()
 	if c == nil {
 		// Still name the agent: a disconnected bridge is the common case
@@ -298,6 +346,15 @@ func (h *Hub) current() *conn {
 // a blocked URL fails the same way whether it came from the CLI, the
 // dashboard or a peer agent.
 func (h *Hub) Call(ctx context.Context, action string, params json.RawMessage) (json.RawMessage, error) {
+	return h.CallAs(ctx, h.opts.AgentID, action, params)
+}
+
+// CallAs is Call on behalf of a named agent. The extension keeps a tab group
+// per agent, so the name is what keeps agent 2's page out of agent 1's. On a
+// hub that borrows the browser the call goes to the master; policy is applied
+// on both sides, so this agent's blocked hosts hold even though another
+// gateway carries the call.
+func (h *Hub) CallAs(ctx context.Context, agent, action string, params json.RawMessage) (json.RawMessage, error) {
 	if action == "" {
 		return nil, errors.New("action is required")
 	}
@@ -306,6 +363,12 @@ func (h *Hub) Call(ctx context.Context, action string, params json.RawMessage) (
 	}
 	if err := h.authorize(action, params); err != nil {
 		return nil, err
+	}
+	if !h.IsMaster() {
+		return h.remoteCall(ctx, action, params)
+	}
+	if agent == "" {
+		agent = h.opts.AgentID
 	}
 	c := h.current()
 	if c == nil {
@@ -316,7 +379,7 @@ func (h *Hub) Call(ctx context.Context, action string, params json.RawMessage) (
 	ch := c.register(id)
 	defer c.unregister(id)
 
-	if err := c.send(frame{Type: "call", ID: id, Action: action, Params: params}); err != nil {
+	if err := c.send(frame{Type: "call", ID: id, Agent: agent, Action: action, Params: params}); err != nil {
 		return nil, fmt.Errorf("send to browser: %w", err)
 	}
 

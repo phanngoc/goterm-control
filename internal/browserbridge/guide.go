@@ -32,8 +32,9 @@ for public pages where no account is involved.
 - ` + "`bomclaw browser status`" + ` — is a browser connected?
 - ` + "`bomclaw browser tabs`" + ` — list open tabs (id, title, url).
   ` + "`tabs open URL`" + `, ` + "`tabs focus ID`" + ` (work in one of the user's own tabs), ` + "`tabs close ID`" + `.
-- ` + "`bomclaw browser navigate URL`" + ` — open URL in the agent's tab. It lives in
-  a separate window, so the user's own tabs are left alone.
+- ` + "`bomclaw browser navigate URL`" + ` — open URL in the agent's tab. It opens in
+  the background of the user's window, in a tab group named after you
+  ("BomClaw · <you>"), so the user's own tabs are left alone.
 - ` + "`bomclaw browser snapshot [--selector CSS]`" + ` — the page as a tree of
   elements with refs like n12. ALWAYS snapshot before acting on a page, and
   again after anything that changes it; refs are not stable across changes.
