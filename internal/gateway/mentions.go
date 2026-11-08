@@ -691,7 +691,8 @@ func (w *MentionWatcher) threadContext(m coord.ChannelMessage, mem *coord.Thread
 		if t.AuthorKind == coord.MemberUser {
 			who = "the owner"
 		}
-		lines = append(lines, fmt.Sprintf("**%s:** %s", who, truncateRunes(strings.TrimSpace(t.Body), MaxThreadMessageRunes)))
+		// A progress line's data is for the dashboard; the agent reads its text.
+		lines = append(lines, fmt.Sprintf("**%s:** %s", who, truncateRunes(strings.TrimSpace(coord.ProgressText(t.Body)), MaxThreadMessageRunes)))
 	}
 	if len(lines) == 0 {
 		return ""
@@ -897,7 +898,32 @@ func (r *replySink) Finalize()                {}
 // the way Claude Code shows a turn: what it is thinking, the steps it took with
 // the current one last, its plan with what is done and what is left, then the
 // answer as it is being written. Markdown, rendered by the dashboard.
+//
+// The same state rides along as data (coord.WithProgress), which is what the
+// dashboard draws: a live card with its own ticking clock.
 func workingLine(p progressView) string {
+	return coord.WithProgress(workingMarkdown(p), progressData(p))
+}
+
+// progressData is p as the dashboard reads it.
+func progressData(p progressView) coord.Progress {
+	out := coord.Progress{
+		Label:     "đang làm",
+		Since:     p.since,
+		Steps:     p.tools,
+		StepCount: len(p.tools),
+		Thinking:  latestThought(p.thinking),
+	}
+	for _, t := range p.todos {
+		out.Todos = append(out.Todos, coord.ProgressTodo{Content: t.Content, Status: t.Status, Active: t.ActiveForm})
+	}
+	if s := strings.TrimSpace(p.partial); s != "" {
+		out.Partial = chat.DefaultPreview().Cut(s)
+	}
+	return out
+}
+
+func workingMarkdown(p progressView) string {
 	var b strings.Builder
 	b.WriteString(coord.ProgressPrefix + "_đang làm_")
 	if !p.since.IsZero() {

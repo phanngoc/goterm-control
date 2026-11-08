@@ -1,6 +1,7 @@
 package taskrunner
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -40,11 +41,15 @@ type progressLine struct {
 	title     string
 	started   time.Time
 
-	mu      sync.Mutex
-	tools   []string
-	last    time.Time
-	reply   string
-	preview *chat.StreamPreview
+	mu       sync.Mutex
+	tools    []string
+	thinking strings.Builder
+	todos    []coord.ProgressTodo
+	last     time.Time
+	reply    string
+	preview  *chat.StreamPreview
+	trailing *time.Timer // a redraw owed once the throttle window ends
+	closed   bool
 }
 
 const progressEvery = 3 * time.Second
@@ -223,16 +228,76 @@ func (p *progressLine) Tool(name string) {
 	if len(p.tools) == 0 || p.tools[len(p.tools)-1] != name {
 		p.tools = append(p.tools, name)
 	}
-	stale := time.Since(p.last) >= progressEvery
-	if stale {
-		p.last = time.Now()
-	}
-	body := p.bodyLocked()
 	p.mu.Unlock()
+	p.redraw()
+}
 
-	if !stale {
+// Thinking records what the model is weighing. An empty chunk ends a block.
+func (p *progressLine) Thinking(chunk string) {
+	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	if chunk == "" {
+		p.thinking.WriteString("\n\n")
+	} else {
+		p.thinking.WriteString(chunk)
+	}
+	p.mu.Unlock()
+	p.redraw()
+}
+
+// Todos records the model's plan from a TodoWrite call's input.
+func (p *progressLine) Todos(inputJSON string) {
+	if p == nil {
+		return
+	}
+	var in struct {
+		Todos []struct {
+			Content    string `json:"content"`
+			Status     string `json:"status"`
+			ActiveForm string `json:"activeForm"`
+		} `json:"todos"`
+	}
+	if json.Unmarshal([]byte(inputJSON), &in) != nil || len(in.Todos) == 0 {
+		return
+	}
+	todos := make([]coord.ProgressTodo, 0, len(in.Todos))
+	for _, t := range in.Todos {
+		todos = append(todos, coord.ProgressTodo{Content: t.Content, Status: t.Status, Active: t.ActiveForm})
+	}
+	p.mu.Lock()
+	p.todos = todos
+	p.mu.Unlock()
+	p.redraw()
+}
+
+// redraw writes the line now if the last write is old enough, and otherwise
+// owes one for the end of the window. Without the owed write, a step reached
+// two seconds after the previous one was never shown: an eleven-minute Bash
+// call sat under the name of the command before it for all eleven minutes.
+func (p *progressLine) redraw() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	wait := progressEvery - time.Since(p.last)
+	if wait > 0 {
+		if p.trailing == nil {
+			p.trailing = time.AfterFunc(wait, func() {
+				p.mu.Lock()
+				p.trailing = nil
+				p.mu.Unlock()
+				p.redraw()
+			})
+		}
+		p.mu.Unlock()
+		return
+	}
+	p.last = time.Now()
+	body := p.bodyLocked()
+	p.mu.Unlock()
 	if err := p.db.UpdateMessageBody(p.messageID, body); err != nil {
 		log.Printf("taskrunner: progress update: %v", err)
 	}
@@ -265,6 +330,12 @@ func (p *progressLine) Close() {
 	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	p.closed = true
+	if p.trailing != nil {
+		p.trailing.Stop()
+	}
+	p.mu.Unlock()
 	if err := p.db.DeleteMessage(p.messageID); err != nil {
 		log.Printf("taskrunner: could not close the progress line: %v", err)
 	}
@@ -277,6 +348,42 @@ func (p *progressLine) body() string {
 }
 
 func (p *progressLine) bodyLocked() string {
+	return coord.WithProgress(p.markdownLocked(), p.dataLocked())
+}
+
+// dataLocked is the run as the dashboard draws it.
+func (p *progressLine) dataLocked() coord.Progress {
+	d := coord.Progress{
+		Agent:     p.agent,
+		Label:     "đang chạy",
+		Task:      p.taskID,
+		Since:     p.started,
+		Steps:     append([]string(nil), p.tools...),
+		StepCount: len(p.tools),
+		Thinking:  lastParagraph(p.thinking.String(), 480),
+		Todos:     p.todos,
+	}
+	if r := strings.TrimSpace(p.reply); r != "" {
+		d.Partial = p.preview.Cut(r)
+	}
+	return d
+}
+
+// lastParagraph is the newest paragraph of s, at most max runes from its end.
+func lastParagraph(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	paras := strings.Split(s, "\n\n")
+	last := strings.TrimSpace(paras[len(paras)-1])
+	if r := []rune(last); len(r) > max {
+		last = "…" + string(r[len(r)-max:])
+	}
+	return last
+}
+
+func (p *progressLine) markdownLocked() string {
 	var b strings.Builder
 	b.WriteString(progressPrefix)
 	fmt.Fprintf(&b, "_đang chạy_ `%s` · %s", p.taskID, time.Since(p.started).Round(time.Second))

@@ -512,6 +512,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 			reply.WriteString(chunk)
 			progress.Text(chunk)
 		},
+		OnThinking: progress.Thinking,
 		OnToolCall: func(name, input string) {
 			// The label, not the bare name: the board is the screen built for
 			// watching work, and "Bash" tells a watcher less than
@@ -519,8 +520,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 			label := chat.ToolLabel(name, input)
 			sess.NoteTool(label)
 			progress.Tool(label)
-			if name == "TodoWrite" && hasPendingTodos(input) {
-				todoPending = true
+			if name == "TodoWrite" {
+				progress.Todos(input)
+				if hasPendingTodos(input) {
+					todoPending = true
+				}
 			}
 			sp := call.Child(name, coord.RunTypeTool)
 			sp.SetInputs(input)

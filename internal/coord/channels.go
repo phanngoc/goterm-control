@@ -112,6 +112,11 @@ type ChannelMessage struct {
 	// asked an agent reads exactly like silence.
 	LastReplyBy   string `json:"last_reply_by,omitempty"`
 	LastReplyText string `json:"last_reply_text,omitempty"`
+	// Working is the thread's live progress line, when an agent is mid-turn in
+	// it: the room shows "bomclaw · 1m20s · ▸ Bash(…)" under the message
+	// without anyone opening the thread. Partial answer and plan are left out;
+	// those are for the thread itself.
+	Working *Progress `json:"working,omitempty"`
 }
 
 // NewChannelMessage is the input to PostMessage.
@@ -704,7 +709,23 @@ func (db *DB) decorate(msgs []ChannelMessage, withReplies bool) ([]ChannelMessag
 			Scan(&msgs[i].LastReplyBy, &msgs[i].LastReplyText); err != nil {
 			return nil, fmt.Errorf("last reply of %s: %w", msgs[i].ID, err)
 		}
-		msgs[i].LastReplyText = truncateRunes(msgs[i].LastReplyText, ReplyPreviewRunes)
+		msgs[i].LastReplyText = truncateRunes(ProgressText(msgs[i].LastReplyText), ReplyPreviewRunes)
+
+		var author, body string
+		err = db.conn.QueryRow(`SELECT author_id, body FROM channel_messages
+			WHERE thread_root = ? AND body LIKE ? || '%' ORDER BY created_at DESC LIMIT 1`,
+			msgs[i].ID, ProgressPrefix).Scan(&author, &body)
+		if err == nil {
+			if p, ok := ParseProgress(body); ok {
+				if p.Agent == "" {
+					p.Agent = author
+				}
+				p.Partial, p.Todos = "", nil
+				msgs[i].Working = &p
+			}
+		} else if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("progress in %s: %w", msgs[i].ID, err)
+		}
 	}
 	return msgs, nil
 }

@@ -5,6 +5,7 @@ import MessageMarkdown from '../components/MessageMarkdown'
 import { ArtifactModal, isPage } from './ArtifactView'
 import GatewayEditor from './GatewayEditor'
 import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
+import ProgressCard, { ProgressSummary, isProgressLine, parseProgress } from './ProgressCard'
 
 import { ago, clock } from './format'
 
@@ -217,7 +218,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // Faster while an agent is mid-turn: its progress line (thinking, steps,
   // plan) is redrawn every couple of seconds, and a 4s poll halves that.
   const working = useMemo(
-    () => [...msgs, ...(thread ?? [])].some(m => m.body.startsWith('⏳ ') || (m.last_reply_text ?? '').startsWith('⏳ ')),
+    () => [...msgs, ...(thread ?? [])].some(m => isProgressLine(m.body) || !!m.working || (m.last_reply_text ?? '').startsWith('⏳ ')),
     [msgs, thread],
   )
   useEffect(() => {
@@ -531,7 +532,10 @@ function ThreadPane({ thread, rootID, selfID, onOpenTask }: {
   }
 
   const root = thread[0]
-  const replies = thread.slice(1)
+  // A line an agent is still working in is pinned under the thread, out of
+  // the scroll: wherever you are reading, what is running stays in view.
+  const live = thread.slice(1).filter(m => isProgressLine(m.body) && parseProgress(m.body))
+  const replies = thread.slice(1).filter(m => !live.includes(m))
   const hidden = showAll ? 0 : Math.max(0, replies.length - THREAD_TAIL)
   const shown = hidden ? replies.slice(hidden) : replies
 
@@ -571,6 +575,7 @@ function ThreadPane({ thread, rootID, selfID, onOpenTask }: {
   }
 
   return (
+    <div className="flex-1 min-h-0 flex flex-col">
     <div className="relative flex-1 min-h-0">
       <div
         ref={box}
@@ -608,6 +613,14 @@ function ThreadPane({ thread, rootID, selfID, onOpenTask }: {
           ↓ tin mới nhất
         </button>
       )}
+    </div>
+    {live.length > 0 && (
+      <div className="shrink-0 max-h-[45%] overflow-y-auto border-t border-gray-800 bg-gray-900/60 p-2 space-y-2">
+        {live.map(m => (
+          <ProgressCard key={m.id} p={parseProgress(m.body)!} author={m.author_id} fallbackSince={m.created_at} />
+        ))}
+      </div>
+    )}
     </div>
   )
 }
@@ -659,6 +672,7 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
   onThread?: () => void; onOpenTask?: (taskID: string) => void
 }) {
   const mine = m.author_kind === 'user'
+  const progress = isProgressLine(m.body) ? parseProgress(m.body) : null
   return (
     <div className={`rounded-lg px-3 py-2 ring-1 ${
       mine ? 'bg-sky-500/10 ring-sky-500/25' : 'bg-gray-900 ring-gray-800'
@@ -687,7 +701,9 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
       <div className="mt-1 text-sm text-gray-100 break-words">
         {mine
           ? <div className="whitespace-pre-wrap">{m.body}</div>
-          : <MessageMarkdown>{m.body}</MessageMarkdown>}
+          : progress
+            ? <ProgressCard p={progress} author={m.author_id} fallbackSince={m.created_at} />
+            : <MessageMarkdown>{m.body}</MessageMarkdown>}
       </div>
 
       {/* An answered message shows its answer. A count on its own reads like
@@ -705,7 +721,9 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
               {m.replies} repl{m.replies === 1 ? 'y' : 'ies'} →
             </span>
           </div>
-          <div className="text-xs text-gray-300 line-clamp-2 break-words">{plainPreview(m.last_reply_text)}</div>
+          {m.working
+            ? <ProgressSummary p={m.working} />
+            : <div className="text-xs text-gray-300 line-clamp-2 break-words">{plainPreview(m.last_reply_text)}</div>}
         </button>
       )}
       {!compact && !m.replies && (
