@@ -75,7 +75,7 @@ The same shape here:
 | `region` | Fly.io only: where it runs (default `$FLY_REGION`, else `sin`) |
 | `database` | `engine: "sqlite"` and `file`: the local file that becomes a D1 database (`name` defaults to `<name>-db`, `binding` to `DB`) |
 
-`bomclaw env init <channel> --static dist --build "npm run build" --domain x.bomclaw.org --db data/app.db`
+`bomclaw env init <channel> --static dist --build "npm run build" --domain x.bomclaw.org --database data/app.db`
 writes this section.
 
 ## Deploying
@@ -137,15 +137,39 @@ Postgres as tools and suits one-off infrastructure work. This provider is what
 the dashboard and `bomclaw env` use: one declared app, deployed the same way
 every time.
 
+## Connections: where the keys live
+
+Credentials for the providers are entered once and used by every deploy:
+
+- **Dashboard → Admin → Kết nối.** There is one card per service
+  (Cloudflare, Fly.io, and Supabase stored for later). Each card shows its
+  fields, whether each value is stored here or comes from `.env`, who set it
+  and when, and a **Lưu & kiểm tra** button that asks the service whether the
+  key works (e.g. "token active · account … · workers.dev subdomain …").
+  Secrets come back only as a mask (`cfat…4b81`). Saving with a field left
+  empty keeps the stored value.
+- **In chat.** Paste the token to an agent. It runs
+  `bomclaw secrets set cloudflare --stdin` with `KEY=VALUE` lines. This is the
+  same store, the same check, and the same mask, and it records which agent
+  set the value.
+- **`.env`** still works as a fallback. A value in the store wins.
+
+The store is `secrets.yaml` beside the coordination database
+(`~/.goterm-shared/data/`). Like `tokens.yaml`, it is mode 0600 and written
+atomically. It is not the coordination database, which every `bomclaw`
+command opens.
+
+```bash
+bomclaw secrets list                     # every service, connected or not, masked
+bomclaw secrets set fly --stdin          # KEY=VALUE lines on stdin, then a live check
+bomclaw secrets verify cloudflare        # check again
+bomclaw secrets unset supabase           # remove what is stored (never touches .env)
+```
+
 ## Connecting Cloudflare
 
-Add two lines to the dashboard's and the agents' `.env` (`~/.bomclaw/.env`,
-`~/.bomclaw2/.env`, …) and restart:
-
-```
-CLOUDFLARE_API_TOKEN=…
-CLOUDFLARE_ACCOUNT_ID=…
-```
+Enter the token and account ID on the Kết nối page, or hand them to an agent.
+The `.env` equivalent is `CLOUDFLARE_API_TOKEN=…` and `CLOUDFLARE_ACCOUNT_ID=…`.
 
 Create the token at *My Profile → API Tokens → Create Token → Custom*:
 

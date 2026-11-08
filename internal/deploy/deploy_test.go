@@ -189,10 +189,13 @@ func fakeCloudflare(t *testing.T) (*Client, *[]string) {
 		switch {
 		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/d1/database"):
 			if created {
-				ok([]D1{{UUID: "d1-uuid", Name: "phim-db", FileSize: 12288, NumTables: 2}})
+				// The listing lags: it still says empty after an import.
+				ok([]D1{{UUID: "d1-uuid", Name: "phim-db", FileSize: 8192, NumTables: 0}})
 			} else {
 				ok([]D1{})
 			}
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/d1/database/d1-uuid"):
+			ok(D1{UUID: "d1-uuid", Name: "phim-db", FileSize: 20480, NumTables: 2})
 		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/d1/database"):
 			created = true
 			ok(D1{UUID: "d1-uuid", Name: "phim-db"})
@@ -308,5 +311,18 @@ func TestProvidersAreChosenByTargetAndPlannedOnesSaySo(t *testing.T) {
 	}
 	if ok, hint := (&Cloudflare{Client: NewClient(Creds{})}).Connected(); ok || !strings.Contains(hint, "CLOUDFLARE_API_TOKEN") {
 		t.Errorf("connected without creds: %v %q", ok, hint)
+	}
+}
+
+// Right after an import the D1 listing still reported "0 tables" for a
+// database that held the data; status reads the database's own endpoint.
+func TestD1StatusIsReadFromTheDatabaseNotTheLaggingListing(t *testing.T) {
+	c, _ := fakeCloudflare(t)
+	if _, err := c.EnsureD1(context.Background(), "phim-db"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := c.FindD1(context.Background(), "phim-db")
+	if err != nil || d == nil || d.NumTables != 2 || d.FileSize != 20480 {
+		t.Errorf("d1 = %+v, %v", d, err)
 	}
 }

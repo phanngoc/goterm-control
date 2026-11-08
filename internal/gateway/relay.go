@@ -128,6 +128,11 @@ var DetachedMethods = map[string]bool{
 	"env.deploy": true,
 	"env.logs":   true,
 
+	"secrets.list":   true,
+	"secrets.set":    true,
+	"secrets.unset":  true,
+	"secrets.verify": true,
+
 	// The machine itself, answered here so it keeps working while the agents
 	// it restarts are down.
 	"infra.snapshot": true,

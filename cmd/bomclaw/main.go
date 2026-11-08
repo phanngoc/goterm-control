@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/deploy"
+	"github.com/ngocp/goterm-control/internal/secrets"
 	"log"
 	"os"
 	"os/signal"
@@ -129,6 +131,8 @@ func main() {
 		runPreview(os.Args[2:])
 	case "env":
 		runEnv(os.Args[2:])
+	case "secrets", "secret":
+		runSecrets(os.Args[2:])
 	case "skills", "skill":
 		runSkills(os.Args[2:])
 	case "plugins", "plugin":
@@ -384,6 +388,7 @@ func runGateway(args []string) {
 		} else {
 			defer coordDB.Close()
 			log.Printf("coord: shared database at %s (agent=%s)", coordDB.Path(), cfg.Agent.ID)
+			deploy.Lookup = secrets.New(secrets.PathBeside(coordDB.Path())).Lookup
 			// A run that died with the last gateway left a line in the room
 			// saying it was still working. Nothing else ever corrects it, and
 			// startup is the one moment clearing it is unambiguously safe.

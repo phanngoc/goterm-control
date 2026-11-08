@@ -12,6 +12,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/ngocp/goterm-control/internal/deploy"
 	"github.com/ngocp/goterm-control/internal/gateway"
+	"github.com/ngocp/goterm-control/internal/secrets"
 )
 
 // `bomclaw env` is a project's two environments from the agent's shell: DEV
@@ -43,7 +44,7 @@ func runEnv(args []string) {
 		domain := fs.String("domain", "", "Hostname on a Cloudflare zone (phim.bomclaw.org); optional")
 		name := fs.String("name", "", "Worker name; default from the channel")
 		spa := fs.Bool("spa", false, "Serve index.html for unknown paths (client-side router)")
-		db := fs.String("db", "", "Local SQLite file to host as Cloudflare D1, relative to the project")
+		dbFile := fs.String("database", "", "Local SQLite file to host as Cloudflare D1, relative to the project")
 		main := fs.String("main", "", "Optional Worker script (an API in front of the files)")
 		target := fs.String("provider", deploy.DefaultTarget, "Where PROD lives: "+strings.Join(deploy.Available(), ", "))
 		dockerfile := fs.String("dockerfile", "", "Fly.io: the project's Dockerfile, for an app that runs a server")
@@ -67,8 +68,8 @@ func runEnv(args []string) {
 			}
 			fmt.Printf("static: %s (guessed)\n", s.Static)
 		}
-		if *db != "" {
-			s.Database = &deploy.Database{Engine: "sqlite", File: *db}
+		if *dbFile != "" {
+			s.Database = &deploy.Database{Engine: "sqlite", File: *dbFile}
 		}
 		raw, _ := json.Marshal(map[string]any{"deploy": s})
 		if _, err := deploy.Parse(raw); err != nil {
@@ -162,7 +163,7 @@ func envStatus(c *coord.Channel, asJSON bool) {
 		if st.Error != "" {
 			fmt.Printf("\n%s\n", st.Error)
 		}
-		fmt.Println("\nPROD — not declared. Publish to Cloudflare with:\n  bomclaw env init " + c.ID + " --static dist [--build \"npm run build\"] [--domain x.bomclaw.org] [--db data/app.db]")
+		fmt.Println("\nPROD — not declared. Publish to Cloudflare with:\n  bomclaw env init " + c.ID + " --static dist [--build \"npm run build\"] [--domain x.bomclaw.org] [--database data/app.db]")
 		return
 	}
 	b := st.Dev.Build
@@ -254,6 +255,8 @@ func envProject(dbPath, id string) *coord.Channel {
 	}
 	db := openCoord(dbPath)
 	defer db.Close()
+	// The Connections page's credentials, ahead of the environment.
+	deploy.Lookup = secrets.New(secrets.PathBeside(db.Path())).Lookup
 	c, err := db.GetChannel(id)
 	if err != nil && !strings.HasPrefix(id, "ch_") {
 		c, err = db.GetChannel("ch_" + id)
@@ -282,7 +285,7 @@ SQLite), PROD is a hosting provider, picked by bomclaw.json "deploy.target":
 
   status <channel> [--json]   DEV and PROD side by side
   init   <channel>            Declare PROD: --static dist [--build "npm run build"]
-                              [--domain x.bomclaw.org] [--spa] [--db data/app.db]
+                              [--domain x.bomclaw.org] [--spa] [--database data/app.db]
                               [--main worker.js] [--name n] [--force]
                               [--provider fly --dockerfile Dockerfile --port 3000 --region sin]
   deploy <channel>            Build and publish PROD. --dry-run sends nothing;

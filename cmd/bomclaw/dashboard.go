@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/deploy"
+	"github.com/ngocp/goterm-control/internal/secrets"
 	"log"
 	"net/http"
 	"os"
@@ -110,6 +112,9 @@ func runDashboard(args []string) {
 	upstream := func() (string, error) {
 		return homeAgentAddr(coordDB, cfg.Agent.ID, *agentURL), nil
 	}
+
+	// Deploys read credentials from the Connections page first, .env second.
+	deploy.Lookup = secrets.New(secrets.PathBeside(coordDB.Path())).Lookup
 
 	previews := gateway.NewPreviewManager(coordDB)
 	defer previews.StopAll()

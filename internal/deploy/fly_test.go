@@ -39,6 +39,8 @@ func fakeFly(t *testing.T, appExists bool) (*Fly, *[]string) {
 			}
 			exists = true
 			w.WriteHeader(201)
+		case r.Method == "GET" && r.URL.Path == "/v1/apps":
+			io.WriteString(w, `{"total_apps":2,"apps":[]}`)
 		case r.URL.Path == "/v1/apps/phim":
 			if !exists {
 				w.WriteHeader(404)

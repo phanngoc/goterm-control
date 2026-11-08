@@ -22,17 +22,24 @@ type Creds struct {
 	AccountID string
 }
 
-// CredsFromEnv reads CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+// Lookup reads one credential by its environment-variable name. Processes
+// that have the secrets store (the dashboard, gateways, `bomclaw env`) point
+// it at secrets.Store.Lookup, so a value entered on the Connections page or by
+// an agent wins over .env; the default is the environment alone.
+var Lookup = func(env string) string { return strings.TrimSpace(os.Getenv(env)) }
+
+// CredsFromEnv reads CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (through
+// Lookup: the secrets store first, then the environment).
 func CredsFromEnv() Creds {
 	return Creds{
-		Token:     strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")),
-		AccountID: strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")),
+		Token:     Lookup("CLOUDFLARE_API_TOKEN"),
+		AccountID: Lookup("CLOUDFLARE_ACCOUNT_ID"),
 	}
 }
 
 // ErrNoCreds says what to set, because the person reading it has to set it.
-var ErrNoCreds = errors.New("Cloudflare is not connected: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in the gateway's .env " +
-	"(token permissions: Workers Scripts Edit, D1 Edit, Workers Routes Edit, Zone Read, DNS Edit) and restart")
+var ErrNoCreds = errors.New("Cloudflare is not connected: add the API token and account ID on the dashboard (Admin → Connections), " +
+	"or `bomclaw secrets set cloudflare CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=…`")
 
 // OK reports whether both are set.
 func (c Creds) OK() bool { return c.Token != "" && c.AccountID != "" }
@@ -186,6 +193,13 @@ func (c *Client) FindD1(ctx context.Context, name string) (*D1, error) {
 	}
 	for i := range out {
 		if out[i].Name == name {
+			// The listing's size and table count lag behind by minutes — right
+			// after an import it said "0 tables" for a database holding data.
+			// The database's own endpoint is current.
+			var d D1
+			if err := c.do(ctx, http.MethodGet, c.acct()+"/d1/database/"+url.PathEscape(out[i].UUID), nil, &d); err == nil && d.UUID != "" {
+				return &d, nil
+			}
 			return &out[i], nil
 		}
 	}
@@ -202,4 +216,38 @@ func (c *Client) EnsureD1(ctx context.Context, name string) (*D1, error) {
 		return nil, err
 	}
 	return &d, nil
+}
+
+// Verify checks that the token is live and can see the account.
+func (c *Client) Verify(ctx context.Context) (string, error) {
+	if !c.Creds.OK() {
+		return "", ErrNoCreds
+	}
+	// Account-owned tokens verify under the account; user tokens under /user.
+	var tok struct {
+		Status string `json:"status"`
+	}
+	err := c.do(ctx, http.MethodGet, c.acct()+"/tokens/verify", nil, &tok)
+	if err != nil {
+		if err2 := c.do(ctx, http.MethodGet, "/user/tokens/verify", nil, &tok); err2 != nil {
+			return "", fmt.Errorf("the token was refused: %v", err2)
+		}
+	}
+	if tok.Status != "" && tok.Status != "active" {
+		return "", fmt.Errorf("the token is %s", tok.Status)
+	}
+	var acct struct {
+		Name string `json:"name"`
+	}
+	if err := c.do(ctx, http.MethodGet, c.acct(), nil, &acct); err != nil {
+		return "", fmt.Errorf("the token is valid but cannot read account %s: %v", c.Creds.AccountID, err)
+	}
+	sub, _ := c.Subdomain(ctx)
+	msg := "token active · account " + acct.Name
+	if sub != "" {
+		msg += " · workers.dev subdomain " + sub
+	} else {
+		msg += " · no workers.dev subdomain yet (the first deploy sets one up)"
+	}
+	return msg, nil
 }

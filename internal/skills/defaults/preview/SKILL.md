@@ -139,7 +139,7 @@ a report.
 
 ```bash
 bomclaw env init <channel> --static dist --build "npm run build" \
-  [--domain <sub>.bomclaw.org] [--spa] [--db data/app.db]
+  [--domain <sub>.bomclaw.org] [--spa] [--database data/app.db]
 ```
 
 - `--static` is the BUILT folder (`dist`, `build`, `out`), not the source.
@@ -148,7 +148,7 @@ bomclaw env init <channel> --static dist --build "npm run build" \
   serve `index.html`.
 - `--domain` must be on a zone in the Cloudflare account. Optional — every
   Worker also answers on workers.dev.
-- `--db` is the local SQLite file that becomes the PROD database (D1).
+- `--database` is the local SQLite file that becomes the PROD database (D1).
 - `--main worker.js` adds a Worker script in front of the files (an API).
   Only a script can read the database (`env.DB`); a files-only site cannot.
 
@@ -185,8 +185,26 @@ Rules:
 
 ### When it fails
 
-- `Cloudflare is not connected` — `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
-  are missing from the gateway's `.env`. Tell the owner; you cannot fix it.
+- `Cloudflare is not connected` / `Fly.io is not connected` — no credentials yet.
+  Ask the owner for them, or point them at the dashboard (Admin → Kết nối).
+
+### Credentials handed to you in chat
+
+When the owner pastes a token, store it — never anywhere else:
+
+```bash
+bomclaw secrets set cloudflare --stdin <<'END'
+CLOUDFLARE_API_TOKEN=<the token>
+CLOUDFLARE_ACCOUNT_ID=<the account id>
+END
+```
+
+It checks the token against the service and prints a mask, never the value.
+Without an account id, find it with the token: `GET /client/v4/accounts`.
+Fly is `bomclaw secrets set fly --stdin` with `FLY_API_TOKEN=…`; `bomclaw
+secrets list` shows what is connected. Never write a token into a project
+file, a commit, a room message or your reply — say "stored, check OK" and
+what the check found.
 - `… is empty — nothing to publish` — the build did not produce the static
   folder, or `static` points at the wrong place.
 - A custom domain error — the hostname is not on a zone in this account, or
