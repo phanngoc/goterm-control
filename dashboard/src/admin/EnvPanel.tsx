@@ -148,7 +148,7 @@ export default function EnvPanel({ call, channelID, channelName, onClose }: {
                       : <span className="text-gray-500">chưa deploy</span>}
                   </Row>
                   {p.url && <Row label="URL"><a className="text-sky-300 hover:underline break-all" href={p.url} target="_blank" rel="noreferrer">{p.url}</a></Row>}
-                  {p.workers_dev && p.workers_dev !== p.url && <Row label="workers.dev"><a className="text-gray-400 hover:underline break-all" href={p.workers_dev} target="_blank" rel="noreferrer">{p.workers_dev}</a></Row>}
+                  {p.workers_dev && p.workers_dev !== p.url && <Row label={p.provider === 'fly' ? 'fly.dev' : 'workers.dev'}><a className="text-gray-400 hover:underline break-all" href={p.workers_dev} target="_blank" rel="noreferrer">{p.workers_dev}</a></Row>}
                   {p.want_domain && !(p.domains ?? []).includes(p.want_domain) && (
                     <Row label="Domain"><span className="text-amber-300">{p.want_domain} — gắn ở lần deploy tới</span></Row>
                   )}

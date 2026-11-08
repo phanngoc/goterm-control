@@ -13,10 +13,10 @@ import (
 // env`, the agents' skill — talks to the interface, so adding a host is adding
 // an implementation, not a feature.
 //
-// Cloudflare is the first (a Worker serving built files, D1 for data). Fly.io
-// is the planned second: Machines for apps that need a server process,
-// volumes, Managed Postgres — reached through its CLI or its MCP server
-// (mcp.fly.io), which is how an agent would drive it.
+// Cloudflare is for sites (a Worker serving built files, D1 for data); Fly.io
+// is for apps that run a server process (Machines from a Docker image), and
+// for a static site where the account is on Fly. Managed Postgres on Fly and
+// Supabase are the database engines to come.
 type Provider interface {
 	// Name is the deploy.target value that selects it.
 	Name() string
@@ -43,7 +43,7 @@ var (
 	// planned are targets that are known and not built yet. Naming them gives
 	// an agent that tries one a useful answer instead of "unknown target".
 	planned = map[string]string{
-		"fly": "Fly.io (Machines, volumes, Managed Postgres — via flyctl or mcp.fly.io)",
+		"vercel": "Vercel",
 	}
 )
 

@@ -45,7 +45,10 @@ func runEnv(args []string) {
 		spa := fs.Bool("spa", false, "Serve index.html for unknown paths (client-side router)")
 		db := fs.String("db", "", "Local SQLite file to host as Cloudflare D1, relative to the project")
 		main := fs.String("main", "", "Optional Worker script (an API in front of the files)")
-		target := fs.String("provider", deploy.DefaultTarget, "Where PROD lives: "+strings.Join(deploy.Available(), ", ")+" (fly planned)")
+		target := fs.String("provider", deploy.DefaultTarget, "Where PROD lives: "+strings.Join(deploy.Available(), ", "))
+		dockerfile := fs.String("dockerfile", "", "Fly.io: the project's Dockerfile, for an app that runs a server")
+		port := fs.Int("port", 0, "Fly.io: the port the image listens on (default 8080)")
+		region := fs.String("region", "", "Fly.io: region (default $FLY_REGION or sin)")
 		force := fs.Bool("force", false, "Replace a deploy that is already declared")
 		id, _ := parseLeading(fs, rest)
 		c := envProject(*dbPath, id)
@@ -54,8 +57,9 @@ func runEnv(args []string) {
 			os.Exit(1)
 		}
 		s := &deploy.Spec{Target: *target, Static: *static, Build: *build, Cwd: *cwd,
-			Domain: *domain, Name: *name, SPA: *spa, Main: *main}
-		if s.Static == "" && s.Main == "" {
+			Domain: *domain, Name: *name, SPA: *spa, Main: *main,
+			Dockerfile: *dockerfile, Port: *port, Region: *region}
+		if s.Static == "" && s.Main == "" && s.Dockerfile == "" {
 			s.Static = guessStatic(c.Workspace)
 			if s.Static == "" {
 				fmt.Fprintln(os.Stderr, "env init: pass --static <built folder> (no dist/, build/, out/ or public/ with an index.html here)")
@@ -269,18 +273,24 @@ func envUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: bomclaw env <command> <channel>
 
 A project's two environments: DEV is this machine (Preview, build, local
-SQLite), PROD is a hosting provider — Cloudflare today (a Worker serving the
-built files, optional custom domain, optional D1 database), Fly.io planned.
-Declared in bomclaw.json "deploy" ("target" picks the provider).
+SQLite), PROD is a hosting provider, picked by bomclaw.json "deploy.target":
+  cloudflare  a Worker serving the built files, optional custom domain,
+              optional D1 database (from the local SQLite file)
+  fly         Fly.io Machines: the built files behind nginx, or the project's
+              own Dockerfile for an app that runs a server; <name>.fly.dev
+              plus an optional custom domain
 
   status <channel> [--json]   DEV and PROD side by side
   init   <channel>            Declare PROD: --static dist [--build "npm run build"]
                               [--domain x.bomclaw.org] [--spa] [--db data/app.db]
-                              [--main worker.js] [--name n] [--provider cloudflare] [--force]
+                              [--main worker.js] [--name n] [--force]
+                              [--provider fly --dockerfile Dockerfile --port 3000 --region sin]
   deploy <channel>            Build and publish PROD. --dry-run sends nothing;
                               --with-db also uploads the local database, which
                               REPLACES the PROD tables — never implied.
 
-PROD needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in the gateway's .env.
+Credentials, in the gateway's .env:
+  cloudflare  CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+  fly         FLY_API_TOKEN (FLY_ORG, FLY_REGION optional), and flyctl installed
 <channel> is ch_<name> or <name>; defaults to $BOMCLAW_PROJECT.`)
 }

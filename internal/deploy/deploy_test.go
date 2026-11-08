@@ -35,7 +35,10 @@ func TestASpecFillsItsDefaultsAndRefusesWhatIsNotBuilt(t *testing.T) {
 		`{"deploy":{}}`,
 		`{"deploy":{"static":"dist","name":"Bad Name"}}`,
 		`{"deploy":{"static":"dist","database":{"engine":"supabase"}}}`,
-		`{"deploy":{"target":"fly","static":"dist"}}`,
+		`{"deploy":{"target":"vercel","static":"dist"}}`,
+		`{"deploy":{"target":"fly","main":"w.js"}}`,
+		`{"deploy":{"target":"fly","static":"dist","database":{"file":"a.db"}}}`,
+		`{"deploy":{"target":"cloudflare","dockerfile":"Dockerfile"}}`,
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
@@ -294,8 +297,11 @@ func TestProvidersAreChosenByTargetAndPlannedOnesSaySo(t *testing.T) {
 	if err != nil || p.Name() != "cloudflare" {
 		t.Fatalf("default provider = %v, %v", p, err)
 	}
-	if _, err := For("fly"); err == nil || !strings.Contains(err.Error(), "planned") || !strings.Contains(err.Error(), "cloudflare") {
-		t.Errorf("fly: %v", err)
+	if p, err := For("fly"); err != nil || p.Title() != "Fly.io" {
+		t.Errorf("fly: %v %v", p, err)
+	}
+	if _, err := For("vercel"); err == nil || !strings.Contains(err.Error(), "planned") || !strings.Contains(err.Error(), "fly") {
+		t.Errorf("vercel: %v", err)
 	}
 	if _, err := For("heroku"); err == nil || strings.Contains(err.Error(), "planned") {
 		t.Errorf("heroku: %v", err)

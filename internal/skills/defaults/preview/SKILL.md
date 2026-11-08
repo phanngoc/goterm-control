@@ -153,8 +153,16 @@ bomclaw env init <channel> --static dist --build "npm run build" \
   Only a script can read the database (`env.DB`); a files-only site cannot.
 
 It writes `bomclaw.json` → `"deploy": {…}`; edit that file directly to change it.
-`"target"` picks the provider: `cloudflare` today; `fly` (Fly.io) is planned
-and answers so when tried. Check `bomclaw env status` rather than assuming.
+`"target"` picks the provider (`--provider` on init):
+
+- `cloudflare` (default) — static sites and Worker scripts, D1 for SQLite data.
+- `fly` — Fly.io Machines: `--static dist` is served by a generated nginx
+  image; `--dockerfile Dockerfile --port 3000` deploys an app that runs a
+  server (Node, Python, Go…), which Cloudflare cannot. Answers on
+  `<name>.fly.dev`; machines sleep when idle. No database in this provider
+  yet (Managed Postgres planned) — `--with-db` is refused.
+
+Check `bomclaw env status` rather than assuming which one a project uses.
 
 ### Publish
 

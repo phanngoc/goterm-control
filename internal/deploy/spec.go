@@ -57,6 +57,13 @@ type Spec struct {
 	// Main is an optional Worker script (an API in front of the files).
 	// Without it the Worker serves files only.
 	Main string `json:"main,omitempty"`
+	// Dockerfile is the project's own image, for an app that runs a server
+	// process (Fly.io). Relative to Cwd.
+	Dockerfile string `json:"dockerfile,omitempty"`
+	// Port is the port that image listens on (Fly.io). Default 8080.
+	Port int `json:"port,omitempty"`
+	// Region is where it runs (Fly.io), e.g. "sin". Default $FLY_REGION or sin.
+	Region string `json:"region,omitempty"`
 	// Domain is a hostname on one of your Cloudflare zones. Optional: every
 	// Worker also answers on <name>.<account>.workers.dev.
 	Domain string `json:"domain,omitempty"`
@@ -124,8 +131,8 @@ func Parse(raw []byte) (*Spec, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", Manifest, err)
 	}
-	if s.Static == "" && s.Main == "" {
-		return nil, fmt.Errorf("%s: deploy needs \"static\" (the built folder) or \"main\" (a Worker script)", Manifest)
+	if s.Static == "" && s.Main == "" && s.Dockerfile == "" {
+		return nil, fmt.Errorf("%s: deploy needs \"static\" (the built folder), \"main\" (a Cloudflare Worker script) or \"dockerfile\" (an app with a server, on Fly.io)", Manifest)
 	}
 	if s.Name != "" && DefaultName(s.Name) != s.Name {
 		return nil, fmt.Errorf("%s: deploy.name %q must be lowercase letters, digits and dashes", Manifest, s.Name)
@@ -166,6 +173,7 @@ type Resolved struct {
 	WorkDir    string // ProjectDir/Cwd
 	StaticDir  string // absolute; "" without Static
 	MainPath   string // absolute; "" without Main
+	DockerPath string // absolute; "" without Dockerfile
 	DBFile     string // absolute; "" without a database
 	DBName     string
 	DBBinding  string
@@ -183,6 +191,9 @@ func (s *Spec) Resolve(projectDir, channelID string) Resolved {
 	}
 	if s.Main != "" {
 		r.MainPath = filepath.Join(r.WorkDir, s.Main)
+	}
+	if s.Dockerfile != "" {
+		r.DockerPath = filepath.Join(r.WorkDir, s.Dockerfile)
 	}
 	if d := s.Database; d != nil {
 		r.DBFile = filepath.Join(projectDir, d.File)

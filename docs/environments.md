@@ -12,9 +12,9 @@ Every project room has two environments:
 
 | | DEV | PROD |
 |---|---|---|
-| where | this machine | a hosting provider — **Cloudflare** today, **Fly.io** planned |
-| site | the dashboard's **Preview** (`/preview/<channel>/`, behind the login) | Cloudflare: a Worker serving the built files on `https://<name>.<account>.workers.dev` and, optionally, a custom domain on one of your zones (`phim.bomclaw.org`) |
-| data | a local SQLite file | Cloudflare **D1** (hosted SQLite); Supabase planned |
+| where | this machine | a hosting provider — **Cloudflare** or **Fly.io** |
+| site | the dashboard's **Preview** (`/preview/<channel>/`, behind the login) | Cloudflare: a Worker serving the built files on `https://<name>.<account>.workers.dev`. Fly.io: Machines on `https://<name>.fly.dev`, serving the built files through nginx or running the project's own Dockerfile. Both can add a custom domain (`phim.bomclaw.org`). |
+| data | a local SQLite file | Cloudflare **D1** (hosted SQLite); Fly Managed Postgres and Supabase planned |
 | changes | live as you edit | only when someone **deploys** |
 
 The dashboard shows both in the room's header (**DEV · PROD**). Agents see
@@ -62,14 +62,17 @@ The same shape here:
 
 | field | meaning |
 |---|---|
-| `target` | the provider: `cloudflare` (default). `fly` is planned and answers with that when used. |
+| `target` | the provider: `cloudflare` (default) or `fly` |
 | `name` | the Worker name, which is also its workers.dev subdomain. Default: the channel id without `ch_`. |
 | `build` | the command run in the project before uploading |
 | `cwd` | the folder `build` runs in and `static` is relative to |
 | `static` | the **built** folder to serve |
 | `spa` | serve `index.html` for unknown paths (client-side routers) |
 | `main` | an optional Worker script in front of the files, e.g. an API. Only a script can read the database (`env.DB`). |
-| `domain` | a hostname on a zone in the Cloudflare account. Optional. |
+| `domain` | a custom hostname. On Cloudflare it must be on a zone in the account. On Fly.io a certificate is added (`flyctl certs add`), and the hostname needs a CNAME to `<name>.fly.dev`. Optional. |
+| `dockerfile` | Fly.io only: the project's own image, for an app that runs a server |
+| `port` | Fly.io only: the port that image listens on (default 8080) |
+| `region` | Fly.io only: where it runs (default `$FLY_REGION`, else `sin`) |
 | `database` | `engine: "sqlite"` and `file`: the local file that becomes a D1 database (`name` defaults to `<name>-db`, `binding` to `DB`) |
 
 `bomclaw env init <channel> --static dist --build "npm run build" --domain x.bomclaw.org --db data/app.db`
@@ -101,6 +104,38 @@ On Cloudflare a deploy:
 The Cloudflare deploy uses Workers with static assets, not Pages. Cloudflare
 now points new static sites there, and it is the same product as Workers, so a
 static site can gain an API later without moving.
+
+## On Fly.io
+
+`"target": "fly"` puts PROD on Fly Machines. This is the right choice when the
+project runs a server process (Node, Python, Go, a websocket), which a
+Cloudflare Worker cannot:
+
+1. Runs `build`.
+2. Takes the image: the project's `dockerfile`, or, for `static`, an
+   `nginx:1.27-alpine` image generated outside the project that serves the
+   built folder on 8080 (`spa` routes unknown paths to `index.html`).
+3. Generates a `fly.toml` with one HTTP service, HTTPS forced, and machines
+   that stop when idle and start on a request. A project site should not bill
+   around the clock while nobody is using it.
+4. Creates the app the first time (Machines API, in `$FLY_ORG`), then runs
+   `flyctl deploy <project> --config … --dockerfile … --remote-only`, so the
+   image is built on Fly's builder and Docker is not needed here.
+5. With `domain`, runs `flyctl certs add <domain>`.
+
+Status comes from the Machines API (the app and its machines). The domain's
+certificate status comes from Fly's GraphQL API. Fly databases are not part
+of this provider yet: `database` and `--with-db` are refused with a message.
+
+Credentials: `FLY_API_TOKEN` (from `fly tokens create org`, or `fly auth
+token`), optionally `FLY_ORG` and `FLY_REGION`, and `flyctl` installed
+(`brew install flyctl`).
+
+Fly's MCP server (`mcp.fly.io`, or the `fly@sprites` Claude Code plugin) is
+the other way an agent drives Fly. It exposes Machines, volumes and Managed
+Postgres as tools and suits one-off infrastructure work. This provider is what
+the dashboard and `bomclaw env` use: one declared app, deployed the same way
+every time.
 
 ## Connecting Cloudflare
 
@@ -135,15 +170,16 @@ PROD does not use it.
 name. The dashboard panel, `bomclaw env` and the agents' skill only talk to
 the interface.
 
+Built: **Cloudflare** (`cloudflare`) and **Fly.io** (`fly`).
+
 Planned:
 
-- **Fly.io** (`target: "fly"`), for apps that need a server process: Machines,
-  volumes, Managed Postgres. An agent can drive it through `flyctl`, or
-  through Fly's MCP server (`mcp.fly.io`), which exposes Machines, volumes and
-  Managed Postgres as tools.
 - **Supabase** as a database engine (`database.engine: "supabase"`, reserved
   and refused today), for projects that outgrow SQLite or need auth and
   storage with it.
+- **Fly Managed Postgres** as the database for `fly` apps.
+- Further hosts register the same way. `vercel` is listed as planned, so
+  trying it gives that answer.
 
 ## Security
 

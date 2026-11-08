@@ -71,6 +71,9 @@ func (d *Cloudflare) Title() string { return "Cloudflare" }
 
 // Validate: D1 hosts SQLite, so that is the engine Cloudflare takes.
 func (d *Cloudflare) Validate(s *Spec) error {
+	if s.Dockerfile != "" {
+		return fmt.Errorf("deploy.dockerfile: Cloudflare runs Workers, not containers — use \"target\": \"fly\" for an app with a server")
+	}
 	db := s.Database
 	if db == nil {
 		return nil
