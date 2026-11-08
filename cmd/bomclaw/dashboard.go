@@ -116,6 +116,7 @@ func runDashboard(args []string) {
 
 	deps := gateway.Deps{
 		Preview:      previews,
+		Envs:         gateway.NewEnvManager(coordDB, previews),
 		Coord:        coordDB,
 		AgentID:      cfg.Agent.ID,
 		AgentName:    cfg.Agent.Name,

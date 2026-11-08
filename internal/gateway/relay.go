@@ -124,6 +124,10 @@ var DetachedMethods = map[string]bool{
 	"preview.stop":   true,
 	"preview.logs":   true,
 
+	"env.status": true,
+	"env.deploy": true,
+	"env.logs":   true,
+
 	// The machine itself, answered here so it keeps working while the agents
 	// it restarts are down.
 	"infra.snapshot": true,

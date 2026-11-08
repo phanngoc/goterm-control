@@ -122,6 +122,10 @@ type Deps struct {
 	// Preview runs and proxies project dev servers. Only the dashboard
 	// process has one; an agent's gateway answers preview.* with that.
 	Preview *PreviewManager
+
+	// Envs is each project's DEV/PROD environments and its deploys. Only the
+	// dashboard process has one, for the same reason as Preview.
+	Envs *EnvManager
 }
 
 // TurnRunner is the slice of *bot.Handler the gateway needs. Declared here so
@@ -321,6 +325,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleScheduleRun(deps, params)
 		case "preview.status", "preview.start", "preview.stop", "preview.logs":
 			return handlePreview(deps, method, params)
+		case "env.status", "env.deploy", "env.logs":
+			return handleEnv(ctx, deps, method, params)
 		case "tasks.poke":
 			if deps.PokeTasks != nil {
 				deps.PokeTasks()
