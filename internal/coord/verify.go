@@ -202,8 +202,9 @@ func verifyBody(goal Task) string {
 		"   2 most of it missing, or not what was asked\n" +
 		"The score is compared across agents, so judge the work, not the effort it took.\n\n" +
 		"Then, in one run:\n" +
-		"  meets every criterion → `bomclaw task done --id <this task> --score <1-10> --result \"pass: <how you checked>\"`\n" +
-		"  falls short of any    → `bomclaw task reject --id <this task> --score <1-10> --result \"<which criterion, and what is missing>\"`\n\n" +
+		"  meets every criterion → `bomclaw task done --id <this task> --score <1-10> --result \"Đạt: <one sentence>\n- <how you checked> …\"`\n" +
+		"  falls short of any    → `bomclaw task reject --id <this task> --score <1-10> --result \"Chưa đạt: <which criterion>\n- <what is missing> …\"`\n\n" +
+		ResultStyle + "\n" +
 		"A rejection opens follow-up work for the agent that did the original, carrying your words, " +
 		"so name the criterion and what is missing rather than describing the work in general. " +
 		"Being unable to check something is a third answer: say so in a pass, do not reject for it.")

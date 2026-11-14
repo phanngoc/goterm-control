@@ -142,7 +142,7 @@ func claimLine(t *coord.Task) string {
 		verb = "làm lại"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "📋 %s %s `%s`: %s", t.ClaimedBy, verb, t.ID, coord.Quiet(oneLine(t.Title)))
+	fmt.Fprintf(&b, "📋 %s %s `%s`\n%s", t.ClaimedBy, verb, reporter.ShortID(t.ID), coord.Quiet(oneLine(t.Title)))
 	if t.CreatedBy != "" && t.CreatedBy != t.ClaimedBy {
 		fmt.Fprintf(&b, "\n_giao bởi %s_", t.CreatedBy)
 	}
