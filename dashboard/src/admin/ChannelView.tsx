@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
+import { AttachmentChips, PostedFiles, attachmentBlock, splitAttachments, useAttachments } from '../components/attachments'
 import { ArtifactModal, isPage } from './ArtifactView'
 import GatewayEditor from './GatewayEditor'
 import EnvPanel from './EnvPanel'
@@ -270,10 +271,13 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   const isOwnDirect = (id: string) =>
     id.startsWith('dm_') && id.slice(3).split('__').includes('owner')
 
-  const post = async (inThread: boolean) => {
-    const text = (inThread ? threadBody : body).trim()
-    if (!text || !active || !to || sending.current) return
-    if (inThread && !threadRoot) return
+  // Resolves true once the line is posted, so the box knows to let go of the
+  // files it was holding.
+  const post = async (inThread: boolean, files: string[] = []): Promise<boolean> => {
+    const typed = (inThread ? threadBody : body).trim()
+    const text = [typed, attachmentBlock(files)].filter(Boolean).join('\n\n')
+    if (!text || !active || !to || sending.current) return false
+    if (inThread && !threadRoot) return false
     sending.current = true
     try {
       const posted: ChannelMessage = await call('channels.post', {
@@ -293,8 +297,10 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
         atBottom.current = true
         bottom.current?.scrollIntoView({ behavior: 'smooth' })
       }
+      return true
     } catch (e: any) {
       setErr(String(e?.message ?? e))
+      return false
     } finally {
       sending.current = false
     }
@@ -484,7 +490,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
         </div>
 
         <Composer
-          value={body} onChange={setBody} onSend={() => post(false)}
+          value={body} onChange={setBody} onSend={files => post(false, files)}
           to={to} setTo={setTo} agents={agents}
           placeholder="Message the channel"
         />
@@ -560,7 +566,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           )}
           {/* Typing happens where you are reading. */}
           <Composer
-            value={threadBody} onChange={setThreadBody} onSend={() => post(true)}
+            value={threadBody} onChange={setThreadBody} onSend={files => post(true, files)}
             to={to} setTo={setTo} agents={agents}
             placeholder="Reply in thread"
           />
@@ -754,6 +760,7 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
 }) {
   const mine = m.author_kind === 'user'
   const progress = isProgressLine(m.body) ? parseProgress(m.body) : null
+  const posted = splitAttachments(m.body)
   return (
     <div className={`rounded-lg px-3 py-2 ring-1 ${
       mine ? 'bg-sky-500/10 ring-sky-500/25' : 'bg-gray-900 ring-gray-800'
@@ -781,10 +788,12 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
           shows it raw is a thread where a comparison table is a wall of pipes. */}
       <div className="mt-1 text-sm text-gray-100 break-words">
         {mine
-          ? <div className="whitespace-pre-wrap">{m.body}</div>
+          ? <div className="whitespace-pre-wrap">{posted.text}</div>
           : progress
             ? <ProgressCard p={progress} author={m.author_id} fallbackSince={m.created_at} />
-            : <MessageMarkdown>{m.body}</MessageMarkdown>}
+            : <MessageMarkdown>{posted.text}</MessageMarkdown>}
+        {/* Dropped pictures show as pictures; the agent got their paths. */}
+        <PostedFiles files={posted.files} />
       </div>
 
       {/* An answered message shows its answer. A count on its own reads like
@@ -820,14 +829,24 @@ function Line({ m, selfID, compact, onThread, onOpenTask }: {
 }
 
 function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
-  value: string; onChange: (s: string) => void; onSend: () => void
+  value: string; onChange: (s: string) => void; onSend: (files: string[]) => Promise<boolean>
   to: string; setTo: (s: string) => void; agents: string[]; placeholder: string
 }) {
+  // Pictures dropped or pasted here wait as chips until the line is sent. A
+  // file still uploading holds the send back rather than going without it.
+  const att = useAttachments()
+  const send = async () => {
+    if (att.uploading) return
+    if (await onSend(att.paths)) att.clear()
+  }
   return (
     <div className="border-t border-gray-800 bg-gray-900/40 p-3">
       <ChatInput
-        value={value} onChange={onChange} onSend={onSend}
-        canSend={!!to}
+        value={value} onChange={onChange} onSend={send}
+        canSend={!!to && !att.uploading}
+        onFiles={att.add}
+        hasFiles={att.paths.length > 0}
+        attachments={<AttachmentChips items={att.items} onRemove={att.remove} />}
         placeholder={`${placeholder}…`}
         tools={
           /* Who you are talking to. The author is always you — a person at a

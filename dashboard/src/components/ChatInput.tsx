@@ -1,4 +1,5 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { filesFrom } from './attachments'
 
 // ChatInput is the one message box every chat surface uses, shaped like
 // ChatGPT's: the text gets the whole width of a rounded card, the card grows
@@ -31,12 +32,21 @@ interface Props {
   autoFocus?: boolean
   onFocus?: () => void
   className?: string
+  /** Files dropped on the box or pasted into it. Without it the box takes text only. */
+  onFiles?: (files: File[]) => void
+  /** What is waiting to go with the text (chips), shown above it. */
+  attachments?: ReactNode
+  /** The draft has files, so it may be sent with no text. */
+  hasFiles?: boolean
 }
 
 const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   value, onChange, onSend, placeholder, canSend = true, disabled, busy, onStop,
   tools, maxHeight, minRows = 1, autoFocus, onFocus, className = '',
+  onFiles, attachments, hasFiles,
 }, ref) {
+  const [dragging, setDragging] = useState(false)
+  const depth = useRef(0) // dragenter/leave fire for every child crossed
   const ta = useRef<HTMLTextAreaElement>(null)
   useImperativeHandle(ref, () => ({ focus: () => ta.current?.focus() }), [])
 
@@ -68,7 +78,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [fit])
   useEffect(() => { if (autoFocus) ta.current?.focus() }, [autoFocus])
 
-  const ready = canSend && !disabled && value.trim() !== ''
+  const ready = canSend && !disabled && (value.trim() !== '' || !!hasFiles)
   const send = () => {
     if (!ready) return
     onSend()
@@ -79,8 +89,38 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   return (
     <div
       onClick={e => { if (e.target === e.currentTarget) ta.current?.focus() }}
-      className={`rounded-2xl bg-gray-800/80 ring-1 ring-gray-700 focus-within:ring-gray-500 transition-shadow ${className}`}
+      // A file dragged over the box is taken by the box. Without this the
+      // browser opens the picture in place of the dashboard.
+      onDragEnter={onFiles && (e => {
+        if (!Array.from(e.dataTransfer.types).includes('Files')) return
+        e.preventDefault(); depth.current++; setDragging(true)
+      })}
+      onDragOver={onFiles && (e => {
+        if (!Array.from(e.dataTransfer.types).includes('Files')) return
+        e.preventDefault(); e.dataTransfer.dropEffect = 'copy'
+      })}
+      onDragLeave={onFiles && (() => {
+        depth.current = Math.max(0, depth.current - 1)
+        if (depth.current === 0) setDragging(false)
+      })}
+      onDrop={onFiles && (e => {
+        depth.current = 0; setDragging(false)
+        const files = filesFrom(e.dataTransfer)
+        if (!files.length) return
+        e.preventDefault()
+        onFiles(files)
+        ta.current?.focus()
+      })}
+      className={`relative rounded-2xl bg-gray-800/80 ring-1 ${
+        dragging ? 'ring-2 ring-sky-400 bg-sky-500/10' : 'ring-gray-700 focus-within:ring-gray-500'
+      } transition-shadow ${className}`}
     >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center rounded-2xl text-sm text-sky-200">
+          Thả ảnh / tệp vào đây
+        </div>
+      )}
+      {attachments}
       <textarea
         ref={ta}
         value={value}
@@ -88,6 +128,16 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         disabled={disabled}
         onFocus={onFocus}
         onChange={e => onChange(e.target.value)}
+        // A screenshot copied to the clipboard pastes as a file, not text.
+        onPaste={onFiles && (e => {
+          // Text copied from Excel or Word also carries a picture of itself;
+          // the text is what was meant.
+          if (e.clipboardData.getData('text/plain').trim()) return
+          const files = filesFrom(e.clipboardData)
+          if (!files.length) return
+          e.preventDefault()
+          onFiles(files)
+        })}
         onKeyDown={e => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return
           if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
@@ -102,7 +152,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             disappears in a narrow side panel rather than sitting on them. */}
         <div className="flex min-w-0 shrink items-center gap-2 text-xs">{tools}</div>
         <span className="min-w-0 flex-1 truncate text-right text-[11px] text-gray-500 select-none">
-          Shift+Enter xuống dòng
+          Shift+Enter xuống dòng{onFiles ? ' · kéo/dán ảnh' : ''}
         </span>
         {busy && onStop ? (
           <button
