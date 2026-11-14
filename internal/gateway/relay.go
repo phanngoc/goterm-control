@@ -74,6 +74,7 @@ var DetachedMethods = map[string]bool{
 	"channels.post":     true,
 	"channels.files":    true,
 	"channels.brief":    true,
+	"channels.wiki":     true,
 	"channels.create":   true,
 	"channels.read":     true,
 	"channels.gateways": true,
