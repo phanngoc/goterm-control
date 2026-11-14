@@ -980,6 +980,7 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"what follows is only what the reader needs to trust it or act on it — not a log of every check you ran. "+
 		"A partial result says it is partial and what is left. If there is nothing to do (already done, does "+
 		"not reproduce, not a defect), the result is that one sentence and why, under thirty words.\n\n"+
+		coord.ResultStyle+"\n"+
 		"A person's attention is the scarcest thing this system spends. Make routine choices yourself — "+
 		"pick the reasonable default, note it in the result, move on. Stop for a person only when the "+
 		"decision is genuinely theirs: a product or design direction nobody settled, access or credentials "+

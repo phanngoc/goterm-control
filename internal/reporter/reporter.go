@@ -256,35 +256,74 @@ func (r *Reporter) artifactIndex(t *coord.Task) string {
 // It leads with the outcome rather than the title because the outcome is what
 // the reader is waiting for, and names the agent that ran it: with two agents
 // on one machine, "done" without a name does not say whose work finished.
+//
+// Laid out the way Claude Code ends a turn: a status line you can read at a
+// glance (outcome · who · which task), the title on its own line, then the
+// result. The room is read in Vietnamese, so the status is too.
 func Format(t *coord.Task) string {
 	var b strings.Builder
 
+	icon, label := "⚠️", stateLabel(t.State)
 	switch t.State {
 	case coord.TaskCompleted:
-		b.WriteString("✅ ")
+		icon = "✅"
 	case coord.TaskFailed:
-		b.WriteString("⛔ ")
-	default: // canceled, rejected
-		b.WriteString("⚠️ ")
+		icon = "⛔"
+	}
+	title := t.Title
+	if rest, ok := strings.CutPrefix(title, "Verify: "); ok {
+		label, title = "Kiểm tra "+strings.ToLower(label), rest
+		if t.State == coord.TaskCompleted {
+			label = "Kiểm tra: đạt"
+		} else if t.State == coord.TaskRejected {
+			label = "Kiểm tra: chưa đạt"
+		}
 	}
 
-	b.WriteString(t.Title)
+	fmt.Fprintf(&b, "%s %s", icon, label)
 	if by := ranBy(t); by != "" {
-		fmt.Fprintf(&b, "\n%s · %s", t.State, by)
-	} else {
-		fmt.Fprintf(&b, "\n%s", t.State)
+		fmt.Fprintf(&b, " · %s", by)
+	}
+	if t.ID != "" {
+		fmt.Fprintf(&b, " · `%s`", ShortID(t.ID))
 	}
 	if t.FailReason != "" {
 		fmt.Fprintf(&b, " (%s)", t.FailReason)
 	}
+	fmt.Fprintf(&b, "\n%s", title)
 
 	if result := strings.TrimSpace(t.Result); result != "" {
 		fmt.Fprintf(&b, "\n\n%s", truncate(result, maxResultChars))
 	} else {
-		b.WriteString("\n\n(finished without a result)")
+		b.WriteString("\n\n_(xong nhưng không ghi kết quả)_")
 	}
 
 	return b.String()
+}
+
+// stateLabel is a task state in the room's words. The English state is kept
+// in brackets nowhere: the board shows it, the reader here wants the meaning.
+func stateLabel(s string) string {
+	switch s {
+	case coord.TaskCompleted:
+		return "Xong"
+	case coord.TaskFailed:
+		return "Thất bại"
+	case coord.TaskRejected:
+		return "Bị từ chối"
+	case coord.TaskCanceled:
+		return "Đã huỷ"
+	}
+	return s
+}
+
+// ShortID is a task id cut to what a person reads: t_46c52741 instead of the
+// full UUID. The full id stays on the message's task link.
+func ShortID(id string) string {
+	if i := strings.IndexByte(id, '-'); i > 0 {
+		return id[:i]
+	}
+	return id
 }
 
 // ranBy names the agent that executed the task, or nothing when it died before

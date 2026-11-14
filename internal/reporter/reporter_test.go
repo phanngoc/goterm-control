@@ -75,7 +75,7 @@ func TestTickDeliversAFinishedHandOff(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("want one delivery, got %d: %v", len(lines), lines)
 	}
-	for _, want := range []string{"crawl listings", "62 jobs found", "a1", "completed"} {
+	for _, want := range []string{"crawl listings", "62 jobs found", "a1", "Xong"} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("delivery missing %q:\n%s", want, lines[0])
 		}
@@ -197,24 +197,30 @@ func TestFormatSaysWhatHappenedFirst(t *testing.T) {
 		{
 			name: "completed",
 			task: coord.Task{State: coord.TaskCompleted, Title: "crawl listings", Result: "62 jobs", ClaimedBy: "a1"},
-			want: []string{"✅", "crawl listings", "completed", "a1", "62 jobs"},
+			want: []string{"✅ Xong · a1", "crawl listings", "62 jobs"},
 		},
 		{
 			name: "failed carries the reason the system gave up",
 			task: coord.Task{State: coord.TaskFailed, Title: "broken", ClaimedBy: "a1", FailReason: coord.FailExhausted},
-			want: []string{"⛔", "failed", coord.FailExhausted},
+			want: []string{"⛔ Thất bại", coord.FailExhausted},
 		},
 		{
 			name: "finished with nothing to say",
 			task: coord.Task{State: coord.TaskCompleted, Title: "quiet job", ClaimedBy: "a1"},
-			want: []string{"finished without a result"},
+			want: []string{"không ghi kết quả"},
+		},
+		{
+			name:  "a verify reads as a verdict on the goal, with a short id",
+			task:  coord.Task{ID: "t_46c52741-8f90-4e38", State: coord.TaskCompleted, Title: "Verify: Phim El Niño", ClaimedBy: "a3", Result: "Đạt: ổn"},
+			want:  []string{"✅ Kiểm tra: đạt · a3 · `t_46c52741`", "\nPhim El Niño\n"},
+			avoid: "8f90",
 		},
 		// Nobody ever claimed it, so there is no agent to name — and "· " with
 		// an empty name reads like a bug.
 		{
 			name:  "never claimed",
 			task:  coord.Task{State: coord.TaskRejected, Title: "nobody took it"},
-			want:  []string{"⚠️", "rejected"},
+			want:  []string{"⚠️ Bị từ chối"},
 			avoid: "· ",
 		},
 	}
