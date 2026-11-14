@@ -803,6 +803,9 @@ func runGateway(args []string) {
 		// looked at: /project/<channel>/board/ opens the board with its data
 		// beside it, which a single file opened from a blob cannot do.
 		srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
+		// Pictures dropped or pasted into a message box: saved where every
+		// agent may read them, and served back so the room can show them.
+		srv.Handle(gateway.UploadsPrefix, authMgr.RequireAuthExceptLocal(gateway.UploadsHandler(gateway.UploadsDir())))
 		srv.Handle("/api/settings", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/settings/model", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/settings/restart", authMgr.RequireAuthExceptLocal(gateway.RestartHandler(deps)))
