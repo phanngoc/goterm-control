@@ -34,6 +34,10 @@ async function upload(file: File): Promise<{ path: string; url: string }> {
     body: file,
   })
   if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`)
+  // A server without this route answers with the app's index.html and 200.
+  if (!(res.headers.get('Content-Type') ?? '').includes('application/json')) {
+    throw new Error('máy chủ này chưa hỗ trợ tải tệp lên')
+  }
   return res.json()
 }
 
