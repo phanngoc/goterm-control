@@ -144,6 +144,9 @@ func runDashboard(args []string) {
 	srv := gateway.NewServer(addr, gateway.NewMethodHandler(deps), nil, resolveDashboardDir(), authMgr)
 	srv.SetRelay(&gateway.Relay{Local: gateway.NewMethodHandler(deps), Upstream: upstream})
 	srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
+	// Pictures dropped into a message box. The public dashboard is this
+	// server, not the agent's gateway, so the route has to be here too.
+	srv.Handle(gateway.UploadsPrefix, authMgr.RequireAuthExceptLocal(gateway.UploadsHandler(gateway.UploadsDir())))
 	// The editor's terminal. Its own auth check (a login, never the loopback
 	// exemption) lives in the handler: it hands out a shell.
 	srv.Handle(gateway.TerminalPath, gateway.TerminalHandler(coordDB, authMgr))
