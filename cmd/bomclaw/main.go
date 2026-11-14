@@ -143,6 +143,8 @@ func main() {
 		runHook(os.Args[2:])
 	case "artifact":
 		runArtifact(os.Args[2:])
+	case "wiki":
+		runWiki(os.Args[2:])
 	case "agents":
 		runAgents(os.Args[2:])
 	case "bench":
@@ -199,6 +201,7 @@ Commands:
   ch                 Shared channels: post, read, thread, mention
   preview            Set up and check a project's Preview button (bomclaw.json)
   artifact           Store and fetch what a task produced
+  wiki               A room's documents (md, html…): list, get, put, rm
   skills             What this agent can do, and when each skill applies
   plugins            The agent's toolkit as plugins: list, enable, configure, trust, new
   passwd             Set the dashboard password (creates the account if none)
@@ -805,6 +808,8 @@ func runGateway(args []string) {
 		srv.Handle(gateway.ProjectPrefix, authMgr.RequireAuthExceptLocal(gateway.ProjectHandler(deps)))
 		// Pictures dropped or pasted into a message box: saved where every
 		// agent may read them, and served back so the room can show them.
+		// Each room's wiki, hosted: pages open as pages, sandboxed.
+		srv.Handle(gateway.WikiPrefix, authMgr.RequireAuthExceptLocal(gateway.WikiHandler(deps)))
 		srv.Handle(gateway.UploadsPrefix, authMgr.RequireAuthExceptLocal(gateway.UploadsHandler(gateway.UploadsDir())))
 		srv.Handle("/api/settings", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))
 		srv.Handle("/api/settings/model", authMgr.RequireAuthExceptLocal(gateway.SettingsHandler(deps)))

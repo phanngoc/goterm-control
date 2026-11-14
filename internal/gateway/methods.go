@@ -264,6 +264,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleProjectFiles(deps, params)
 		case "channels.brief":
 			return handleProjectBrief(deps, params)
+		case "channels.wiki":
+			return handleChannelWiki(deps, params)
 		case "channels.create":
 			return handleChannelCreate(deps, params)
 		case "channels.read":

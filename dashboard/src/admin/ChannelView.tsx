@@ -3,7 +3,8 @@ import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } f
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { AttachmentChips, PostedFiles, attachmentBlock, splitAttachments, useAttachments } from '../components/attachments'
-import { ArtifactModal, isPage } from './ArtifactView'
+import { ArtifactModal } from './ArtifactView'
+import WikiPanel, { saveArtifactToWiki } from './WikiPanel'
 import GatewayEditor from './GatewayEditor'
 import EnvPanel from './EnvPanel'
 import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
@@ -83,6 +84,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   const [files, setFiles] = useState<Artifact[]>([])
   const [more, setMore] = useState(false)
   const [briefFor, setBriefFor] = useState('')
+  const [wikiFor, setWikiFor] = useState('')
     // Where each room speaks outside the dashboard. Loaded for every room at
   // once — it is a short list — so the header can show a count without a call
   // per room.
@@ -410,6 +412,15 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               DEV · PROD
             </button>
           )}
+          {current && (
+            <button
+              onClick={() => setWikiFor(current.id)}
+              title="Wiki của phòng: tài liệu .md / .html — xem, sửa, lưu, mở link"
+              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-violet-300 hover:ring-violet-500/40"
+            >
+              📚 Wiki
+            </button>
+          )}
           {current?.workspace && (
             <button
               onClick={() => setBriefFor(current.id)}
@@ -497,6 +508,13 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       </div>
 
       {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
+      {wikiFor && (
+        <WikiPanel
+          call={call} channelID={wikiFor}
+          channelName={channels.find(c => c.id === wikiFor)?.name ?? wikiFor}
+          onClose={() => setWikiFor('')}
+        />
+      )}
       {reposFor && (
         <RepoEditor
           call={call} channelID={reposFor}
@@ -555,7 +573,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
                 <div className="mt-1 max-h-60 space-y-1 overflow-y-auto pr-1">
                   {files.map(a => (
                     <FileRow
-                      key={a.id} a={a} call={call}
+                      key={a.id} a={a} call={call} channelID={active}
                       onReview={() => reviewFile(a)}
                       reviewer={to}
                     />
@@ -869,8 +887,8 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
 }
 
 // FileRow is one piece of work product: open it, or ask an agent about it.
-function FileRow({ a, call, onReview, reviewer }: {
-  a: Artifact; call: Call; onReview: () => void; reviewer: string
+function FileRow({ a, call, channelID, onReview, reviewer }: {
+  a: Artifact; call: Call; channelID: string; onReview: () => void; reviewer: string
 }) {
   const [busy, setBusy] = useState(false)
 
@@ -889,13 +907,6 @@ function FileRow({ a, call, onReview, reviewer }: {
       }
       const r = await call('artifacts.get', { id: a.id })
       const body: string = r?.content ?? ''
-      if (isPage(a)) {
-        const blob = new Blob([body], { type: 'text/html;charset=utf-8' })
-        const url = URL.createObjectURL(blob)
-        window.open(url, '_blank', 'noopener')
-        setTimeout(() => URL.revokeObjectURL(url), 60_000)
-        return
-      }
       setContent(body)
       setTruncated(Boolean(r?.truncated))
     } catch (e) {
@@ -908,7 +919,10 @@ function FileRow({ a, call, onReview, reviewer }: {
   return (
     <div className="flex items-center gap-2 text-xs">
       {content !== null && (
-        <ArtifactModal a={a} content={content} truncated={truncated} onClose={() => setContent(null)} />
+        <ArtifactModal
+          a={a} content={content} truncated={truncated} onClose={() => setContent(null)}
+          onSaveToWiki={channelID ? () => saveArtifactToWiki(call, channelID, a.title, content) : undefined}
+        />
       )}
       <button onClick={open} disabled={busy} className="min-w-0 flex-1 text-left truncate text-sky-300 hover:underline">
         {a.title}
