@@ -145,12 +145,14 @@ type flyMachine struct {
 
 // Status asks Fly what is live: the app, its machines, the domain's certificate.
 func (f *Fly) Status(ctx context.Context, r Resolved) ProdStatus {
-	st := ProdStatus{Provider: f.Name(), Title: f.Title(), Declared: true, Name: r.Name, WantDomain: r.Domain}
+	st := ProdStatus{Provider: f.Name(), Title: f.Title(), Declared: true, Name: r.Name, WantDomain: r.Domain,
+		Services: flyServices(r)}
 	if ok, hint := f.Connected(); !ok {
 		st.Error = hint
 		return st
 	}
 	st.Connected = true
+	st.Account = f.Account(ctx)
 	code, err := f.api(ctx, http.MethodGet, "/apps/"+url.PathEscape(r.Name), nil, nil)
 	if err != nil {
 		st.Error = err.Error()

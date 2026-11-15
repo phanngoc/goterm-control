@@ -7,6 +7,7 @@ import { ArtifactModal } from './ArtifactView'
 import WikiPanel, { saveArtifactToWiki } from './WikiPanel'
 import GatewayEditor from './GatewayEditor'
 import EnvPanel from './EnvPanel'
+import { BookIcon, CodeIcon, InfraBadge, SignalIcon, useEnvStatus } from './InfraBadge'
 import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
 import ProgressCard, { ProgressSummary, isProgressLine, parseProgress } from './ProgressCard'
 
@@ -24,6 +25,11 @@ type Call = (method: string, params?: any) => Promise<any>
 // composer posts as "you" unless you deliberately speak as an agent.
 
 const PAGE = 30
+
+// pill is the shape every action in a room's header shares: one height, one
+// radius, a visible keyboard focus and a short colour transition.
+const pill = 'h-7 shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 px-2.5 rounded-full ring-1 text-[11px] cursor-pointer ' +
+  'transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400'
 
 /** A tool in the sidebar's System section: a page that replaces the room on
  *  screen while the rooms stay where they are. */
@@ -95,7 +101,6 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // about a day; these are findable by id and survive the file moving.
   const [files, setFiles] = useState<Artifact[]>([])
   const [more, setMore] = useState(false)
-  const [briefFor, setBriefFor] = useState('')
   const [wikiFor, setWikiFor] = useState('')
     // Where each room speaks outside the dashboard. Loaded for every room at
   // once — it is a short list — so the header can show a count without a call
@@ -376,6 +381,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   }
   const current = channels.find(c => c.id === active)
   const roomGateways = gateways.filter(g => g.channel_id === active)
+  const infra = useEnvStatus(call, current?.workspace ? active : '', !!current?.workspace && !tool)
 
   return (
     <div className="h-full flex min-h-0">
@@ -440,89 +446,96 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       {/* Main line — kept mounted under a tool, so coming back finds the room
           scrolled where you left it. */}
       <div className={tool ? 'hidden' : 'flex-1 min-w-0 flex flex-col'}>
-        <header className="px-4 py-2 border-b border-gray-800 flex items-center gap-3 min-w-0">
-          <span className="text-sm text-gray-200 font-medium whitespace-nowrap shrink-0">{current?.name ?? '—'}</span>
-          {current?.purpose && <span className="text-xs text-gray-500 truncate min-w-0">{current.purpose}</span>}
+        <header className="h-12 px-4 border-b border-gray-800 flex items-center gap-2.5 min-w-0">
+          <div className="flex items-baseline gap-2 min-w-0 mr-1">
+            <span className="text-sm text-gray-100 font-semibold whitespace-nowrap shrink-0">{current?.name ?? '—'}</span>
+            {current?.purpose && <span className="text-xs text-gray-500 truncate min-w-0">{current.purpose}</span>}
+          </div>
+
+          {/* What the project runs on — the one thing a glance at a project
+              room should answer. */}
           {current?.workspace && (
-            // The running project — its dev server, from bomclaw.json — beside
-            // its code, on the editor's own page.
-            <a
-              href={`/files/${encodeURIComponent(current.id)}?preview=1`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Chạy dự án (bomclaw.json) và xem bên cạnh code"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-emerald-300 hover:ring-emerald-500/40"
-            >
-              Preview ▸
-            </a>
+            <InfraBadge st={infra.st} err={infra.err} onOpen={() => setEnvFor(current.id)} />
           )}
-          {current?.workspace && (
-            <button
-              onClick={() => setEnvFor(current.id)}
-              title="DEV (máy này) và PROD (Cloudflare) của dự án"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-orange-300 hover:ring-orange-500/40"
-            >
-              DEV · PROD
-            </button>
-          )}
-          {current && (
-            <button
-              onClick={() => setWikiFor(current.id)}
-              title="Wiki của dự án (lưu trong database): tài liệu .md / .html — xem, sửa, lưu, mở link"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-violet-300 hover:ring-violet-500/40"
-            >
-              📚 Wiki
-            </button>
-          )}
-          {current?.workspace && (
-            <button
-              onClick={() => setBriefFor(current.id)}
-              title={current.workspace}
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
-            >
-              AGENTS.md
-            </button>
-          )}
-          {current && (() => {
-            const primary = repos.find(r => r.role === 'primary')
-            return (
-              <span className="shrink-0 whitespace-nowrap flex items-center rounded ring-1 ring-gray-700 text-[11px] text-gray-400">
-                {primary && (
-                  <a href={primary.url} target="_blank" rel="noopener noreferrer" title={`Mở ${primary.repo} trên GitHub`}
-                    className="flex items-center gap-1 px-1.5 font-mono hover:text-sky-300">
-                    <GitHubMark className="h-3 w-3" />{primary.repo.split('/')[1]}
-                  </a>
-                )}
-                <button
-                  onClick={() => setReposFor(current.id)}
-                  title="Các repo GitHub của phòng: một repo chính, thêm repo khác"
-                  className={`flex items-center gap-1 px-1.5 hover:text-sky-300 ${primary ? 'border-l border-gray-700' : ''}`}
-                >
-                  {!primary && <GitHubMark className="h-3 w-3" />}
-                  {primary ? (repos.length > 1 ? `+${repos.length - 1}` : '⋯') : 'GitHub'}
-                </button>
-              </span>
-            )
-          })()}
-          {current && (
-            <button
-              onClick={() => setGatewaysFor(current.id)}
-              title="Nơi phòng này nói ra ngoài dashboard"
-              className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-sky-300 hover:ring-sky-500/40"
-            >
-              Gateways
-              {roomGateways.length > 0 && (
-                // Amber when one is paused: a destination that has quietly
-                // stopped carrying is worth seeing without opening the panel.
-                <span className={`ml-1 ${roomGateways.some(g => g.mode === 'off') ? 'text-amber-300' : 'text-sky-300'}`}>
-                  {roomGateways.length}
+
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {current?.workspace && (
+              // One door into the code, for the developer reviewing it: the
+              // editor opens on AGENTS.md (what the agents are told), with the
+              // running Preview and the agent beside it. These were two buttons
+              // — "Preview ▸" and "AGENTS.md" — that both meant "let me look
+              // at this project the way a developer does".
+              <a
+                href={`/files/${encodeURIComponent(current.id)}/AGENTS.md?preview=1&agent=1`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Mở editor: AGENTS.md, Preview đang chạy và Agent bên cạnh — ${current.workspace}`}
+                className={`${pill} ring-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}
+              >
+                <CodeIcon className="h-3.5 w-3.5" />
+                Code
+                <span className="text-[10px] px-1 rounded bg-sky-500/20 text-sky-300">Agent</span>
+              </a>
+            )}
+            {current && (
+              <button
+                onClick={() => setWikiFor(current.id)}
+                title="Wiki của dự án (lưu trong database): tài liệu .md / .html — xem, sửa, lưu, mở link"
+                className={`${pill} ring-gray-700 text-gray-300 hover:text-violet-200 hover:ring-violet-500/40`}
+              >
+                <BookIcon className="h-3.5 w-3.5" />
+                Wiki
+              </button>
+            )}
+            {current && (() => {
+              const primary = repos.find(r => r.role === 'primary')
+              return (
+                <span className="h-7 shrink-0 whitespace-nowrap flex items-center rounded-full ring-1 ring-gray-700 text-[11px] text-gray-300">
+                  {primary && (
+                    <a href={primary.url} target="_blank" rel="noopener noreferrer" title={`Mở ${primary.repo} trên GitHub`}
+                      className="h-full flex items-center gap-1.5 pl-2.5 pr-2 rounded-l-full font-mono cursor-pointer transition-colors duration-200 hover:text-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
+                      <GitHubMark className="h-3.5 w-3.5" />{primary.repo.split('/')[1]}
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setReposFor(current.id)}
+                    title="Các repo GitHub của phòng: một repo chính, thêm repo khác"
+                    aria-label="Quản lý repo GitHub của phòng"
+                    className={`h-full flex items-center gap-1.5 px-2.5 cursor-pointer transition-colors duration-200 hover:text-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${primary ? 'border-l border-gray-700 rounded-r-full px-2' : 'rounded-full'}`}
+                  >
+                    {!primary && <GitHubMark className="h-3.5 w-3.5" />}
+                    {primary ? (repos.length > 1 ? `+${repos.length - 1}` : '⋯') : 'GitHub'}
+                  </button>
                 </span>
-              )}
-            </button>
-          )}
-          <span className="ml-auto text-[11px] text-gray-600 font-mono truncate min-w-0 shrink">
-            {current?.members?.map(m => m.id).join(' · ')}
-          </span>
+              )
+            })()}
+            {current && (
+              <button
+                onClick={() => setGatewaysFor(current.id)}
+                title="Nơi phòng này nói ra ngoài dashboard"
+                className={`${pill} ring-gray-700 text-gray-300 hover:text-sky-200 hover:ring-sky-500/40`}
+              >
+                <SignalIcon className="h-3.5 w-3.5" />
+                Gateways
+                {roomGateways.length > 0 && (
+                  // Amber when one is paused: a destination that has quietly
+                  // stopped carrying is worth seeing without opening the panel.
+                  <span className={`min-w-4 px-1 rounded-full text-[10px] text-center ${roomGateways.some(g => g.mode === 'off') ? 'bg-amber-500/20 text-amber-300' : 'bg-sky-500/20 text-sky-300'}`}>
+                    {roomGateways.length}
+                  </span>
+                )}
+              </button>
+            )}
+            {!!current?.members?.length && (
+              <span className="hidden 2xl:flex items-center -space-x-1.5 pl-1" title={current.members.map(m => m.id).join(' · ')}>
+                {current.members.slice(0, 5).map(m => (
+                  <span key={m.kind + m.id} className="rounded-full ring-2 ring-gray-950">
+                    <AgentAvatar id={m.id} person={m.kind === 'user'} />
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
         </header>
 
         <div
@@ -562,7 +575,6 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
         />
       </div>
 
-      {briefFor && <BriefEditor call={call} channelID={briefFor} onClose={() => setBriefFor('')} />}
       {wikiFor && (
         <WikiPanel
           call={call} channelID={wikiFor}
@@ -582,7 +594,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
         <EnvPanel
           call={call} channelID={envFor}
           channelName={channels.find(c => c.id === envFor)?.name ?? envFor}
-          onClose={() => setEnvFor('')}
+          onClose={() => { setEnvFor(''); void infra.reload() }}
         />
       )}
       {gatewaysFor && (
@@ -1185,82 +1197,4 @@ function NewProject({ call, onCreated }: { call: Call; onCreated: () => void }) 
   )
 }
 
-// BriefEditor edits the file the agents read before working on a project.
-//
-// A textarea over the raw markdown rather than a form of fields: what a project
-// needs said differs per project, and a form would decide that in advance. The
-// file is the source of truth — agents edit it with their own tools too — so
-// this saves the whole document and whoever wrote last wins, the way a shared
-// file in a repository always has.
-function BriefEditor({ call, channelID, onClose }: { call: Call; channelID: string; onClose: () => void }) {
-  const [body, setBody] = useState<string | null>(null)
-  const [path, setPath] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-
-  useEffect(() => {
-    call('channels.brief', { channel_id: channelID })
-      .then((r: any) => { setBody(r?.body ?? ''); setPath(r?.path ?? '') })
-      .catch((e: any) => setErr(String(e?.message ?? e)))
-  }, [call, channelID])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  const save = async () => {
-    if (body === null || busy) return
-    setBusy(true)
-    try {
-      await call('channels.brief', { channel_id: channelID, body })
-      setErr(null); setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } catch (e: any) {
-      setErr(String(e?.message ?? e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
-      <div
-        onClick={e => e.stopPropagation()}
-        className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl"
-      >
-        <header className="flex items-baseline gap-3 px-5 py-3 border-b border-gray-800">
-          <span className="text-sm text-gray-200 font-medium">AGENTS.md</span>
-          <span className="text-[11px] text-gray-600 font-mono truncate">{path}</span>
-          <button onClick={onClose} className="ml-auto text-xs text-gray-500 hover:text-gray-300">close</button>
-        </header>
-        <div className="flex-1 min-h-0 p-4">
-          {body === null ? (
-            <div className="text-sm text-gray-500">Loading…</div>
-          ) : (
-            <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              spellCheck={false}
-              className="w-full h-[60vh] px-3 py-2 text-sm font-mono bg-gray-900 rounded ring-1 ring-gray-800 text-gray-200 outline-none focus:ring-gray-600 resize-none"
-            />
-          )}
-        </div>
-        <footer className="flex items-center gap-3 px-5 py-3 border-t border-gray-800">
-          {err && <span className="text-xs text-red-300">{err}</span>}
-          {saved && <span className="text-xs text-emerald-300">đã lưu</span>}
-          <span className="ml-auto text-[11px] text-gray-600">
-            Agent đọc file này trước khi làm việc trong dự án.
-          </span>
-          <button
-            onClick={save} disabled={busy || body === null}
-            className="px-3 py-1.5 text-sm rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40"
-          >{busy ? 'đang lưu…' : 'Lưu'}</button>
-        </footer>
-      </div>
-    </div>
-  )
-}
 
