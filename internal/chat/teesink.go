@@ -26,6 +26,14 @@ func (t teeSink) NoteThinking(chunk string) {
 	}
 }
 
+func (t teeSink) NoteToolInput(name, input string) {
+	for _, s := range []TurnSink{t.a, t.b} {
+		if ts, ok := s.(ToolInputSink); ok {
+			ts.NoteToolInput(name, input)
+		}
+	}
+}
+
 func (t teeSink) NoteTodos(todos []Todo) {
 	for _, s := range []TurnSink{t.a, t.b} {
 		if ts, ok := s.(TodoSink); ok {

@@ -96,3 +96,49 @@ func TestRoomTurnSteeredEndsWithANote(t *testing.T) {
 		t.Fatal("unreachable")
 	}
 }
+
+// Work asked for in the Direct room (or on Telegram) is filed under the project
+// it was about — the board of that project is where it is looked for.
+func TestRoomTurnFilesDirectWorkUnderItsProject(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{})
+	shop, err := cdb.CreateProject("shopee-deals", "", "owner", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dm, _ := cdb.EnsureOwnerDM("bomclaw2")
+	line, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: dm.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "làm trang chi tiết có biểu đồ giá",
+	})
+	rt := OpenRoomTurn(deps, *line, line.ID, nil)
+	rt.Sink().NoteTool("Bash(cd ../shopee-deals)")
+	rt.Sink().NoteToolInput("Bash", `{"command":"cd `+shop.Workspace+` && npm test"}`)
+	rt.Sink().Write("xong")
+	rt.Finish(rt.Sink().Text(), nil)
+
+	got, _ := cdb.GetTask(rt.Task().ID)
+	if got.ChannelID != shop.ID {
+		t.Fatalf("task filed under %q, want the project %q", got.ChannelID, shop.ID)
+	}
+	// The answer is still where it was asked.
+	thread, _ := cdb.ThreadMessages(line.ID)
+	if last := thread[len(thread)-1]; last.ChannelID != dm.ID {
+		t.Fatalf("answer moved out of the Direct room: %+v", last)
+	}
+}
+
+// A turn in a project's own room stays in that room, whatever it touched.
+func TestRoomTurnInAProjectRoomStaysThere(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{})
+	shop, _ := cdb.CreateProject("shopee-deals", "", "owner", t.TempDir(), nil)
+	arcade, _ := cdb.CreateProject("arcade", "", "owner", t.TempDir(), nil)
+	line, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: arcade.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "so sánh với shopee-deals",
+	})
+	rt := OpenRoomTurn(deps, *line, line.ID, nil)
+	rt.Sink().NoteTool("Read(x)")
+	rt.Sink().NoteToolInput("Read", `{"file_path":"`+shop.Workspace+`/README.md"}`)
+	rt.Finish("ok", nil)
+	if got, _ := cdb.GetTask(rt.Task().ID); got.ChannelID != arcade.ID {
+		t.Fatalf("moved to %q", got.ChannelID)
+	}
+}

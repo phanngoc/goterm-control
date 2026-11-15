@@ -44,8 +44,14 @@ type RoomTurn struct {
 	mu       sync.Mutex
 	task     *coord.Task
 	longTurn *time.Timer
-	unwatch  chan struct{}
-	stopOnce sync.Once
+
+	// What the turn worked on, for filing it under a project.
+	inputs        []string
+	filed         bool
+	roomIsProject *bool
+	hints         []coord.ProjectHint
+	unwatch       chan struct{}
+	stopOnce      sync.Once
 
 	// resume names the CLI session the turn ran in, once it has run. Set by a
 	// caller that owns the session; without it a turn that runs out of time
@@ -86,6 +92,7 @@ func OpenRoomTurn(deps Deps, root coord.ChannelMessage, threadRoot string, trace
 		}
 	}
 	t.sink.onWork = t.OpenTask
+	t.sink.onToolInput = t.noteToolInput
 	t.longTurn = time.AfterFunc(mentionTaskAfter, t.OpenTask)
 	return t
 }
@@ -132,7 +139,65 @@ func (t *RoomTurn) OpenTask() {
 		t.task = task
 		t.mu.Unlock()
 		t.log.Bind(task.ID, "")
+		t.fileUnderProject()
 	})
+}
+
+// A turn asked in a room that is nobody's project — the owner's Direct room,
+// Telegram — is filed under the project it turned out to be about, so it
+// shows on that project's board (coord.GuessProject). A turn in a project's
+// own room stays there.
+
+const maxToolInputs = 200
+
+func (t *RoomTurn) noteToolInput(name, input string) {
+	t.mu.Lock()
+	if len(t.inputs) < maxToolInputs {
+		t.inputs = append(t.inputs, input)
+	}
+	t.mu.Unlock()
+	t.fileUnderProject()
+}
+
+// fileUnderProject moves the turn's task to the project its work points at,
+// once, as soon as the evidence is clear.
+func (t *RoomTurn) fileUnderProject() {
+	t.mu.Lock()
+	task, filed := t.task, t.filed
+	inputs := append([]string(nil), t.inputs...)
+	t.mu.Unlock()
+	if task == nil || filed {
+		return
+	}
+	if t.roomIsProject == nil {
+		own := false
+		if c, err := t.deps.Coord.GetChannel(t.root.ChannelID); err == nil && c.Workspace != "" {
+			own = true
+		}
+		hints, _ := t.deps.Coord.ProjectHints()
+		t.mu.Lock()
+		t.roomIsProject, t.hints = &own, hints
+		t.mu.Unlock()
+	}
+	if *t.roomIsProject {
+		t.mu.Lock()
+		t.filed = true
+		t.mu.Unlock()
+		return
+	}
+	id := coord.GuessProject(t.hints, t.root.Body, inputs)
+	if id == "" {
+		return
+	}
+	if err := t.deps.Coord.SetTaskChannel(task.ID, id); err != nil {
+		log.Printf("room turn: file %s under %s: %v", task.ID, id, err)
+		return
+	}
+	t.mu.Lock()
+	t.filed = true
+	t.mu.Unlock()
+	t.log.Status("project", "xếp vào dự án "+id)
+	log.Printf("room turn: %s filed under %s", task.ID, id)
 }
 
 // WatchInterrupts cancels the turn when the owner interrupts it from the

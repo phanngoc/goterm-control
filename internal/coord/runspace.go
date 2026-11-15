@@ -95,19 +95,27 @@ func (db *DB) TaskWorkspace(t *Task) (dir string, shared bool) {
 	if t == nil {
 		return "", false
 	}
+	// A mention task stands where its turn stood: the folder of the room it
+	// was ASKED in, or the agent's own workspace when that room has none. Not
+	// the project it was filed under afterwards — a Direct-room turn about a
+	// project is filed there (SetTaskChannel) but ran in the agent's own
+	// folder. Its runs resume the turn's CLI session, and the CLI keeps
+	// sessions per directory: run it anywhere else and the resume finds
+	// nothing, so the work it was handed over to finish starts again.
+	if t.Kind == KindMention && t.ParentID == "" {
+		if _, room := db.MentionThread(t); room != "" {
+			if c, err := db.GetChannel(room); err == nil && c.Workspace != "" {
+				return c.Workspace, false
+			}
+		}
+		return "", false
+	}
 	if t.ParentID == "" && t.ChannelID != "" {
 		if c, err := db.GetChannel(t.ChannelID); err == nil && c.Workspace != "" {
 			return c.Workspace, false
 		}
 		// A channel that is a room and not a project falls through: #general
 		// has no folder, and a task filed there still needs somewhere to work.
-	}
-	// A mention task stands where its turn stood: the agent's own workspace
-	// when the room has no project. Its runs resume the turn's CLI session,
-	// and the CLI keeps sessions per directory — run it anywhere else and the
-	// resume finds nothing, so the work it was handed over to finish restarts.
-	if t.Kind == KindMention && t.ParentID == "" {
-		return "", false
 	}
 	path := db.RunspacePath(t.ContextID)
 	if path == "" {

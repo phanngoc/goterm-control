@@ -675,6 +675,20 @@ type replySink struct {
 	// tap, when set, gets the turn as it streams, for the task's session
 	// log. Nil to ignore.
 	tap *coord.TaskLogWriter
+
+	// onToolInput gets each tool call in full (chat.ToolInputSink). Nil to
+	// ignore.
+	onToolInput func(name, input string)
+}
+
+// NoteToolInput passes a tool call in full to whoever asked for it.
+func (r *replySink) NoteToolInput(name, input string) {
+	r.mu.Lock()
+	fn, done := r.onToolInput, r.done
+	r.mu.Unlock()
+	if fn != nil && !done {
+		fn(name, input)
+	}
 }
 
 // progressView is one redraw of the progress line: what the turn has done,
