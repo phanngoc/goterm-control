@@ -248,6 +248,7 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	// becomes, its session log, the answer — is the RoomTurn's (roomturn.go).
 	rt := OpenRoomTurn(w.deps, m, key, sess.CurrentTrace)
 	rt.WatchInterrupts(cancel)
+	rt.ContinueAsTask(sessionRefOf(w.deps, sess))
 	// `bomclaw artifact put` with no --task files under this mention's task.
 	sess.SetEnv("BOMCLAW_MENTION_ID", m.ID)
 
@@ -281,6 +282,14 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 
 	w.saveThread(key, sess)
 	clear("")
+}
+
+// sessionRefOf names the CLI session sess runs in, read when called — after
+// the turn, when the CLI has assigned one.
+func sessionRefOf(deps Deps, sess *session.Session) func() coord.SessionRef {
+	return func() coord.SessionRef {
+		return coord.SessionRef{Provider: deps.ProviderName, SessionID: sess.GetSessionID(), Account: sess.GetAccount()}
+	}
 }
 
 func (w *MentionWatcher) saveThread(key string, sess *session.Session) {

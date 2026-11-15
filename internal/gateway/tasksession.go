@@ -179,8 +179,9 @@ func handleTaskFollowUp(deps Deps, params json.RawMessage) (json.RawMessage, err
 	}
 	// A room turn (a mention, a direct line) is not a run the task runner
 	// can continue: the conversation is the thread. The owner's line goes
-	// there, and the next turn — same session — answers it.
-	if task.Kind == coord.KindMention {
+	// there, and the next turn — same session — answers it. One handed off to
+	// the queue is a run like any other, and reads its follow-ups the same way.
+	if task.Kind == coord.KindMention && !task.HandedOff() {
 		return threadFollowUp(deps, task, p)
 	}
 	// Interrupting only means something to a task that is running.

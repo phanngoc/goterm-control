@@ -1168,6 +1168,8 @@ func (r *Runner) sweepVerifications() {
 // returns the project folder and shared=false for exactly this case, so the two
 // cannot drift apart into disagreeing about what a goal is.
 func isGoal(t *coord.Task, workspace string, shared bool) bool {
+	// A mention handed over from a turn is a question that ran long, not a
+	// goal someone planned: it is answered in its thread, not measured.
 	return t != nil && t.ParentID == "" && t.Kind != coord.KindVerify &&
-		workspace != "" && !shared
+		t.Kind != coord.KindMention && workspace != "" && !shared
 }
