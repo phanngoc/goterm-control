@@ -110,7 +110,7 @@ export interface Task {
   updated_at: string
   // A task is many runs; these survive between them.
   parent_id?: string
-  kind: 'manual' | 'scheduled' | 'heartbeat' | 'sub'
+  kind: 'manual' | 'scheduled' | 'heartbeat' | 'sub' | 'mention'
   schedule_id?: string
   checkpoint?: string
   session_ref?: string
@@ -172,6 +172,40 @@ export interface TaskDetail {
     tool_count: number
     started_at?: string
   }
+}
+
+/** One line of a task's session — see internal/coord/tasklog.go. */
+export type TaskLogKind = 'prompt' | 'text' | 'thinking' | 'tool' | 'tool_result' | 'user' | 'status'
+
+export interface TaskLogEntry {
+  id: number // negative when rebuilt from traces (runs from before the log)
+  task_id: string
+  run_id?: string
+  agent_id?: string
+  kind: TaskLogKind
+  label?: string
+  content?: string
+  created_at: string
+}
+
+export type FollowUpState = 'queued' | 'delivered' | 'running' | 'answered' | 'failed'
+
+export interface FollowUp {
+  id: string
+  task_id: string
+  author: string
+  body: string
+  state: FollowUpState
+  agent_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskSession {
+  entries: TaskLogEntry[]
+  followups: FollowUp[]
+  running: boolean
+  legacy?: boolean
 }
 
 export interface Message {

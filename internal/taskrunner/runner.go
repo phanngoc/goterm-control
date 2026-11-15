@@ -28,6 +28,7 @@ import (
 	"github.com/ngocp/goterm-control/internal/memory"
 	"github.com/ngocp/goterm-control/internal/session"
 	"github.com/ngocp/goterm-control/internal/skills"
+	"github.com/ngocp/goterm-control/internal/tools"
 	"github.com/ngocp/goterm-control/internal/trace"
 )
 
@@ -221,6 +222,13 @@ func (r *Runner) Start(ctx context.Context) {
 			// to Concurrency; a run ending pokes the loop so the next queued
 			// task is picked up at once, not at the next tick.
 			for r.claimAndStart(ctx) {
+				if ctx.Err() != nil {
+					return
+				}
+			}
+			// Then lines the owner typed into tasks this agent already
+			// finished: each is one turn in that task's session.
+			for r.claimFollowUpAndStart(ctx) {
 				if ctx.Err() != nil {
 					return
 				}
@@ -459,6 +467,13 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	children, _ := r.db.Children(task.ID)
 	inbox := r.taskMail(task.ID)
 	prompt := taskPrompt(task, r.cfg.Timeout, resumed, children, inbox, r.peers(), workspace, r.db.RunspacePath(task.ContextID), shared)
+	// What the owner typed into this task's session while it waited or ran.
+	// Taken here, once: this run is the one that answers them.
+	followUps, err := r.db.TakeFollowUps(task.ID, r.cfg.AgentID)
+	if err != nil {
+		log.Printf("taskrunner: follow-ups for %s: %v", task.ID, err)
+	}
+	prompt += followUpSection(followUps)
 	// The repos the task's project keeps its code in, so a run does not
 	// rediscover them from prose (coord/repos.go).
 	if task.ChannelID != "" {
@@ -489,6 +504,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		return
 	}
 
+	// The conversation, readable from the board while it happens.
+	slog := newSessionLog(r.db, task.ID, run.ID, r.cfg.AgentID)
+	slog.Status("start", fmt.Sprintf("lượt %d · %s · %s", task.Continuations+1, r.cfg.AgentID, r.llm.Name()))
+	slog.Prompt(prompt)
+
 	// Visible while it runs: status, tray (awake), dashboard.
 	sess.MarkRunning(truncate(task.Title, 60))
 	r.live.Store(task.ID, sess)
@@ -511,8 +531,15 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		OnText: func(chunk string) {
 			reply.WriteString(chunk)
 			progress.Text(chunk)
+			slog.Text(chunk)
 		},
-		OnThinking: progress.Thinking,
+		OnThinking: func(chunk string) {
+			progress.Thinking(chunk)
+			slog.Thinking(chunk)
+		},
+		OnToolResult: func(name string, res tools.ToolResult) {
+			slog.ToolResult(name, res.Output, res.IsError)
+		},
 		OnToolCall: func(name, input string) {
 			// The label, not the bare name: the board is the screen built for
 			// watching work, and "Bash" tells a watcher less than
@@ -520,6 +547,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 			label := chat.ToolLabel(name, input)
 			sess.NoteTool(label)
 			progress.Tool(label)
+			slog.Tool(label, input)
 			if name == "TodoWrite" {
 				progress.Todos(input)
 				if hasPendingTodos(input) {
@@ -569,6 +597,12 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		}
 	}
 	span.End(outcome.Result, spanErr)
+	slog.Close()
+	endNote := outcome.Note
+	if endNote == "" && sendErr != nil {
+		endNote = sendErr.Error()
+	}
+	slog.Status("end:"+string(outcome.Liveness), endNote)
 
 	var final *coord.Task
 	finishErr := withRetry("finish run "+run.ID, func() (e error) {

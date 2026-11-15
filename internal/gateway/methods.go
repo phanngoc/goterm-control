@@ -250,6 +250,10 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleTaskResume(deps, params)
 		case "tasks.unblock":
 			return handleTaskUnblock(deps, params)
+		case "tasks.log":
+			return handleTaskLog(deps, params)
+		case "tasks.followup":
+			return handleTaskFollowUp(deps, params)
 		case "messages.list":
 			return handleMessagesList(deps, params)
 		case "messages.send":
