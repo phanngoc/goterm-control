@@ -822,6 +822,9 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 			if !isPlanTool(name) {
 				streamer.NoteTool(label)
 			}
+			if ts, ok := streamer.(chat.ToolInputSink); ok {
+				ts.NoteToolInput(name, inputJSON)
+			}
 			// Mirror to session so /status can show what's running right now.
 			sess.NoteTool(label)
 			// Snapshot the plan for the auto-continue check, and show it: the

@@ -76,6 +76,13 @@ type Todo struct {
 	ActiveForm string `json:"activeForm,omitempty"`
 }
 
+// ToolInputSink is a TurnSink that also wants each tool call in full — the
+// command, the path — not only its short label. The room a turn reports to
+// uses it to tell which project the work was in. Optional.
+type ToolInputSink interface {
+	NoteToolInput(name, inputJSON string)
+}
+
 // TodoSink is a TurnSink that shows the model's plan: what is done, what it
 // is on now, what is left. Called with the whole list each time it changes.
 type TodoSink interface {
