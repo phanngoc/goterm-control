@@ -12,7 +12,7 @@ import (
 // A line the owner types at the top of their Direct room is the next turn of
 // the conversation they have with this agent on Telegram: it runs on that
 // conversation's session, with the words as typed, and the answer lands in the
-// room itself — not in a thread, and not copied back a second time.
+// line's thread — like any room — and is not copied back a second time.
 func TestADirectLineContinuesTheOwnersConversation(t *testing.T) {
 	turn := &recordingTurn{reply: "đây là câu trả lời"}
 	deps, cdb := mentionTestDeps(t, turn)
@@ -49,26 +49,34 @@ func TestADirectLineContinuesTheOwnersConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(msgs) != 1 {
+		t.Fatalf("top of the room = %+v, want only the owner's line", msgs)
+	}
+	thread, err := cdb.ThreadMessages(msgs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var answered bool
-	for _, m := range msgs {
-		if m.AuthorID == "bomclaw2" && m.Body == "đây là câu trả lời" && m.ThreadRoot == "" {
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" && m.Body == "đây là câu trả lời" && m.ThreadRoot == msgs[0].ID {
 			answered = true
 		}
 	}
 	if !answered {
-		t.Fatalf("no top-level answer in the room: %+v", msgs)
+		t.Fatalf("no answer in the line's thread: %+v", thread)
 	}
 	if left, _ := cdb.UnreadMentions(coord.MemberAgent, "bomclaw2", 10); len(left) != 0 {
 		t.Errorf("%d mention(s) left unread after answering", len(left))
 	}
 }
 
-// A reply inside a thread of the Direct room is a side conversation about one
-// line, and keeps the thread's own session like any room.
-func TestAThreadInTheDirectRoomIsStillAThread(t *testing.T) {
+// A reply inside a thread of the Direct room is the same conversation too: it
+// runs on the owner's session, and is answered in that thread.
+func TestAReplyInADirectThreadContinuesTheConversation(t *testing.T) {
 	turn := &recordingTurn{reply: "ok"}
 	deps, cdb := mentionTestDeps(t, turn)
 	deps.Sessions = session.NewManager(nil)
+	conversation := deps.Sessions.Get(webConversation(deps))
 
 	dm, err := cdb.EnsureOwnerDM("bomclaw2")
 	if err != nil {
@@ -92,10 +100,11 @@ func TestAThreadInTheDirectRoomIsStillAThread(t *testing.T) {
 	if turn.count() != 1 {
 		t.Fatalf("turns = %d, want 1", turn.count())
 	}
-	if turn.sessions[0] != "ch_"+root.ID {
-		t.Errorf("ran on %s, want the thread's session ch_%s", turn.sessions[0], root.ID)
+	if turn.sessions[0] != conversation.ID {
+		t.Errorf("ran on %s, want the owner's conversation %s", turn.sessions[0], conversation.ID)
 	}
-	if turn.direct[0] {
-		t.Error("a thread turn was marked as a Direct-room conversation turn")
+	thread, _ := cdb.ThreadMessages(root.ID)
+	if last := thread[len(thread)-1]; last.AuthorID != "bomclaw2" || last.Body != "ok" {
+		t.Fatalf("answer not in the thread: %+v", thread)
 	}
 }

@@ -233,8 +233,10 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 		sess.SetProvider(mem.Provider)
 	}
 
-	turnCtx, cancel := context.WithTimeout(ctx, mentionTurnTimeout)
-	defer cancel()
+	timed, cancelTimeout := context.WithTimeout(ctx, mentionTurnTimeout)
+	defer cancelTimeout()
+	turnCtx, cancel := context.WithCancelCause(timed)
+	defer cancel(nil)
 
 	// Build the prompt BEFORE announcing anything. The progress line is a
 	// message from this agent, so posting it first would make the thread look
@@ -242,158 +244,49 @@ func (w *MentionWatcher) answer(ctx context.Context, m coord.ChannelMessage) {
 	// away" would come back empty every time. A test caught exactly that.
 	prompt := w.prompt(m, mem, key)
 
-	// Say something before doing anything. A turn that reads six files takes
-	// long enough that a silent thread is indistinguishable from a broken one,
-	// and the person watching has no way to tell which. This line is a real
-	// message in the thread, and it becomes the answer when the answer exists
-	// — progress is worth seeing while it happens and noise the moment it
-	// stops, so it is edited rather than added to.
-	progress, _, err := w.deps.Coord.PostMessage(coord.NewChannelMessage{
-		ChannelID: m.ChannelID, ThreadRoot: key,
-		AuthorKind: coord.MemberAgent, AuthorID: w.deps.AgentID,
-		Body: workingLine(progressView{}),
-	})
-	if err != nil {
-		log.Printf("mentions: could not open a progress line: %v", err)
-		progress = nil // the turn still runs; it just runs unseen
-	}
-
-	sink := &replySink{preview: chat.DefaultPreview()}
-	if progress != nil {
-		sink.onProgress = func(p progressView) {
-			if err := w.deps.Coord.UpdateMessageBody(progress.ID, workingLine(p)); err != nil {
-				log.Printf("mentions: progress update: %v", err)
-			}
-		}
-	}
-
-	// A mention that turns out to be work gets a task of its own on the
-	// room's board — see coord/mentiontasks.go. "Work" is the first tool call,
-	// or a turn still running after mentionTaskAfter; a quick answer is
-	// neither and never becomes one.
-	var (
-		taskOnce sync.Once
-		taskMu   sync.Mutex
-		mtask    *coord.Task
-	)
-	openTask := func() {
-		taskOnce.Do(func() {
-			t, err := w.deps.Coord.OpenMentionTask(m, w.deps.AgentID, sess.CurrentTrace())
-			if err != nil {
-				log.Printf("mentions: task record for %s: %v", m.ID, err)
-				return
-			}
-			taskMu.Lock()
-			mtask = t
-			taskMu.Unlock()
-		})
-	}
-	sink.onWork = openTask
-	longTurn := time.AfterFunc(mentionTaskAfter, openTask)
+	// Everything the room sees — the progress line, the task a long turn
+	// becomes, its session log, the answer — is the RoomTurn's (roomturn.go).
+	rt := OpenRoomTurn(w.deps, m, key, sess.CurrentTrace)
+	rt.WatchInterrupts(cancel)
 	// `bomclaw artifact put` with no --task files under this mention's task.
 	sess.SetEnv("BOMCLAW_MENTION_ID", m.ID)
-	closeTask := func(ok bool, result string) {
-		longTurn.Stop()
-		taskMu.Lock()
-		t := mtask
-		taskMu.Unlock()
-		if t == nil {
-			return
-		}
-		if err := w.deps.Coord.CloseMentionTask(t.ID, w.deps.AgentID, ok, truncateLine(result, 4000)); err != nil {
-			log.Printf("mentions: close task %s: %v", t.ID, err)
-		}
-	}
 
 	sess.MarkRunning("channel: " + truncateLine(m.Body, 40))
 	w.live.Store(m.ID, sess)
-	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), prompt, sink)
-	// The engine stops WAITING for a turn when the deadline passes; the turn
-	// itself keeps going in its lane. Its sink was still writing into the room
-	// afterwards, so a line this code had already closed came back to life
-	// saying "working" — and stayed that way. Nothing this turn produces from
-	// here is ours to publish.
-	sink.stop()
+	_, err = w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), prompt, rt.Sink())
 	sess.MarkIdle()
 	w.live.Delete(m.ID)
 	if err != nil {
-		// A turn killed by shutdown is not an answered question. The gateway
-		// was restarting — a deploy, usually — and the person asked something
-		// that nobody will ever come back to if the mention is marked read
-		// here. Leave it: the next gateway sweeps unread mentions at startup
-		// and picks it up. Our own timeout is a different thing and does count,
-		// because retrying it forever would just burn the same three minutes.
+		// A turn killed by shutdown is not an answered question: leave the
+		// mention unread so the next gateway picks it up. Our own timeout and
+		// an interrupt do count.
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			log.Printf("mentions: %s interrupted by shutdown — leaving it unread for the next run", m.ID)
-			// The task stays open: the next run answers the same mention and
-			// finds it again by the message id.
-			longTurn.Stop()
-			w.finishProgress(progress, "")
+			rt.Abandon()
 			return
 		}
-		log.Printf("mentions: turn for %s: %v", m.ID, err)
-		note := "⚠️ lượt này hỏng giữa chừng: " + truncateLine(err.Error(), 200)
-		if errors.Is(err, context.DeadlineExceeded) {
-			// Say what to do about it. "Deadline exceeded" tells the person
-			// nothing they can act on; the shape of the fix is a task, which
-			// has five times the budget and survives across runs.
-			note = fmt.Sprintf("⌛ hết %s cho một lượt trả lời — việc này dài hơn một câu trả lời. "+
-				"Nhờ lại và bảo mở task (`bomclaw task new --thread ...`), task chạy được lâu hơn và "+
-				"giữ tiến độ qua nhiều lượt.", mentionTurnTimeout)
+		if cause := context.Cause(turnCtx); errors.Is(cause, ErrRoomSteered) {
+			err = cause
 		}
-		closeTask(false, note)
-		w.finishProgress(progress, note)
+		log.Printf("mentions: turn for %s: %v", m.ID, err)
+		rt.Finish(rt.Sink().Text(), err)
+		w.saveThread(key, sess)
 		clear("")
 		return
 	}
-
-	reply := strings.TrimSpace(sink.Text())
-	if reply == "" {
-		// Nothing to say, so nothing should be left saying it is thinking.
-		closeTask(false, "the turn produced no reply")
-		w.finishProgress(progress, "")
+	if rt.Finish(rt.Sink().Text(), nil) == "" {
 		clear("turn produced nothing to say")
 		return
 	}
-	closeTask(true, reply)
-	// Say where the work is recorded, once, under the answer: the board
-	// card and its trace are one click from the line that produced them.
-	taskMu.Lock()
-	if mtask != nil {
-		reply += fmt.Sprintf("\n\n_📋 task `%s` trên board_", mtask.ID)
-	}
-	taskMu.Unlock()
 
-	// The answer takes the place of the progress line: same message, same spot
-	// in the thread, so the conversation reads as one reply rather than a
-	// running commentary with the point at the end.
-	if progress != nil {
-		if err := w.deps.Coord.UpdateMessageBody(progress.ID, reply); err != nil {
-			log.Printf("mentions: could not land the reply in place: %v", err)
-		}
-		// Mentions inside the final text still have to ring: the progress line
-		// was written before the agent knew what it would say.
-		for _, who := range w.mentionedAgents(reply) {
-			NotifyAgents(w.deps.Coord, who, w.deps.AgentID, "about a mention in "+m.ChannelID)
-		}
-	} else if _, wake, err := w.deps.Coord.PostMessage(coord.NewChannelMessage{
-		ChannelID:  m.ChannelID,
-		ThreadRoot: key,
-		AuthorKind: coord.MemberAgent,
-		AuthorID:   w.deps.AgentID,
-		Body:       reply,
-	}); err != nil {
-		log.Printf("mentions: post reply to %s: %v", m.ChannelID, err)
-	} else {
-		for _, who := range wake {
-			NotifyAgents(w.deps.Coord, who, "", "about a mention in "+m.ChannelID)
-		}
-	}
+	w.saveThread(key, sess)
+	clear("")
+}
 
+func (w *MentionWatcher) saveThread(key string, sess *session.Session) {
 	if err := w.deps.Coord.SaveThreadSession(key, w.deps.AgentID, w.deps.ProviderName, sess.GetSessionID()); err != nil {
 		log.Printf("mentions: save thread session %s: %v", key, err)
 	}
-	clear("")
 }
 
 func (w *MentionWatcher) model() string {
@@ -769,6 +662,10 @@ type replySink struct {
 	// just answering. Nil to ignore.
 	onWork   func()
 	workSeen bool
+
+	// tap, when set, gets the turn as it streams, for the task's session
+	// log. Nil to ignore.
+	tap *coord.TaskLogWriter
 }
 
 // progressView is one redraw of the progress line: what the turn has done,
@@ -804,6 +701,7 @@ const thinkingRedraw = 160
 // — a character threshold rather than a timer, because a timer fires mid-word
 // as often as not and a reader learns more from a paragraph landing whole.
 func (r *replySink) Write(chunk string) {
+	r.tap.Text(chunk)
 	r.mu.Lock()
 	r.b.WriteString(chunk)
 	grown := r.preview.Ready(r.b.String())
@@ -818,6 +716,7 @@ func (r *replySink) NoteTool(label string) {
 	if label == "" {
 		return
 	}
+	r.tap.Tool(label, "")
 	r.mu.Lock()
 	if len(r.tools) == 0 || r.tools[len(r.tools)-1] != label {
 		r.tools = append(r.tools, label)
@@ -834,6 +733,7 @@ func (r *replySink) NoteTool(label string) {
 
 // NoteThinking keeps the thinking as it streams. An empty chunk ends a block.
 func (r *replySink) NoteThinking(chunk string) {
+	r.tap.Thinking(chunk)
 	r.mu.Lock()
 	if chunk == "" {
 		if r.thinking.Len() > 0 && !strings.HasSuffix(r.thinking.String(), "\n\n") {

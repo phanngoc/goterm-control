@@ -177,6 +177,12 @@ func handleTaskFollowUp(deps Deps, params json.RawMessage) (json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
+	// A room turn (a mention, a direct line) is not a run the task runner
+	// can continue: the conversation is the thread. The owner's line goes
+	// there, and the next turn — same session — answers it.
+	if task.Kind == coord.KindMention {
+		return threadFollowUp(deps, task, p)
+	}
 	// Interrupting only means something to a task that is running.
 	interrupt := p.Interrupt && task.State == coord.TaskWorking
 	f, err := deps.Coord.AddFollowUp(p.ID, "owner", p.Message, interrupt)
@@ -206,4 +212,87 @@ func handleTaskFollowUp(deps Deps, params json.RawMessage) (json.RawMessage, err
 	}
 	go NotifyAgents(deps.Coord, ring, "", "about a follow-up on "+p.ID)
 	return json.Marshal(map[string]any{"followup": f, "delivery": how})
+}
+
+// threadFollowUp posts the owner's line into the thread a room task belongs
+// to, addressed to its agent; with interrupt, the turn running now stops.
+func threadFollowUp(deps Deps, task *coord.Task, p taskFollowUpParams) (json.RawMessage, error) {
+	root, channelID, err := deps.Coord.ConversationThread(task)
+	if err != nil {
+		return nil, err
+	}
+	if root == "" {
+		return nil, fmt.Errorf("task %s has no thread to continue", task.ID)
+	}
+	agent := task.ClaimedBy
+	if agent == "" {
+		agent = task.AssignedTo
+	}
+	interrupt := p.Interrupt && task.State == coord.TaskWorking
+	if interrupt {
+		if err := deps.Coord.AddInterrupt(task.ID, "owner", p.Message); err != nil {
+			return nil, err
+		}
+	}
+	msg, wake, err := deps.Coord.PostMessage(coord.NewChannelMessage{
+		ChannelID: channelID, ThreadRoot: root,
+		AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: p.Message,
+		Notify: []coord.Member{{Kind: coord.MemberAgent, ID: agent}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, who := range wake {
+		go NotifyAgents(deps.Coord, who, "", "about a reply in "+channelID)
+	}
+	how := "thread"
+	if interrupt {
+		how = "interrupt"
+	}
+	return json.Marshal(map[string]any{"message": msg, "delivery": how})
+}
+
+type threadLogParams struct {
+	RootID string `json:"root_id"`
+	After  int64  `json:"after,omitempty"`
+}
+
+// ThreadSession is the session behind a conversation thread: every turn an
+// agent took in it, one log, and which of them is running.
+type ThreadSession struct {
+	Entries []coord.TaskLogEntry `json:"entries"`
+	Tasks   []*coord.Task        `json:"tasks"`
+	Running string               `json:"running,omitempty"` // the task of the turn in flight
+}
+
+func handleThreadLog(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p threadLogParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.RootID == "" {
+		return nil, fmt.Errorf("root_id is required")
+	}
+	ids, err := deps.Coord.ThreadTaskIDs(p.RootID)
+	if err != nil {
+		return nil, err
+	}
+	out := ThreadSession{Tasks: []*coord.Task{}}
+	for _, id := range ids {
+		t, err := deps.Coord.GetTask(id)
+		if err != nil {
+			continue
+		}
+		out.Tasks = append(out.Tasks, t)
+		if t.State == coord.TaskWorking {
+			out.Running = t.ID
+		}
+	}
+	if out.Entries, err = deps.Coord.TaskLogOf(ids, p.After, 1000); err != nil {
+		return nil, err
+	}
+	return json.Marshal(out)
 }

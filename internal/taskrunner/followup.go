@@ -103,7 +103,7 @@ func (r *Runner) answerFollowUp(ctx context.Context, f *coord.FollowUp, task *co
 	})
 	span.SetInputs(prompt)
 
-	slog := newSessionLog(r.db, task.ID, f.ID, r.cfg.AgentID)
+	slog := coord.NewTaskLogWriter(r.db, task.ID, f.ID, r.cfg.AgentID)
 	how := "tiếp tục phiên cũ"
 	if !resumed {
 		how = "phiên mới (phiên cũ không mở lại được)"

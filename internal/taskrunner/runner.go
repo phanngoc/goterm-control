@@ -508,7 +508,7 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	go r.watchSteer(runCtx, task.ID, abort)
 
 	// The conversation, readable from the board while it happens.
-	slog := newSessionLog(r.db, task.ID, run.ID, r.cfg.AgentID)
+	slog := coord.NewTaskLogWriter(r.db, task.ID, run.ID, r.cfg.AgentID)
 	slog.Status("start", fmt.Sprintf("lượt %d · %s · %s", task.Continuations+1, r.cfg.AgentID, r.llm.Name()))
 	slog.Prompt(prompt)
 
