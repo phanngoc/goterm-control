@@ -12,7 +12,7 @@ import MessageMarkdown from '../components/MessageMarkdown'
 
 type Call = (method: string, params?: any) => Promise<any>
 
-interface Page { path: string; title: string; format: string; bytes: number; mtime: string }
+interface Page { path: string; title: string; format: string; bytes: number; mtime: string; updated_by?: string }
 
 const PAGE_EXT = /\.(md|markdown|html?|txt|json|csv|svg)$/i
 
@@ -65,7 +65,6 @@ export default function WikiPanel({ call, channelID, channelName, onClose }: {
 }) {
   const [pages, setPages] = useState<Page[]>([])
   const [baseURL, setBaseURL] = useState('')
-  const [dir, setDir] = useState('')
   const [sel, setSel] = useState<string | null>(null)
   const [body, setBody] = useState('')
   const [saved, setSaved] = useState('') // body as last read/saved
@@ -84,7 +83,6 @@ export default function WikiPanel({ call, channelID, channelName, onClose }: {
     const r = await call('channels.wiki', { channel_id: channelID, op: 'list' })
     setPages(r?.pages ?? [])
     setBaseURL(r?.base_url ?? '')
-    setDir(r?.dir ?? '')
     return (r?.pages ?? []) as Page[]
   }, [call, channelID])
 
@@ -228,8 +226,12 @@ export default function WikiPanel({ call, channelID, channelName, onClose }: {
           </div>
         )}
         <header className="flex items-center gap-3 border-b border-gray-800 px-4 py-2.5">
-          <span className="text-sm font-medium text-gray-100">📚 Wiki · {channelName}</span>
-          <a href={baseURL} target="_blank" rel="noopener noreferrer" title={dir}
+          <span className="text-sm font-medium text-gray-100">📚 Wiki dự án · {channelName}</span>
+          <span className="text-[10px] px-1.5 rounded ring-1 ring-gray-700 text-gray-500"
+            title="Trang wiki thuộc về dự án và lưu trong database chung — mọi agent và dashboard thấy cùng một bản">
+            lưu trong DB
+          </span>
+          <a href={baseURL} target="_blank" rel="noopener noreferrer" title="Mở bản host của wiki"
             className="text-[11px] text-gray-500 hover:text-sky-300 font-mono truncate">{baseURL}</a>
           <button onClick={() => { if (confirmLeave()) onClose() }} className="ml-auto text-xs text-gray-500 hover:text-gray-300">đóng</button>
         </header>
@@ -274,7 +276,7 @@ export default function WikiPanel({ call, channelID, channelName, onClose }: {
                     <span className={`shrink-0 rounded px-1 text-[9px] font-mono uppercase ${p.format === 'html' ? 'bg-orange-500/15 text-orange-300' : p.format === 'md' ? 'bg-sky-500/15 text-sky-300' : 'bg-gray-700/50 text-gray-400'}`}>{p.format === 'other' ? 'svg' : p.format}</span>
                     <span className="truncate text-xs text-gray-200">{p.title}</span>
                   </div>
-                  <div className="mt-0.5 truncate pl-0.5 text-[10px] text-gray-600 font-mono">{p.path} · {ago(p.mtime)}</div>
+                  <div className="mt-0.5 truncate pl-0.5 text-[10px] text-gray-600 font-mono">{p.path} · {ago(p.mtime)}{p.updated_by && p.updated_by !== 'owner' ? ` · ${p.updated_by}` : ''}</div>
                 </button>
               ))}
             </div>

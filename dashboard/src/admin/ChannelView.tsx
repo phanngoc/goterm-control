@@ -415,7 +415,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           {current && (
             <button
               onClick={() => setWikiFor(current.id)}
-              title="Wiki của phòng: tài liệu .md / .html — xem, sửa, lưu, mở link"
+              title="Wiki của dự án (lưu trong database): tài liệu .md / .html — xem, sửa, lưu, mở link"
               className="shrink-0 whitespace-nowrap text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-400 hover:text-violet-300 hover:ring-violet-500/40"
             >
               📚 Wiki

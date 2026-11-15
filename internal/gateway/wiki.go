@@ -5,17 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"errors"
+	"mime"
 	"net/http"
-	"os"
+	"path"
 	"strings"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 )
 
-// A room's wiki: listed, read and saved over channels.wiki, hosted over
-// /wiki/<channel>/<page>. See coord/wiki.go for where the pages live.
+// A project's wiki: listed, read and saved over channels.wiki, hosted over
+// /wiki/<channel>/<page>. The pages are rows in the shared database — see
+// coord/wiki.go.
 
 // WikiPrefix is the route hosted pages are served under.
 const WikiPrefix = "/wiki/"
@@ -46,8 +50,7 @@ func handleChannelWiki(deps Deps, params json.RawMessage) (json.RawMessage, erro
 		if err != nil {
 			return nil, err
 		}
-		dir, _ := deps.Coord.WikiDir(p.ChannelID)
-		return json.Marshal(map[string]any{"pages": pages, "dir": dir, "base_url": WikiPrefix + p.ChannelID + "/"})
+		return json.Marshal(map[string]any{"pages": pages, "storage": "database", "base_url": WikiPrefix + p.ChannelID + "/"})
 	case "read":
 		body, mtime, err := deps.Coord.ReadWiki(p.ChannelID, p.Path)
 		if err != nil {
@@ -58,7 +61,7 @@ func handleChannelWiki(deps Deps, params json.RawMessage) (json.RawMessage, erro
 		if p.Body == nil {
 			return nil, fmt.Errorf("body is required to save")
 		}
-		mtime, err := deps.Coord.WriteWiki(p.ChannelID, p.Path, *p.Body, p.BaseMtime)
+		mtime, err := deps.Coord.WriteWiki(p.ChannelID, p.Path, *p.Body, p.BaseMtime, "owner")
 		if err != nil {
 			return nil, err
 		}
@@ -101,28 +104,31 @@ func WikiHandler(deps Deps) http.HandlerFunc {
 			"sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads; frame-ancestors 'self'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
-		full, err := deps.Coord.WikiPath(channelID, rel)
+		if rel == "" || strings.HasSuffix(rel, "/") {
+			serveWikiIndex(w, r, deps, channelID, rel)
+			return
+		}
+		body, mtime, err := deps.Coord.ReadWikiBytes(channelID, rel)
+		if errors.Is(err, coord.ErrWikiNotFound) {
+			// A folder of pages, asked for without its slash.
+			if pages, lerr := deps.Coord.ListWiki(channelID); lerr == nil {
+				for _, p := range pages {
+					if strings.HasPrefix(p.Path, strings.Trim(rel, "/")+"/") {
+						http.Redirect(w, r, r.URL.Path+"/", http.StatusFound)
+						return
+					}
+				}
+			}
+			http.NotFound(w, r)
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		info, err := os.Stat(full)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		if info.IsDir() {
-			serveWikiIndex(w, r, deps, channelID, rel)
-			return
-		}
 		if coord.WikiFormat(rel) == "md" && r.URL.Query().Get("raw") == "" {
-			src, err := os.ReadFile(full)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
 			var out bytes.Buffer
-			if err := wikiMarkdown.Convert(src, &out); err != nil {
+			if err := wikiMarkdown.Convert(body, &out); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -133,10 +139,21 @@ func WikiHandler(deps Deps) http.HandlerFunc {
 			fmt.Fprint(w, `</article></body></html>`)
 			return
 		}
-		if coord.WikiFormat(rel) == "md" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		ctype := mime.TypeByExtension(path.Ext(rel))
+		switch coord.WikiFormat(rel) {
+		case "md", "txt", "csv":
+			ctype = "text/plain; charset=utf-8"
+		case "html":
+			ctype = "text/html; charset=utf-8"
+		case "json":
+			ctype = "application/json; charset=utf-8"
 		}
-		http.ServeFile(w, r, full)
+		if ctype == "" {
+			ctype = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", ctype)
+		modified, _ := time.Parse(time.RFC3339Nano, mtime)
+		http.ServeContent(w, r, path.Base(rel), modified, bytes.NewReader(body))
 	}
 }
 
@@ -193,4 +210,7 @@ pre{background:#111827;padding:12px 14px;border-radius:8px;overflow:auto}pre cod
 table{border-collapse:collapse;display:block;overflow:auto}th,td{border:1px solid #374151;padding:6px 10px}th{background:#111827}
 blockquote{margin:0;padding:0 1em;border-left:3px solid #4b5563;color:#9ca3af}img{max-width:100%%}
 small{color:#6b7280}li{margin:.3em 0}hr{border:0;border-top:1px solid #1f2937}
+@media (prefers-color-scheme:light){:root{color-scheme:light}body{background:#fff;color:#1f2937}
+h1,h2,h3{color:#111827}h2{border-color:#e5e7eb}a{color:#0369a1}code{background:#f3f4f6;color:#6d28d9}
+pre{background:#f9fafb}pre code{color:#1f2937}th,td{border-color:#d1d5db}th{background:#f3f4f6}hr{border-color:#e5e7eb}}
 </style></head><body><article>`

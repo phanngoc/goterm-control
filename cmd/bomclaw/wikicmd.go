@@ -9,20 +9,22 @@ import (
 	"strings"
 )
 
-// bomclaw wiki — a room's documents, from the command line. The same folder
-// the dashboard's Wiki panel shows and /wiki/<channel>/ hosts.
+// bomclaw wiki — a project's documents, from the command line. The same pages
+// the dashboard's Wiki panel shows and /wiki/<channel>/ hosts: rows in the
+// shared database, not files.
 
 func wikiUsage() {
 	fmt.Fprintln(os.Stderr, `usage: bomclaw wiki <command> --channel ID [flags]
 
   list  --channel ID                                   pages, newest first
   get   --channel ID --path P                          print one page
-  put   --channel ID --path P (--file F | --body B | -)  save a page (.md .html .txt .json .csv .svg)
+  put   --channel ID --path P (--file F | --body B | -)  save a page (.md .html .txt .json .csv .svg .png .jpg)
   rm    --channel ID --path P                          delete a page
-  dir   --channel ID                                   print the wiki folder
+  mv    --channel ID --path P --to Q                   rename a page
 
-A project's wiki is <project>/wiki/; a room without a folder keeps it in
-~/goterm-shared/wiki/<channel>/. Hosted at /wiki/<channel>/<page> on the dashboard.`)
+The wiki belongs to the project and is stored in the shared database (not in
+a folder): every agent and the dashboard see the same pages. Hosted at
+/wiki/<channel>/<page> on the dashboard.`)
 }
 
 func runWiki(args []string) {
@@ -37,6 +39,7 @@ func runWiki(args []string) {
 	page := fs.String("path", "", "Page path inside the wiki, e.g. design/gdd.md")
 	file := fs.String("file", "", "Read the page body from this file")
 	body := fs.String("body", "", "The page body")
+	to := fs.String("to", "", "New path, for mv")
 	fs.Parse(rest)
 	if *channel == "" {
 		wikiUsage()
@@ -95,7 +98,11 @@ func runWiki(args []string) {
 		default:
 			fail(fmt.Errorf("give the page with --file, --body or - (stdin)"))
 		}
-		if _, err := db.WriteWiki(*channel, *page, content, ""); err != nil {
+		by := os.Getenv("BOMCLAW_AGENT_ID")
+		if by == "" {
+			by = "cli"
+		}
+		if _, err := db.WriteWiki(*channel, *page, content, "", by); err != nil {
 			fail(err)
 		}
 		fmt.Printf("saved %s · /wiki/%s/%s\n", *page, *channel, strings.TrimPrefix(filepath.ToSlash(*page), "/"))
@@ -105,12 +112,15 @@ func runWiki(args []string) {
 			fail(err)
 		}
 		fmt.Println("deleted", *page)
-	case "dir", "path":
-		d, err := db.WikiDir(*channel)
-		if err != nil {
+	case "mv", "rename":
+		needPath()
+		if *to == "" {
+			fail(fmt.Errorf("--to is required"))
+		}
+		if err := db.RenameWiki(*channel, *page, *to); err != nil {
 			fail(err)
 		}
-		fmt.Println(d)
+		fmt.Println("renamed", *page, "→", *to)
 	default:
 		wikiUsage()
 		os.Exit(1)
