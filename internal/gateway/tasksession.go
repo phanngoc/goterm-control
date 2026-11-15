@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -94,25 +95,32 @@ func entriesFromTraces(db *coord.DB, taskID string, runs []coord.TaskRun) []coor
 		out = append(out, e)
 	}
 	for i, r := range runs {
-		add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogStatus, Label: "start",
-			Content: fmt.Sprintf("lượt %d · %s", i+1, r.AgentID), CreatedAt: r.StartedAt})
+		var spans []coord.Run
 		if r.TraceID != "" {
-			spans, err := db.GetTrace(r.TraceID)
-			if err == nil {
-				for _, s := range spans {
-					switch {
-					case s.Depth == 0 && s.Inputs != "":
-						add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogPrompt, Content: s.Inputs, CreatedAt: s.StartedAt})
-					case s.RunType == coord.RunTypeTool:
-						add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogTool, Label: s.Name, Content: s.Inputs, CreatedAt: s.StartedAt})
-					case s.RunType == coord.RunTypeLLM && s.Outputs != "":
-						at := s.EndedAt
-						if at.IsZero() {
-							at = s.StartedAt
-						}
-						add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogText, Content: s.Outputs, CreatedAt: at})
-					}
+			spans, _ = db.GetTrace(r.TraceID)
+		}
+		// The trace opens a moment before the run row is written; the divider
+		// goes above everything the run did, not between its first steps.
+		start := r.StartedAt
+		for _, s := range spans {
+			if !s.StartedAt.IsZero() && s.StartedAt.Before(start) {
+				start = s.StartedAt
+			}
+		}
+		add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogStatus, Label: "start",
+			Content: fmt.Sprintf("lượt %d · %s", i+1, r.AgentID), CreatedAt: start.Add(-time.Millisecond)})
+		for _, s := range spans {
+			switch {
+			case s.Depth == 0 && s.Inputs != "":
+				add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogPrompt, Content: s.Inputs, CreatedAt: s.StartedAt})
+			case s.RunType == coord.RunTypeTool:
+				add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogTool, Label: s.Name, Content: s.Inputs, CreatedAt: s.StartedAt})
+			case s.RunType == coord.RunTypeLLM && s.Outputs != "":
+				at := s.EndedAt
+				if at.IsZero() {
+					at = s.StartedAt
 				}
+				add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogText, Content: s.Outputs, CreatedAt: at})
 			}
 		}
 		if r.Liveness != coord.RunRunning {
