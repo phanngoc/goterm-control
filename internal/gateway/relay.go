@@ -67,6 +67,7 @@ var DetachedMethods = map[string]bool{
 	"tasks.unblock":  true,
 	"tasks.log":      true,
 	"tasks.followup": true,
+	"threads.log":    true,
 
 	"messages.list": true,
 	"messages.send": true,

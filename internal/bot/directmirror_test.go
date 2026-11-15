@@ -60,26 +60,31 @@ func runOne(t *testing.T, h *Handler, ctx context.Context, chatID int64, text st
 
 // What the owner says to the bot on Telegram, and what it answers, is the
 // owner's direct conversation with this agent — so it reads in the Direct
-// room on the dashboard too, as a record that summons nobody.
+// room on the dashboard too, as a record that summons nobody: the owner's
+// line at the top of the room, the answer in its thread, like any request.
 func TestAnOwnerTurnIsReflectedInTheDirectRoom(t *testing.T) {
 	h, cdb := mirrorHandler(t)
 	runOne(t, h, context.Background(), 5531591024, "list the files")
 
 	msgs := directLines(t, cdb)
-	var owner, agent bool
-	for _, m := range msgs {
-		switch {
-		case m.AuthorKind == coord.MemberUser && m.AuthorID == coord.OwnerUserID && m.Body == "list the files":
-			owner = true
-		case m.AuthorKind == coord.MemberAgent && m.AuthorID == "a1" && m.Body == "Hello done":
+	if len(msgs) != 1 || msgs[0].AuthorID != coord.OwnerUserID || msgs[0].Body != "list the files" {
+		t.Fatalf("top of the direct room = %+v, want only the owner's line", msgs)
+	}
+	if len(msgs[0].Mentions) != 0 {
+		t.Errorf("a mirrored line mentioned %v", msgs[0].Mentions)
+	}
+	thread, err := cdb.ThreadMessages(msgs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agent bool
+	for _, m := range thread {
+		if m.AuthorKind == coord.MemberAgent && m.AuthorID == "a1" && m.Body == "Hello done" && m.ThreadRoot == msgs[0].ID {
 			agent = true
 		}
-		if len(m.Mentions) != 0 {
-			t.Errorf("a mirrored line mentioned %v", m.Mentions)
-		}
 	}
-	if !owner || !agent {
-		t.Fatalf("direct room = %+v, want the owner's line and the reply", msgs)
+	if !agent {
+		t.Fatalf("thread = %+v, want the reply in the owner's line's thread", thread)
 	}
 	if unread, _ := cdb.UnreadMentions(coord.MemberAgent, "a1", 10); len(unread) != 0 {
 		t.Errorf("the mirror left %d mention(s) for the agent to answer again", len(unread))

@@ -254,6 +254,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleTaskLog(deps, params)
 		case "tasks.followup":
 			return handleTaskFollowUp(deps, params)
+		case "threads.log":
+			return handleThreadLog(deps, params)
 		case "messages.list":
 			return handleMessagesList(deps, params)
 		case "messages.send":

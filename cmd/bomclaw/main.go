@@ -653,6 +653,13 @@ func runGateway(args []string) {
 		// Dashboard messages run through the bot's turn engine, so both
 		// channels share one execution path: CLI tool loop, memory, trace.
 		deps.Turn = tgBot.Handler()
+		// One pipeline for every way into this agent: a Telegram line shows
+		// up in the owner's Direct room as a room turn — answer in its thread,
+		// progress, task, session log — the same as a line typed there or a
+		// mention in a project room (gateway/roomturn.go).
+		if coordDB != nil {
+			tgBot.Handler().SetRoomTurns(bot.RoomTurns(gateway.RoomTurnHook(deps)))
+		}
 	}
 
 	// Answering a mention is a chat turn, not a task: it needs the turn engine

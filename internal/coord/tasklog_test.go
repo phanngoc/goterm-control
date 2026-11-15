@@ -124,3 +124,23 @@ func TestFollowUpRefusedOnTaskNobodyRan(t *testing.T) {
 		t.Fatal("an empty follow-up was accepted")
 	}
 }
+
+// A writer that starts before its task exists keeps what it saw and writes it,
+// in order, the moment the task is named.
+func TestTaskLogWriterBindsLate(t *testing.T) {
+	db := testDB(t)
+	task, _ := db.CreateTask(NewTask{CreatedBy: "owner", Title: "x"})
+	w := NewTaskLogWriter(db, "", "", "bomclaw")
+	w.User("owner", "làm đi")
+	w.Tool("Bash(ls)", "")
+	if got, _ := db.TaskLog(task.ID, 0, 0); len(got) != 0 {
+		t.Fatalf("wrote before bind: %+v", got)
+	}
+	w.Bind(task.ID, "run1")
+	w.Text("xong")
+	w.Close()
+	got, _ := db.TaskLog(task.ID, 0, 0)
+	if len(got) != 3 || got[0].Kind != LogUser || got[0].AgentID != "owner" || got[1].Kind != LogTool || got[2].Kind != LogText || got[1].RunID != "run1" {
+		t.Fatalf("log: %+v", got)
+	}
+}

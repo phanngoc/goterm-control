@@ -33,6 +33,8 @@ type MessageStore interface {
 
 // Handler processes Telegram updates.
 type Handler struct {
+	// roomTurns tees an owner turn into their Direct room (directmirror.go).
+	roomTurns RoomTurns
 	bot        *tgbotapi.BotAPI
 	sessions   *session.Manager
 	llm        chat.Client // claude or codex CLI, chosen by cfg.Provider
@@ -711,7 +713,16 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		}
 	}
 	h.notifyTurn(sess, chatID, "started")
-	h.mirrorToDirect(ctx, chatID, true, userText)
+	// The owner's line, into their Direct room; the turn tees into a room
+	// turn there, so the room shows its progress, its task and its answer in
+	// the line's thread — the same as a line typed on the dashboard.
+	ownerLine := h.mirrorToDirect(ctx, chatID, true, userText, "")
+	var finishRoom func(string, error)
+	if ownerLine != nil && h.roomTurns != nil {
+		roomSink, finish := h.roomTurns(*ownerLine, sess.CurrentTrace)
+		streamer = chat.Tee(streamer, roomSink)
+		finishRoom = finish
+	}
 
 	// assistantText accumulates ALL turns (for storage); turnText resets per
 	// iteration so the auto-continue heuristic only inspects the latest turn.
@@ -959,7 +970,12 @@ func (h *Handler) runClaude(ctx context.Context, sess *session.Session, chatID i
 		}
 	}
 
-	h.mirrorToDirect(ctx, chatID, false, respText)
+	switch {
+	case finishRoom != nil:
+		finishRoom(respText, result.Error)
+	case ownerLine != nil:
+		h.mirrorToDirect(ctx, chatID, false, respText, ownerLine.ID)
+	}
 
 	// Label the session: instant fallback from the first user message, then
 	// an async rename to a summary of the whole conversation.

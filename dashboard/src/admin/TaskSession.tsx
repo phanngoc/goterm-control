@@ -318,6 +318,32 @@ function Entry({ e, followUp }: { e: TaskLogEntry; followUp?: FollowUp }) {
   }
 }
 
+/** A session as Claude Code prints it: the steps, the words, a live marker. */
+export function LogView({ entries, followUps = [], running, showThinking = true }: {
+  entries: TaskLogEntry[]; followUps?: FollowUp[]; running: boolean; showThinking?: boolean
+}) {
+  const byID = useMemo(() => new Map(followUps.map(f => [f.id, f])), [followUps])
+  const shown = useMemo(
+    () => rows(showThinking ? entries : entries.filter(e => e.kind !== 'thinking')),
+    [entries, showThinking],
+  )
+  const tools = entries.filter(e => e.kind === 'tool').length
+  return (
+    <>
+      {shown.map((r, i) => r.type === 'tools'
+        ? <ToolGroup key={`g${r.key}`} items={r.items} live={running && i === shown.length - 1} />
+        : <Entry key={r.e.id} e={r.e} followUp={r.e.kind === 'user' && r.e.run_id ? byID.get(r.e.run_id) : undefined} />)}
+      {running && (
+        <div className="flex items-center gap-1.5 text-[12px] text-amber-300/90 pt-1">
+          <span className="w-3 text-center animate-spin [animation-duration:2.5s]">✻</span>
+          <span>Đang làm…</span>
+          {tools > 0 && <span className="text-gray-600">· {tools} tool call</span>}
+        </div>
+      )}
+    </>
+  )
+}
+
 /** What the box at the bottom does, given where the task is. */
 function composerMode(task: Task, running: boolean): { label: string; hint: string; disabled?: boolean } {
   if (task.state === 'blocked' && task.blocked_on === 'human') {
@@ -411,17 +437,10 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
     if (el && stick.current) el.scrollTop = el.scrollHeight
   }, [entries, followUps])
 
-  const byID = useMemo(() => new Map(followUps.map(f => [f.id, f])), [followUps])
-  const shown = useMemo(
-    () => rows(showThinking ? entries : entries.filter(e => e.kind !== 'thinking')),
-    [entries, showThinking],
-  )
-  const lastTool = useMemo(() => [...entries].reverse().find(e => e.kind === 'tool'), [entries])
-
   const mode = composerMode(task, running)
   // A mention lives in its room thread: that is where it was asked and where
   // a reply reaches the agent. There is no separate session to type into.
-  const inThread = task.kind === 'mention' && !!threadRoot
+  const inThread = false && !!threadRoot
 
   const send = async (interrupt = false) => {
     const text = draft.trim()
@@ -471,16 +490,7 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
               : 'Chưa có gì được ghi lại cho task này.'}
           </div>
         )}
-        {shown.map((r, i) => r.type === 'tools'
-          ? <ToolGroup key={`g${r.key}`} items={r.items} live={running && i === shown.length - 1} />
-          : <Entry key={r.e.id} e={r.e} followUp={r.e.kind === 'user' && r.e.run_id ? byID.get(r.e.run_id) : undefined} />)}
-        {running && (
-          <div className="flex items-center gap-1.5 text-[12px] text-amber-300/90 pt-1">
-            <span className="w-3 text-center animate-spin [animation-duration:2.5s]">✻</span>
-            <span>Đang làm…</span>
-            {lastTool && <span className="text-gray-600">· {entries.filter(e => e.kind === 'tool').length} tool call</span>}
-          </div>
-        )}
+        <LogView entries={entries} followUps={followUps} running={running} showThinking={showThinking} />
       </div>
 
       <div className="border-t border-gray-800 p-3">
@@ -534,6 +544,157 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
             </div>
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+// The session behind a conversation thread — a mention in a project room, a
+// line in a Direct room, a message to the agent's Telegram bot. Each turn the
+// agent took there that turned into work is a task with its own log; this is
+// all of them as one session, oldest first, with a box to keep talking.
+//
+// The box posts into the thread, addressed to the agent: that is how a thread
+// is continued, and the next turn — same session — answers it. While a turn
+// is running, "■ Dừng & chỉ hướng" stops it so the line is answered now.
+export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
+  call: Call; rootID: string; channelID: string; agent: string; onPosted?: () => void
+}) {
+  const [entries, setEntries] = useState<TaskLogEntry[]>([])
+  const [running, setRunning] = useState('')
+  const [turns, setTurns] = useState(0)
+  const [loaded, setLoaded] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [showThinking, setShowThinking] = useState(true)
+  const scroller = useRef<HTMLDivElement>(null)
+  const stick = useRef(true)
+  const lastID = useRef(0)
+
+  useEffect(() => {
+    setEntries([]); setLoaded(false); setErr(null); lastID.current = 0; stick.current = true
+  }, [rootID])
+
+  const load = useCallback(async () => {
+    try {
+      const after = lastID.current
+      const s: { entries: TaskLogEntry[]; tasks: Task[]; running?: string } =
+        await call('threads.log', { root_id: rootID, after })
+      const fresh = s.entries ?? []
+      if (after === 0) setEntries(fresh)
+      else if (fresh.length) setEntries(prev => [...prev, ...fresh])
+      for (const e of fresh) if (e.id > lastID.current) lastID.current = e.id
+      setRunning(s.running ?? '')
+      setTurns((s.tasks ?? []).length)
+      setLoaded(true)
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    }
+  }, [call, rootID])
+
+  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const t = setInterval(() => { void load() }, running ? 1500 : 4000)
+    return () => clearInterval(t)
+  }, [running, load])
+  useEffect(() => {
+    const el = scroller.current
+    if (el && stick.current) el.scrollTop = el.scrollHeight
+  }, [entries])
+
+  const send = async (interrupt = false) => {
+    const text = draft.trim()
+    if (!text || sending) return
+    setSending(true)
+    setErr(null)
+    try {
+      if (interrupt && running) {
+        await call('tasks.followup', { id: running, message: text, interrupt: true })
+      } else {
+        await call('channels.post', { channel_id: channelID, thread_root: rootID, body: text, notify: [agent] })
+      }
+      setDraft('')
+      stick.current = true
+      onPosted?.()
+      await load()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="px-4 py-2 border-b border-gray-800 flex items-center gap-2 text-xs">
+        <span className="font-medium text-gray-200">Phiên của agent</span>
+        {running
+          ? <span className="flex items-center gap-1 text-amber-300"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />đang chạy</span>
+          : <span className="text-gray-600">{turns ? `${turns} lượt làm việc` : 'chưa có lượt làm việc'}</span>}
+        <label className="ml-auto flex items-center gap-1 text-gray-500 cursor-pointer select-none">
+          <input type="checkbox" checked={showThinking} onChange={e => setShowThinking(e.target.checked)} className="accent-sky-500" />
+          suy nghĩ
+        </label>
+      </div>
+      <div
+        ref={scroller}
+        onScroll={e => {
+          const el = e.currentTarget
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+        }}
+        className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-1.5"
+      >
+        {!loaded && !err && <div className="text-sm text-gray-500">Đang tải phiên…</div>}
+        {loaded && entries.length === 0 && (
+          <div className="text-sm text-gray-500 py-8 text-center leading-relaxed">
+            Chưa có lượt nào thành việc dài trong thread này.<br />
+            Câu trả lời ngắn nằm ở tab <b>Thảo luận</b>; khi agent bắt đầu gọi tool, từng bước hiện ở đây.
+          </div>
+        )}
+        <LogView entries={entries} running={!!running} showThinking={showThinking} />
+      </div>
+      <div className="border-t border-gray-800 p-3">
+        {err && <div className="mb-2 text-xs text-red-300 bg-red-500/10 ring-1 ring-red-500/30 rounded p-2">{err}</div>}
+        <div className="rounded-lg ring-1 bg-gray-900 ring-gray-700 focus-within:ring-sky-500/60">
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                void send(false)
+              }
+            }}
+            disabled={sending}
+            rows={2}
+            placeholder={`Nhắn ${agent} trong thread này…  (Enter gửi · Shift+Enter xuống dòng)`}
+            className="w-full bg-transparent px-3 pt-2 text-sm text-gray-100 placeholder-gray-600 outline-none resize-none max-h-48"
+          />
+          <div className="flex items-center gap-2 px-2 pb-2">
+            <span className="text-[11px] text-gray-500 leading-snug flex-1">
+              {running
+                ? 'Enter: xếp hàng — agent trả lời ngay khi lượt này xong · ■ Dừng & chỉ hướng: cắt lượt này, trả lời tin của bạn ngay.'
+                : 'Tin vào thread, gửi cho agent — lượt sau tiếp tục cùng phiên.'}
+            </span>
+            {running && (
+              <button
+                onClick={() => send(true)}
+                disabled={sending || !draft.trim()}
+                className="shrink-0 px-3 py-1.5 text-xs rounded-md ring-1 ring-amber-500/50 bg-amber-500/10 text-amber-200 font-medium hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ■ Dừng & chỉ hướng
+              </button>
+            )}
+            <button
+              onClick={() => send(false)}
+              disabled={sending || !draft.trim()}
+              className="shrink-0 px-3 py-1.5 text-xs rounded-md bg-sky-500 text-white font-medium hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {sending ? 'Đang gửi…' : running ? 'Xếp hàng' : 'Gửi'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

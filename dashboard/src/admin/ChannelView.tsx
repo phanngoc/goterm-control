@@ -12,7 +12,7 @@ import ProgressCard, { ProgressSummary, isProgressLine, parseProgress } from './
 
 import { ago, clock } from './format'
 import { AgentAvatar, AgentName, agentLook } from './AgentAvatar'
-import TaskSession from './TaskSession'
+import TaskSession, { ThreadSession } from './TaskSession'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -88,6 +88,9 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   // other tab.
   const [threadTab, setThreadTab] = useState<'session' | 'talk'>('session')
   const [threadTask, setThreadTask] = useState<Task | null>(null)
+  // "Giao việc": the line is sent as a task for the chosen agent rather than
+  // a message — a job that runs as long as it needs, with its own card.
+  const [asTask, setAsTask] = useState(false)
   // What this conversation has produced. A path named in prose is findable for
   // about a day; these are findable by id and survive the file moving.
   const [files, setFiles] = useState<Artifact[]>([])
@@ -311,6 +314,27 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
     if (inThread && !threadRoot) return false
     sending.current = true
     try {
+      if (asTask && !inThread) {
+        // A job, not a question: it goes on the board, the agent claims it,
+        // and its card — title first, live session in its thread — appears
+        // here the moment it starts.
+        const title = typed.split('\n')[0].slice(0, 120) || 'Việc mới'
+        const task: Task = await call('tasks.create', { title, body: text, assigned_to: to, channel_id: active })
+        // Its card goes up now, not when an agent gets round to it: a job that
+        // vanishes until claimed looks like a job that was never sent. The
+        // card is the task's thread — the run reports there, and its session
+        // plays back from it. No mention, so it summons nobody by itself.
+        await call('channels.post', {
+          channel_id: active, task_id: task.id,
+          body: `📋 giao việc cho ${to}: \`${task.id.slice(0, 10)}\`\n${title}`,
+        })
+        setBody('')
+        setAsTask(false)
+        await loadTasks(active)
+        await loadMessages(active)
+        atBottom.current = true
+        return true
+      }
       const posted: ChannelMessage = await call('channels.post', {
         channel_id: active, body: text, notify: [to],
         ...(inThread ? { thread_root: threadRoot } : {}),
@@ -319,7 +343,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       await loadMessages(active)
       if (inThread) {
         await loadThread(threadRoot)
-      } else if (posted?.mentions?.length && !isOwnDirect(active)) {
+      } else if (posted?.mentions?.length) {
         // Naming an agent is asking it something, and its answer goes into this
         // message's thread. Open that thread now so the reply arrives in view
         // instead of behind a click nobody knew to make.
@@ -533,7 +557,8 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
         <Composer
           value={body} onChange={setBody} onSend={files => post(false, files)}
           to={to} setTo={setTo} agents={agents}
-          placeholder="Message the channel"
+          asTask={asTask} setAsTask={setAsTask}
+          placeholder={asTask ? `Mô tả việc giao cho ${to || 'agent'} — dòng đầu là tiêu đề` : isOwnDirect(active) ? `Nhắn ${to || 'agent'}` : 'Nhắn cả phòng'}
         />
       </div>
 
@@ -573,10 +598,16 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       {/* Thread */}
       {thread && !tool && (() => {
         const rootTask = thread[0]?.task_id ? (threadTask ?? tasks[thread[0].task_id]) : undefined
-        const hasSession = !!rootTask && rootTask.kind !== 'mention'
+        // A thread bound to a task plays that task's session; any other
+        // thread an agent answers in — a mention, a direct line, a Telegram
+        // turn — plays the session of the turns taken there.
+        const runnerTask = !!rootTask && rootTask.kind !== 'mention'
+        const threadAgent = [...thread].reverse().find(m => m.author_kind === 'agent')?.author_id
+          || (isOwnDirect(active) ? current?.members?.find(m => m.kind === 'agent')?.id : '') || to
+        const hasSession = runnerTask || !!threadAgent
         const tab = hasSession ? threadTab : 'talk'
         return (
-        <aside className={`${hasSession ? 'w-[min(640px,48vw)]' : 'w-96'} shrink-0 border-l border-gray-800 bg-gray-900/30 flex flex-col min-h-0`}>
+        <aside className={`${hasSession ? 'w-[min(600px,46vw)]' : 'w-96'} shrink-0 border-l border-gray-800 bg-gray-900/30 flex flex-col min-h-0`}>
           <header className="px-3 py-2 border-b border-gray-800">
             <div className="flex items-start gap-2">
               {rootTask ? (
@@ -601,7 +632,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             </div>
             {hasSession && (
               <div className="mt-2 flex gap-1 text-xs">
-                {([['session', 'Agent đang làm'], ['talk', `Thảo luận${thread.length > 1 ? ` · ${thread.length - 1}` : ''}`]] as const).map(([k, label]) => (
+                {([['session', runnerTask ? 'Agent đang làm' : 'Phiên agent'], ['talk', `Thảo luận${thread.length > 1 ? ` · ${thread.length - 1}` : ''}`]] as const).map(([k, label]) => (
                   <button key={k} onClick={() => setThreadTab(k)}
                     className={`px-2.5 py-1 rounded-md ${tab === k ? 'bg-gray-800 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
                     {label}
@@ -610,11 +641,18 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               </div>
             )}
           </header>
-          {tab === 'session' && rootTask ? (
+          {tab === 'session' && runnerTask ? (
             <div className="flex-1 min-h-0 flex flex-col">
               <TaskSession
-                call={call} task={rootTask}
+                call={call} task={rootTask!}
                 onChanged={() => { if (threadRoot) loadThread(threadRoot); loadTasks(active) }}
+              />
+            </div>
+          ) : tab === 'session' ? (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <ThreadSession
+                call={call} rootID={threadRoot} channelID={active} agent={threadAgent!}
+                onPosted={() => { if (threadRoot) loadThread(threadRoot) }}
               />
             </div>
           ) : (<>
@@ -974,9 +1012,11 @@ function Line({ m, selfID, compact, task, active, onThread, onOpenTask }: {
   )
 }
 
-function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
+function Composer({ value, onChange, onSend, to, setTo, agents, placeholder, asTask, setAsTask }: {
   value: string; onChange: (s: string) => void; onSend: (files: string[]) => Promise<boolean>
   to: string; setTo: (s: string) => void; agents: string[]; placeholder: string
+  /** When given, a "Giao việc" switch: send the line as a task, not a message. */
+  asTask?: boolean; setAsTask?: (v: boolean) => void
 }) {
   // Pictures dropped or pasted here wait as chips until the line is sent. A
   // file still uploading holds the send back rather than going without it.
@@ -994,11 +1034,11 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
         hasFiles={att.paths.length > 0}
         attachments={<AttachmentChips items={att.items} onRemove={att.remove} />}
         placeholder={`${placeholder}…`}
-        tools={
-          /* Who you are talking to. The author is always you — a person at a
+        tools={<>
+          {/* Who you are talking to. The author is always you — a person at a
              browser is a person — so the only choice here is which agent the
              line is addressed at. Picking one rings its doorbell without
-             making anyone type the name a second time. */
+             making anyone type the name a second time. */}
           <select
             value={to}
             onChange={e => setTo(e.target.value)}
@@ -1008,7 +1048,20 @@ function Composer({ value, onChange, onSend, to, setTo, agents, placeholder }: {
             {agents.length === 0 && <option value="">no agent</option>}
             {agents.map(a => <option key={a} value={a}>to: {a}</option>)}
           </select>
-        }
+          {setAsTask && (
+            <button
+              type="button"
+              onClick={() => setAsTask(!asTask)}
+              aria-pressed={!!asTask}
+              title="Gửi thành task: agent nhận và làm như một việc (chạy lâu, có thẻ, có phiên để xem và chỉ hướng) thay vì trả lời một câu"
+              className={`ml-1.5 h-7 shrink-0 rounded-full px-2.5 text-xs ring-1 ${asTask
+                ? 'bg-fuchsia-500/20 text-fuchsia-200 ring-fuchsia-400/60'
+                : 'text-gray-400 ring-gray-700 hover:text-fuchsia-300 hover:ring-fuchsia-500/40'}`}
+            >
+              📋 Giao việc
+            </button>
+          )}
+        </>}
       />
     </div>
   )

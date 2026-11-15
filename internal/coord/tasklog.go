@@ -99,12 +99,12 @@ type TaskLogEntry struct {
 
 // FollowUp is a line the owner typed into a task's session.
 type FollowUp struct {
-	ID        string    `json:"id"`
-	TaskID    string    `json:"task_id"`
-	Author    string    `json:"author"`
-	Body      string    `json:"body"`
-	State     string    `json:"state"`
-	AgentID   string    `json:"agent_id,omitempty"`
+	ID      string `json:"id"`
+	TaskID  string `json:"task_id"`
+	Author  string `json:"author"`
+	Body    string `json:"body"`
+	State   string `json:"state"`
+	AgentID string `json:"agent_id,omitempty"`
 	// Mode is how it reaches a task that is running: "queue" waits for the
 	// run to end; "interrupt" stops it, and the run that follows — same
 	// agent, same CLI session — starts from this line. Claude Code's
@@ -356,5 +356,72 @@ func (db *DB) SetTaskSessionRef(taskID string, ref SessionRef) error {
 		return nil // nothing to resume; keep whatever was there
 	}
 	_, err := db.conn.Exec(`UPDATE tasks SET session_ref = ? WHERE id = ?`, ref.String(), taskID)
+	return err
+}
+
+// ThreadTaskIDs is every task that is a turn answered in this thread: one per
+// mention (or direct line) that turned into work, plus the task the thread
+// was opened for, if any. Oldest first.
+func (db *DB) ThreadTaskIDs(rootID string) ([]string, error) {
+	rows, err := db.conn.Query(`SELECT id FROM tasks
+		WHERE context_id IN (SELECT 'mention_' || id FROM channel_messages WHERE id = ? OR thread_root = ?)
+		   OR id = (SELECT task_id FROM channel_messages WHERE id = ? AND task_id != '')
+		ORDER BY created_at`, rootID, rootID, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("thread tasks %s: %w", rootID, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// TaskLogOf is the session log of several tasks interleaved, after the entry
+// afterID. Entry ids are global, so their order is the order things happened.
+func (db *DB) TaskLogOf(taskIDs []string, afterID int64, limit int) ([]TaskLogEntry, error) {
+	if len(taskIDs) == 0 {
+		return []TaskLogEntry{}, nil
+	}
+	if limit <= 0 || limit > 2000 {
+		limit = 1000
+	}
+	args := make([]any, 0, len(taskIDs)+2)
+	for _, id := range taskIDs {
+		args = append(args, id)
+	}
+	args = append(args, afterID, limit)
+	rows, err := db.conn.Query(`SELECT id, task_id, run_id, agent_id, kind, label, content, created_at
+		FROM task_log WHERE task_id IN (`+placeholders(len(taskIDs))+`) AND id > ? ORDER BY id LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("thread log: %w", err)
+	}
+	defer rows.Close()
+	out := []TaskLogEntry{}
+	for rows.Next() {
+		var e TaskLogEntry
+		var created string
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.RunID, &e.AgentID, &e.Kind, &e.Label, &e.Content, &created); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = parseTS(created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// AddInterrupt asks the turn running a room task to stop, without writing a
+// line to its log: the owner's words go into the thread as a message of their
+// own, and that message is what the next turn answers.
+func (db *DB) AddInterrupt(taskID, author, body string) error {
+	now := time.Now()
+	_, err := db.conn.Exec(`INSERT INTO task_followups (id, task_id, author, body, state, mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "fu_"+uuid.NewString()[:13], taskID, author, strings.TrimSpace(body),
+		FollowUpQueued, FollowUpInterrupt, ts(now), ts(now))
 	return err
 }
