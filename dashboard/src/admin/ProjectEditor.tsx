@@ -89,7 +89,7 @@ const narrow = () => window.innerWidth < 768
 // Agents write in this folder while it is open. A save therefore carries the
 // mtime the file was opened at and is refused if the file moved on since; the
 // person then picks between the version on disk and their own.
-export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine, initialPreview }: {
+export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine, initialPreview, initialAgent }: {
   call: Call; channelID: string; root: string; onClose: () => void
   /** standalone is the editor as its own page, /files/<channel>/<path>: it
    *  keeps the address bar pointing at the open file and line. */
@@ -99,6 +99,9 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   initialLine?: number
   /** initialPreview opens the Preview panel on arrival (?preview=1). */
   initialPreview?: boolean
+  /** initialAgent opens the agent column on arrival (?agent=1): the room
+   *  header's "Code" button lands a reviewer on code, app and agent at once. */
+  initialAgent?: boolean
 }) {
   const [dirs, setDirs] = useState<Record<string, Entry[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
@@ -172,6 +175,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
 
   // ?preview=1 is a request to see the project running, whatever was left last time.
   useEffect(() => { if (initialPreview) setPreviewOpen(true) }, [initialPreview]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialAgent) setAgentOpen(true) }, [initialAgent]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A link to a file opens it, with the tree unfolded down to it so you can see
   // where it sits. Once only: the link is where you arrived, not where you are.

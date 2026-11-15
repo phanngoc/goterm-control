@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -30,6 +31,10 @@ type ProdStatus struct {
 	// until a deploy attaches it.
 	WantDomain string    `json:"want_domain,omitempty"`
 	Database   *DBStatus `json:"database,omitempty"`
+	// Account is whose account it runs in and on which plan; Services are the
+	// provider's products the project is built on (see account.go).
+	Account  *Account `json:"account,omitempty"`
+	Services []string `json:"services,omitempty"`
 }
 
 // DBStatus is one environment's database.
@@ -106,34 +111,54 @@ func Prod(ctx context.Context, c *Client, r Resolved) ProdStatus {
 		st.Error = ErrNoCreds.Error()
 		return st
 	}
-	dep, err := c.LatestDeployment(ctx, r.Name)
-	if err != nil {
-		st.Error = err.Error()
+	// The questions are independent, so they are asked at once: one after
+	// another they took over four seconds, and the room header waits on this.
+	var (
+		wg      sync.WaitGroup
+		dep     *Deployment
+		depErr  error
+		sub     string
+		hosts   []string
+		hostErr error
+		db      *DBStatus
+	)
+	wg.Add(3)
+	go func() { defer wg.Done(); dep, depErr = c.LatestDeployment(ctx, r.Name) }()
+	go func() { defer wg.Done(); sub, _ = c.Subdomain(ctx) }()
+	go func() { defer wg.Done(); hosts, hostErr = c.Domains(ctx, r.Name) }()
+	if r.Database != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db = &DBStatus{Engine: "d1", Name: r.DBName}
+			if d, err := c.FindD1(ctx, r.DBName); err != nil {
+				db.Error = err.Error()
+			} else if d != nil {
+				db.Exists, db.Bytes, db.Tables = true, d.FileSize, d.NumTables
+			}
+		}()
+	}
+	wg.Wait()
+
+	if depErr != nil {
+		st.Error = depErr.Error()
 		return st
 	}
 	if dep != nil {
 		st.Deployed = true
 		st.DeployedAt = dep.CreatedOn.Format(time.RFC3339)
-		if sub, err := c.Subdomain(ctx); err == nil && sub != "" {
+		if sub != "" {
 			st.WorkersDev = fmt.Sprintf("https://%s.%s.workers.dev", r.Name, sub)
 			st.URL = st.WorkersDev
 		}
-		if hosts, err := c.Domains(ctx, r.Name); err == nil {
+		if hostErr == nil {
 			st.Domains = hosts
 			if len(hosts) > 0 {
 				st.URL = "https://" + hosts[0]
 			}
 		}
 	}
-	if r.Database != nil {
-		db := &DBStatus{Engine: "d1", Name: r.DBName}
-		if d, err := c.FindD1(ctx, r.DBName); err != nil {
-			db.Error = err.Error()
-		} else if d != nil {
-			db.Exists, db.Bytes, db.Tables = true, d.FileSize, d.NumTables
-		}
-		st.Database = db
-	}
+	st.Database = db
 	return st
 }
 

@@ -47,6 +47,12 @@ func TestARoomShowsItsDevAndProdEnvironments(t *testing.T) {
 	if st.Declared || st.Error != "" || st.Dev.Preview == nil {
 		t.Fatalf("undeclared = %+v", st)
 	}
+	// Before PROD is declared the room still says where it would go and
+	// whether that is connected: the header leads with it.
+	if st.Prod.Provider != "cloudflare" || st.Prod.Title != "Cloudflare" || st.Prod.Connected ||
+		!strings.Contains(st.Prod.Error, "CLOUDFLARE_API_TOKEN") {
+		t.Errorf("undeclared prod = %+v", st.Prod)
+	}
 
 	if err := deploy.Write(c.Workspace, &deploy.Spec{Target: "cloudflare", Static: "dist", Domain: "phim.bomclaw.org"}); err != nil {
 		t.Fatal(err)

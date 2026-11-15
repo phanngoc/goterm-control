@@ -108,6 +108,10 @@ func (m *EnvManager) Status(ctx context.Context, channelID string) EnvStatus {
 	}
 	st.Deploy = m.jobView(channelID)
 	if spec == nil {
+		// Not declared yet — but whether the infrastructure is connected is
+		// a fact about the account, not the project, and it is the first
+		// thing the room header shows.
+		st.Prod = m.accountOnly(ctx, deploy.DefaultTarget)
 		return st
 	}
 	st.Declared, st.Spec = true, spec
@@ -122,6 +126,27 @@ func (m *EnvManager) Status(ctx context.Context, channelID string) EnvStatus {
 		return st
 	}
 	st.Prod = prov.Status(ctx, r)
+	return st
+}
+
+// accountOnly is PROD before a project declares it: which provider it would
+// go to, whether that provider is connected, and the account it reaches.
+func (m *EnvManager) accountOnly(ctx context.Context, target string) deploy.ProdStatus {
+	prov, err := m.Provider(target)
+	if err != nil {
+		return deploy.ProdStatus{}
+	}
+	ok, hint := prov.Connected()
+	st := deploy.ProdStatus{Provider: prov.Name(), Title: prov.Title(), Connected: ok}
+	if !ok {
+		st.Error = hint
+		return st
+	}
+	if ar, isReader := prov.(deploy.AccountReader); isReader {
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		st.Account = ar.Account(ctx)
+	}
 	return st
 }
 

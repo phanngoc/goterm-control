@@ -28,7 +28,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
   // above: one address per room, so a room can be linked and reloaded.
   const [adminChannel, setAdminChannel] = useState<string>('')
   // The editor on a page of its own: /files/<channel>/<path>#L<line>.
-  const [filesRoute, setFilesRoute] = useState<{ channelId: string; filePath?: string; line?: number; preview?: boolean } | null>(null)
+  const [filesRoute, setFilesRoute] = useState<{ channelId: string; filePath?: string; line?: number; preview?: boolean; agent?: boolean } | null>(null)
   const [filesRoot, setFilesRoot] = useState('')
 
   // Sync URL → state, on load and whenever the browser navigates. The popstate
@@ -44,6 +44,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         setFilesRoute({
           channelId: r.channelId!, filePath: r.filePath, line: lineFromHash(location.hash),
           preview: new URLSearchParams(location.search).has('preview'),
+          agent: new URLSearchParams(location.search).has('agent'),
         })
         return
       }
@@ -121,7 +122,7 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
         <ProjectEditor
           key={filesRoute.channelId}
           call={call} channelID={filesRoute.channelId} root={filesRoot}
-          standalone initialFile={filesRoute.filePath} initialLine={filesRoute.line} initialPreview={filesRoute.preview}
+          standalone initialFile={filesRoute.filePath} initialLine={filesRoute.line} initialPreview={filesRoute.preview} initialAgent={filesRoute.agent}
           onClose={() => {
             setAdminChannel(filesRoute.channelId)
             setAdminPane('messages')

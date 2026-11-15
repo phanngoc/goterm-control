@@ -102,8 +102,15 @@ func (d *Cloudflare) Connected() (bool, string) {
 
 // Status asks Cloudflare what is live.
 func (d *Cloudflare) Status(ctx context.Context, r Resolved) ProdStatus {
+	// The account lookup runs beside the status questions, not after them.
+	acc := make(chan *Account, 1)
+	go func() { acc <- d.Account(ctx) }()
 	st := Prod(ctx, d.Client, r)
 	st.Provider, st.Title = d.Name(), d.Title()
+	st.Services = cloudflareServices(r)
+	if a := <-acc; st.Connected {
+		st.Account = a
+	}
 	return st
 }
 

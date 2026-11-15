@@ -204,6 +204,13 @@ func fakeCloudflare(t *testing.T) (*Client, *[]string) {
 		case strings.HasSuffix(r.URL.Path, "/workers/scripts/nothing/deployments"):
 			w.WriteHeader(404)
 			io.WriteString(w, `{"success":false,"errors":[{"code":10007,"message":"not found"}]}`)
+		case r.Method == "GET" && r.URL.Path == "/accounts/acct":
+			ok(map[string]string{"name": "Ngoc's Account", "type": "standard"})
+		case r.Method == "GET" && r.URL.Path == "/accounts/acct/subscriptions":
+			ok([]map[string]any{
+				{"rate_plan": map[string]string{"id": "pro", "public_name": "Pro Plan"}, "state": "Paid"},
+				{"rate_plan": map[string]string{"id": "workers_paid", "public_name": "Workers Paid"}, "state": "Paid"},
+			})
 		case strings.HasSuffix(r.URL.Path, "/workers/subdomain"):
 			ok(map[string]string{"subdomain": "ngocp"})
 		case strings.HasSuffix(r.URL.Path, "/workers/domains"):
@@ -324,5 +331,39 @@ func TestD1StatusIsReadFromTheDatabaseNotTheLaggingListing(t *testing.T) {
 	d, err := c.FindD1(context.Background(), "phim-db")
 	if err != nil || d == nil || d.NumTables != 2 || d.FileSize != 20480 {
 		t.Errorf("d1 = %+v, %v", d, err)
+	}
+}
+
+// The header says whose account a project runs in, on which plan, and which
+// services it is built on — read from Cloudflare, not assumed.
+func TestStatusNamesTheAccountPlanAndServices(t *testing.T) {
+	c, _ := fakeCloudflare(t)
+	r := project(t, `{"name":"phim","static":"dist","domain":"phim.bomclaw.org","database":{"file":"app.db","name":"phim-db"}}`)
+	st := (&Cloudflare{Client: c}).Status(context.Background(), r)
+	if st.Account == nil || st.Account.Name != "Ngoc's Account" || st.Account.Plan != "Workers Paid" {
+		t.Errorf("account = %+v", st.Account)
+	}
+	want := []string{"Workers", "Static Assets", "D1", "Custom Domain"}
+	if strings.Join(st.Services, ",") != strings.Join(want, ",") {
+		t.Errorf("services = %v, want %v", st.Services, want)
+	}
+}
+
+// A token that may not read billing leaves the plan unknown rather than
+// calling the account free.
+func TestAnUnreadablePlanIsLeftEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/accounts/acct" {
+			io.WriteString(w, `{"success":true,"result":{"name":"Acct","type":"standard"}}`)
+			return
+		}
+		w.WriteHeader(403)
+		io.WriteString(w, `{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}`)
+	}))
+	defer srv.Close()
+	c := NewClient(Creds{Token: "tok", AccountID: "acct"})
+	c.Base = srv.URL
+	if acc := c.AccountInfo(context.Background()); acc.Name != "Acct" || acc.Plan != "" {
+		t.Errorf("account = %+v", acc)
 	}
 }
