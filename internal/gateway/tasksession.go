@@ -1,0 +1,194 @@
+package gateway
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/ngocp/goterm-control/internal/coord"
+)
+
+// A task's session on the board: read it as it streams, and talk into it.
+// See coord/tasklog.go for where the lines come from and where they go.
+
+type taskLogParams struct {
+	ID    string `json:"id"`
+	After int64  `json:"after,omitempty"` // last entry id the caller already has
+}
+
+// TaskSession is one poll of a task's session.
+type TaskSession struct {
+	Entries   []coord.TaskLogEntry `json:"entries"`
+	FollowUps []coord.FollowUp     `json:"followups"`
+	// Running is true while a run or a follow-up turn is open on any agent —
+	// read from the shared rows, so the board knows for peers too.
+	Running bool `json:"running"`
+	// Legacy is set when the entries were rebuilt from traces: runs from
+	// before the log existed, which recorded tool calls and the final reply
+	// but not the words in between.
+	Legacy bool `json:"legacy,omitempty"`
+}
+
+func handleTaskLog(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p taskLogParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	entries, err := deps.Coord.TaskLog(p.ID, p.After, 1000)
+	if err != nil {
+		return nil, err
+	}
+	followUps, err := deps.Coord.FollowUps(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := deps.Coord.TaskRuns(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := TaskSession{Entries: entries, FollowUps: followUps}
+	for _, r := range runs {
+		if r.Liveness == coord.RunRunning {
+			out.Running = true
+		}
+	}
+	for _, f := range followUps {
+		if f.State == coord.FollowUpRunning {
+			out.Running = true
+		}
+	}
+	// Nothing logged at all, on a first read: the task ran before the log
+	// existed, or on a binary without it. Its traces still say what it did.
+	if p.After == 0 && !hasRunEntries(entries) && len(runs) > 0 {
+		if rebuilt := entriesFromTraces(deps.Coord, p.ID, runs); len(rebuilt) > 0 {
+			out.Entries = mergeByTime(rebuilt, entries)
+			out.Legacy = true
+		}
+	}
+	return json.Marshal(out)
+}
+
+// hasRunEntries: anything beyond the owner's own lines.
+func hasRunEntries(es []coord.TaskLogEntry) bool {
+	for _, e := range es {
+		if e.Kind != coord.LogUser {
+			return true
+		}
+	}
+	return false
+}
+
+// entriesFromTraces rebuilds a session from the trace spans of each run. The
+// ids are negative so a poller's "after" cursor never skips a real entry.
+func entriesFromTraces(db *coord.DB, taskID string, runs []coord.TaskRun) []coord.TaskLogEntry {
+	var out []coord.TaskLogEntry
+	var id int64
+	add := func(e coord.TaskLogEntry) {
+		id--
+		e.ID, e.TaskID = id, taskID
+		out = append(out, e)
+	}
+	for i, r := range runs {
+		add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogStatus, Label: "start",
+			Content: fmt.Sprintf("lượt %d · %s", i+1, r.AgentID), CreatedAt: r.StartedAt})
+		if r.TraceID != "" {
+			spans, err := db.GetTrace(r.TraceID)
+			if err == nil {
+				for _, s := range spans {
+					switch {
+					case s.Depth == 0 && s.Inputs != "":
+						add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogPrompt, Content: s.Inputs, CreatedAt: s.StartedAt})
+					case s.RunType == coord.RunTypeTool:
+						add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogTool, Label: s.Name, Content: s.Inputs, CreatedAt: s.StartedAt})
+					case s.RunType == coord.RunTypeLLM && s.Outputs != "":
+						at := s.EndedAt
+						if at.IsZero() {
+							at = s.StartedAt
+						}
+						add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogText, Content: s.Outputs, CreatedAt: at})
+					}
+				}
+			}
+		}
+		if r.Liveness != coord.RunRunning {
+			at := r.EndedAt
+			if at.IsZero() {
+				at = r.StartedAt
+			}
+			add(coord.TaskLogEntry{RunID: r.ID, AgentID: r.AgentID, Kind: coord.LogStatus, Label: "end:" + r.Liveness, Content: r.Note, CreatedAt: at})
+		}
+	}
+	// A tool span ends the moment it starts, so its LLM parent — which ends
+	// last — sorts after them: the reply lands under the tools it followed.
+	return mergeByTime(out, nil)
+}
+
+// mergeByTime interleaves two lists by time, stable within each.
+func mergeByTime(a, b []coord.TaskLogEntry) []coord.TaskLogEntry {
+	all := append(append([]coord.TaskLogEntry{}, a...), b...)
+	// insertion sort: these lists are short, and stability matters
+	for i := 1; i < len(all); i++ {
+		for j := i; j > 0 && all[j].CreatedAt.Before(all[j-1].CreatedAt); j-- {
+			all[j], all[j-1] = all[j-1], all[j]
+		}
+	}
+	return all
+}
+
+type taskFollowUpParams struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+}
+
+// handleTaskFollowUp is the owner typing into a task's session.
+//
+// A task waiting on a person is answered by it: the same as the "send &
+// unblock" box, so there is one place to type. Anything else is queued for
+// whoever will read it next — the next run, or the agent that finished it —
+// and that agent is rung so it does not wait out its poll.
+func handleTaskFollowUp(deps Deps, params json.RawMessage) (json.RawMessage, error) {
+	if deps.Coord == nil {
+		return nil, errNoCoord()
+	}
+	var p taskFollowUpParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.ID == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	task, err := deps.Coord.GetTask(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := deps.Coord.AddFollowUp(p.ID, "owner", p.Message)
+	if err != nil {
+		return nil, err
+	}
+	how := "queued"
+	ring := task.ClaimedBy
+	switch {
+	case task.State == coord.TaskBlocked && task.BlockedOn == coord.BlockedOnHuman:
+		if err := deps.Coord.UnblockTask(p.ID, deps.AgentID, f.Body); err != nil {
+			return nil, err
+		}
+		_ = deps.Coord.MarkFollowUpAnswered(f.ID, task.AssignedTo)
+		f.State = coord.FollowUpAnswered
+		how = "unblocked"
+		ring = task.AssignedTo
+	case coord.IsTerminalState(task.State):
+		how = "followup-turn"
+	default:
+		how = "next-run"
+		if task.State == coord.TaskSubmitted {
+			ring = task.AssignedTo
+		}
+	}
+	go NotifyAgents(deps.Coord, ring, "", "about a follow-up on "+p.ID)
+	return json.Marshal(map[string]any{"followup": f, "delivery": how})
+}

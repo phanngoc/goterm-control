@@ -3,6 +3,7 @@ import type { AgentMessage, Channel, Task, TaskDetail } from './types'
 import { ago, runLivenessStyle, taskStateStyle, truncate } from './format'
 import { useArtifactOpener } from './ArtifactView'
 import MessageMarkdown from '../components/MessageMarkdown'
+import TaskSession from './TaskSession'
 import { useStore } from '../stores/store'
 
 type Call = (method: string, params?: any) => Promise<any>
@@ -329,10 +330,12 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [answer, setAnswer] = useState('')
   const [childTitle, setChildTitle] = useState('')
   const [childBody, setChildBody] = useState('')
   const [childTo, setChildTo] = useState('')
+  const [childOpen, setChildOpen] = useState(false)
+  // On a phone the two columns do not fit side by side: one at a time.
+  const [pane, setPane] = useState<'session' | 'detail'>('session')
 
   const load = useCallback(() => {
     call('tasks.get', { id })
@@ -399,24 +402,6 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
     }
   }
 
-  // The answer is an instruction, not a comment: the gateway appends it to the
-  // task's checkpoint, which is what the agent reads when it picks the work
-  // back up. So an empty box is a no-op worth preventing.
-  const sendAnswer = async () => {
-    if (!answer.trim()) return
-    setBusy(true)
-    try {
-      await call('tasks.unblock', { id, note: answer.trim() })
-      setAnswer('')
-      onChanged()
-      onClose()
-    } catch (e: any) {
-      setErr(String(e?.message ?? e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const t = detail?.task
   const open = t && !['completed', 'failed', 'canceled', 'rejected'].includes(t.state)
   const resumable = t && t.state === 'failed' && !!t.fail_reason
@@ -428,7 +413,7 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onClick={onClose}>
       <div
-        className="w-[560px] max-w-full h-full bg-gray-950 ring-1 ring-gray-800 flex flex-col"
+        className="w-[1200px] max-w-full h-full bg-gray-950 ring-1 ring-gray-800 flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-2">
@@ -447,6 +432,17 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
           <button onClick={onClose} className="ml-auto text-gray-500 hover:text-gray-300 text-sm">✕</button>
         </div>
 
+        <div className="md:hidden flex border-b border-gray-800 text-xs">
+          {(['session', 'detail'] as const).map(k => (
+            <button key={k} onClick={() => setPane(k)}
+              className={`flex-1 py-2 ${pane === k ? 'text-gray-100 border-b-2 border-sky-500' : 'text-gray-500'}`}>
+              {k === 'session' ? 'Phiên' : 'Chi tiết'}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 min-h-0 flex">
+        <div className={`${pane === 'detail' ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[440px] md:shrink-0 md:border-r border-gray-800 min-h-0`}>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {err && <div className="text-xs text-red-300 bg-red-500/10 ring-1 ring-red-500/30 rounded p-2">{err}</div>}
           {!detail && !err && <div className="text-sm text-gray-500">Loading…</div>}
@@ -535,75 +531,24 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                 onChanged={() => { load(); onChanged() }} onOpenFiles={onOpenFiles}
               />
 
-              {/* The conversation of this task. When the work came out of a
-                  room thread — a mention, or a task opened from one — that
-                  thread IS the conversation: where it was asked, discussed and
-                  answered, and where a reply reaches the agent. The private CLI
-                  session is the fallback for work that never had a room. */}
+              {/* Where the team talked about it, when it came out of a room.
+                  The task's own session — what the agent did and the box to
+                  talk to it — is the right-hand column now. */}
               {detail.thread_root && onOpenThread ? (
-                <div className="space-y-1">
-                  <button
-                    onClick={() => onOpenThread(detail.thread_root!)}
-                    className="block text-left text-xs text-sky-300 hover:underline"
-                  >
-                    → mở cuộc hội thoại trong thread{detail.project ? ` của #${detail.project.name}` : ''} (đọc tiếp, hỏi thêm)
-                  </button>
-                  {detail.session_id && (
-                    <a
-                      href={`/chat/${encodeURIComponent(detail.session_id)}`}
-                      className="block text-[11px] text-gray-500 hover:text-gray-300 hover:underline"
-                    >
-                      phiên CLI riêng của các lượt chạy task
-                    </a>
-                  )}
-                </div>
-              ) : detail.project && onOpenChannel ? (
-                // Work that belongs to a room but never had a thread — queued
-                // before tasks opened one on their own. The room is still where
-                // the team talked about it; the CLI session is only the runs.
-                <div className="space-y-1">
-                  <button
-                    onClick={() => onOpenChannel(detail.project!.id)}
-                    className="block text-left text-xs text-sky-300 hover:underline"
-                  >
-                    → mở channel #{detail.project.name} (nơi đội trao đổi về việc này)
-                  </button>
-                  {detail.session_id && (
-                    <a
-                      href={`/chat/${encodeURIComponent(detail.session_id)}`}
-                      className="block text-[11px] text-gray-500 hover:text-gray-300 hover:underline"
-                    >
-                      phiên CLI riêng của các lượt chạy task
-                    </a>
-                  )}
-                </div>
-              ) : detail.session_id ? (
-                <a
-                  href={`/chat/${encodeURIComponent(detail.session_id)}`}
-                  className="block text-xs text-sky-300 hover:underline"
+                <button
+                  onClick={() => onOpenThread(detail.thread_root!)}
+                  className="block text-left text-xs text-sky-300 hover:underline"
                 >
-                  → mở cuộc hội thoại của task này (đọc tiếp, hỏi thêm, chạy tay)
-                </a>
+                  → thread trong phòng{detail.project ? ` #${detail.project.name}` : ''} (nơi việc này được giao)
+                </button>
+              ) : detail.project && onOpenChannel ? (
+                <button
+                  onClick={() => onOpenChannel(detail.project!.id)}
+                  className="block text-left text-xs text-sky-300 hover:underline"
+                >
+                  → mở phòng #{detail.project.name}
+                </button>
               ) : null}
-
-              {/* A row saying "running" for four minutes tells you less than
-                  the log would. This is what it is actually doing. */}
-              {detail.live && (
-                <div className="rounded-md ring-1 ring-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-                  <span className="text-amber-300">⏳ đang chạy</span>
-                  <span className="text-gray-500"> · {detail.live.agent}</span>
-                  {detail.live.last_tool && (
-                    <span className="text-gray-300 font-mono"> · {detail.live.last_tool}</span>
-                  )}
-                  {detail.live.tool_count > 0 && (
-                    <span className="text-gray-500"> · {detail.live.tool_count} tool calls</span>
-                  )}
-                  {detail.live.started_at && (
-                    <span className="text-gray-500"> · {ago(detail.live.started_at)}</span>
-                  )}
-                </div>
-              )}
-
 
               {t.parent_id && (
                 <div className="text-xs text-gray-500">
@@ -633,14 +578,24 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                 </div>
               )}
 
-              {open && (
+              {open && !childOpen && (
+                <button
+                  onClick={() => setChildOpen(true)}
+                  className="text-xs text-gray-500 hover:text-gray-300"
+                  title="Tách một phần việc thành task con — một agent khác có thể làm song song"
+                >
+                  ↳ tách việc con…
+                </button>
+              )}
+
+              {open && childOpen && (
                 <div className="rounded ring-1 ring-gray-800 bg-gray-900/40 p-2 space-y-1.5">
                   <div className="flex gap-2 items-center">
-                    <span className="text-gray-600 text-xs shrink-0">↳ add child</span>
+                    <span className="text-gray-600 text-xs shrink-0">↳ việc con</span>
                     <input
                       value={childTitle}
                       onChange={e => setChildTitle(e.target.value)}
-                      placeholder="a piece a peer could do in parallel…"
+                      placeholder="tiêu đề — phần việc agent khác làm song song…"
                       className="flex-1 px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600"
                     />
                     <select value={childTo} onChange={e => setChildTo(e.target.value)}
@@ -650,14 +605,15 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
                     </select>
                     <button onClick={addChild} disabled={busy || !childTitle.trim()}
                       className="px-2.5 py-1 text-xs rounded bg-gray-100 text-gray-900 font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed">
-                      Add
+                      Tạo
                     </button>
+                    <button onClick={() => setChildOpen(false)} className="text-xs text-gray-600 hover:text-gray-300" title="Đóng">✕</button>
                   </div>
                   <textarea
                     value={childBody}
                     onChange={e => setChildBody(e.target.value)}
                     rows={2}
-                    placeholder="its brief — what to do, where, what done looks like (whoever claims it has none of this task's conversation)"
+                    placeholder="brief của việc con — làm gì, ở đâu, thế nào là xong (agent nhận nó không thấy phiên của task này)"
                     className="w-full px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 focus:ring-gray-600 outline-none text-gray-200 placeholder:text-gray-600 resize-none"
                   />
                 </div>
@@ -696,41 +652,17 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
               {awaitingPerson && (
                 <div className="rounded ring-1 ring-violet-500/40 bg-violet-500/5 p-3">
                   <div className="text-[11px] uppercase tracking-wider text-violet-300/80 mb-2">
-                    The agent is waiting on you
+                    Agent đang chờ bạn
                   </div>
                   {t.checkpoint ? (
                     <pre className="text-xs text-gray-300 whitespace-pre-wrap font-sans mb-3">{t.checkpoint}</pre>
                   ) : (
                     <div className="text-xs text-gray-500 mb-3">
-                      It parked without writing down what it needs. Say what to do next.
+                      Nó dừng mà không ghi lại cần gì. Hãy nói bước tiếp theo.
                     </div>
                   )}
-                  <textarea
-                    value={answer}
-                    onChange={e => setAnswer(e.target.value)}
-                    onKeyDown={e => {
-                      // Enter sends; the box is one instruction, not a document.
-                      // Shift+Enter still makes a newline.
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault()
-                        void sendAnswer()
-                      }
-                    }}
-                    rows={3}
-                    placeholder="Answer, or tell it what to do next…"
-                    className="w-full bg-gray-900 ring-1 ring-gray-800 rounded px-2 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-violet-500/50 resize-y"
-                  />
-                  <div className="mt-2 flex items-center gap-2">
-                    <button
-                      onClick={sendAnswer}
-                      disabled={busy || !answer.trim()}
-                      className="px-3 py-1.5 text-sm rounded ring-1 ring-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 disabled:hover:bg-violet-500/10"
-                    >
-                      Send &amp; unblock
-                    </button>
-                    <span className="text-[11px] text-gray-600">
-                      goes into the task, and the agent reads it on its next run
-                    </span>
+                  <div className="text-xs text-violet-200">
+                    → Trả lời ở khung <b>Phiên làm việc</b>: tin của bạn mở khoá task và agent chạy tiếp.
                   </div>
                 </div>
               )}
@@ -778,6 +710,21 @@ function TaskDrawer({ call, id, agents, projects, onClose, onChanged, onOpenTask
             )}
           </div>
         )}
+        </div>
+
+        <div className={`${pane === 'session' ? 'flex' : 'hidden'} md:flex flex-col flex-1 min-w-0 min-h-0`}>
+          {t ? (
+            <TaskSession
+              call={call} task={t}
+              onChanged={() => { load(); onChanged() }}
+              threadRoot={detail?.thread_root}
+              onOpenThread={onOpenThread}
+            />
+          ) : (
+            <div className="p-4 text-sm text-gray-500">Loading…</div>
+          )}
+        </div>
+        </div>
       </div>
     </div>
   )
