@@ -197,6 +197,7 @@ export interface FollowUp {
   body: string
   state: FollowUpState
   agent_id?: string
+  mode?: 'queue' | 'interrupt'
   created_at: string
   updated_at: string
 }
