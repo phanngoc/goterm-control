@@ -39,72 +39,77 @@ const FOLLOWUP_LABEL: Record<FollowUp['state'], { text: string; cls: string }> =
   failed: { text: 'lỗi khi trả lời', cls: 'text-red-300' },
 }
 
+// ── Rendering, the way Claude Code prints a session ────────────────────────
+//
+//   ⏺ Bash(cd games/tank-battle && npm test)
+//     ⎿  1 failing: laser should not break bricks
+//   ⏺ Chạy 6 lệnh, đọc 2 file, ghi 1 file  ▸
+//   ✻ Suy nghĩ  cần đọc file thiết kế trước…
+//
+// One line per step, its argument right there, output indented under it.
+// A burst of tool calls folds into one summary line: a glance says what was
+// called, a click says how.
+
 /** A tool call and, when the CLI reported one, its output. */
+type ToolItem = { e: TaskLogEntry; result?: TaskLogEntry }
 type Row =
   | { type: 'entry'; e: TaskLogEntry }
-  | { type: 'tool'; e: TaskLogEntry; result?: TaskLogEntry }
+  | { type: 'tools'; key: number; items: ToolItem[] }
+
+/** Consecutive tool calls fold into one group once there are this many. */
+const GROUP_AT = 3
 
 function rows(entries: TaskLogEntry[]): Row[] {
   const out: Row[] = []
+  const tools = (): ToolItem[] | null => {
+    const last = out[out.length - 1]
+    return last && last.type === 'tools' ? last.items : null
+  }
   for (const e of entries) {
     if (e.kind === 'tool_result') {
-      const last = out[out.length - 1]
-      if (last && last.type === 'tool' && !last.result) { last.result = e; continue }
-      out.push({ type: 'tool', e: { ...e, kind: 'tool', label: e.label || 'kết quả', content: '' }, result: e })
+      const items = tools()
+      const lastItem = items?.[items.length - 1]
+      if (lastItem && !lastItem.result) { lastItem.result = e; continue }
+      out.push({ type: 'tools', key: e.id, items: [{ e: { ...e, kind: 'tool', label: e.label || 'kết quả', content: '' }, result: e }] })
       continue
     }
-    out.push(e.kind === 'tool' ? { type: 'tool', e } : { type: 'entry', e })
+    if (e.kind === 'tool') {
+      const items = tools()
+      if (items) items.push({ e })
+      else out.push({ type: 'tools', key: e.id, items: [{ e }] })
+      continue
+    }
+    out.push({ type: 'entry', e })
   }
   return out
 }
 
-function Collapsible({ head, children, defaultOpen = false, tone = 'gray' }: {
-  head: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean; tone?: 'gray' | 'sky'
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div className={`rounded-md ring-1 ${tone === 'sky' ? 'ring-sky-500/20 bg-sky-500/5' : 'ring-gray-800 bg-gray-900/50'}`}>
-      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs">
-        <span className="text-gray-600 w-3 shrink-0">{open ? '▾' : '▸'}</span>
-        {head}
-      </button>
-      {open && <div className="px-2.5 pb-2">{children}</div>}
-    </div>
-  )
+// The argument worth showing for a call, read from its input: the whole
+// command, the path, the URL. The stored label is shortened to fit a status
+// line; a row has the width for the real thing, and CSS cuts what does not fit.
+const ARG_KEYS = ['command', 'file_path', 'path', 'url', 'query', 'pattern', 'description', 'prompt', 'script', 'expression', 'name', 'ref', 'text', 'glob', 'regex']
+
+function toolHead(e: TaskLogEntry): { name: string; arg: string } {
+  const label = e.label ?? ''
+  const paren = label.indexOf('(')
+  const name = (paren > 0 ? label.slice(0, paren) : label) || 'Tool'
+  let arg = paren > 0 && label.endsWith(')') ? label.slice(paren + 1, -1) : ''
+  try {
+    const v = JSON.parse(e.content ?? '')
+    if (v && typeof v === 'object') {
+      for (const k of ARG_KEYS) {
+        if (typeof v[k] === 'string' && v[k].trim()) {
+          arg = v[k].trim().split('\n')[0]
+          if (k === 'file_path' || k === 'path') arg = arg.replace(/^\/Users\/[^/]+\//, '~/')
+          break
+        }
+      }
+    }
+  } catch { /* not JSON: keep the label's own argument */ }
+  return { name, arg }
 }
 
-function ToolRow({ e, result }: { e: TaskLogEntry; result?: TaskLogEntry }) {
-  const [open, setOpen] = useState(false)
-  const failed = result?.label === 'error'
-  const input = prettyInput(e.content ?? '')
-  const expandable = !!input || !!result?.content
-  return (
-    <div className="text-xs">
-      <button
-        onClick={() => expandable && setOpen(o => !o)}
-        className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left ${expandable ? 'hover:bg-gray-900' : 'cursor-default'}`}
-      >
-        <span className={failed ? 'text-red-400' : 'text-gray-600'}>{failed ? '✕' : '⚙'}</span>
-        <span className="font-mono text-gray-300 truncate">{e.label || 'tool'}</span>
-        {result && !failed && <span className="text-emerald-500/70 shrink-0">✓</span>}
-        <span className="ml-auto text-[10px] text-gray-600 shrink-0">{clock(e.created_at)}</span>
-      </button>
-      {open && (
-        <div className="ml-6 mt-1 mb-1.5 space-y-1">
-          {input && (
-            <pre className="text-[11px] text-gray-400 bg-gray-900 rounded p-2 ring-1 ring-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-auto">{input}</pre>
-          )}
-          {result?.content && (
-            <pre className={`text-[11px] rounded p-2 ring-1 whitespace-pre-wrap break-words max-h-64 overflow-auto ${failed ? 'text-red-300 bg-red-500/5 ring-red-500/20' : 'text-gray-300 bg-black/40 ring-gray-800'}`}>{result.content}</pre>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Tool inputs are JSON; one field ("command", "file_path") is usually the
-// whole story, and a raw object is harder to read than the thing itself.
+// Tool inputs are JSON; one field is usually the whole story.
 function prettyInput(raw: string): string {
   if (!raw) return ''
   try {
@@ -117,12 +122,130 @@ function prettyInput(raw: string): string {
   return raw
 }
 
+const VERBS: Record<string, [string, string]> = {
+  Bash: ['Chạy', 'lệnh'], shell: ['Chạy', 'lệnh'], exec_command: ['Chạy', 'lệnh'],
+  Read: ['Đọc', 'file'], Write: ['Ghi', 'file'], Edit: ['Sửa', 'file'], MultiEdit: ['Sửa', 'file'],
+  NotebookEdit: ['Sửa', 'notebook'], Grep: ['Tìm', 'lần'], Glob: ['Tìm', 'lần'],
+  WebFetch: ['Mở', 'trang web'], WebSearch: ['Tra', 'lần web'], Task: ['Giao', 'sub-agent'],
+  Agent: ['Giao', 'sub-agent'], TodoWrite: ['Cập nhật kế hoạch', ''],
+}
+
+/** "Chạy 6 lệnh, đọc 2 file, ghi 1 file" — in the order they were first used. */
+function summarize(items: ToolItem[]): string {
+  const counts = new Map<string, number>()
+  for (const it of items) {
+    const n = toolHead(it.e).name
+    counts.set(n, (counts.get(n) ?? 0) + 1)
+  }
+  const parts: string[] = []
+  // Same verb across tools (Edit + MultiEdit) adds up.
+  const byVerb = new Map<string, number>()
+  const order: string[] = []
+  for (const [name, n] of counts) {
+    const v = VERBS[name]
+    const key = v ? `${v[0]}|${v[1]}` : `|${name}`
+    if (!byVerb.has(key)) order.push(key)
+    byVerb.set(key, (byVerb.get(key) ?? 0) + n)
+  }
+  for (const key of order) {
+    const [verb, noun] = key.split('|')
+    const n = byVerb.get(key)!
+    if (!verb) parts.push(n > 1 ? `${noun} ×${n}` : noun)
+    else if (!noun) parts.push(n > 1 ? `${verb} ×${n}` : verb)
+    else parts.push(`${verb} ${n} ${noun}`)
+  }
+  const s = parts.join(', ')
+  return s.charAt(0).toUpperCase() + s.slice(1).replace(/, ([A-ZĐ])/g, (_, c) => ', ' + c.toLowerCase())
+}
+
+const Dot = ({ cls }: { cls: string }) => <span className={`w-3 shrink-0 text-center text-[10px] leading-5 ${cls}`}>●</span>
+
+function ToolLine({ item, live }: { item: ToolItem; live?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const { e, result } = item
+  const { name, arg } = toolHead(e)
+  const failed = result?.label === 'error'
+  const input = prettyInput(e.content ?? '')
+  const out = (result?.content ?? '').trim()
+  const outLines = out ? out.split('\n') : []
+  return (
+    <div className="font-mono text-[12px] leading-5">
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={`${clock(e.created_at)} — bấm để xem đầy đủ`}
+        className="w-full flex items-start gap-1.5 text-left hover:bg-gray-900/70 rounded px-1 -mx-1"
+      >
+        <Dot cls={live ? 'text-amber-400 animate-pulse' : failed ? 'text-red-400' : result ? 'text-emerald-500' : 'text-gray-500'} />
+        <span className="min-w-0 truncate">
+          <span className="font-semibold text-gray-100">{name}</span>
+          {arg && <span className="text-gray-400">({arg})</span>}
+        </span>
+      </button>
+      {!open && outLines.length > 0 && (
+        <div className="flex gap-1.5 pl-[18px] text-gray-500">
+          <span className="shrink-0">⎿</span>
+          <span className={`min-w-0 truncate ${failed ? 'text-red-300/80' : ''}`}>
+            {outLines[0]}
+            {outLines.length > 1 && <span className="text-gray-600"> … +{outLines.length - 1} dòng</span>}
+          </span>
+        </div>
+      )}
+      {open && (
+        <div className="pl-[18px] mt-0.5 mb-1 space-y-1">
+          {input && <pre className="text-[11px] text-gray-400 bg-gray-900 rounded p-2 ring-1 ring-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-auto">{input}</pre>}
+          {out && (
+            <div className="flex gap-1.5">
+              <span className="shrink-0 text-gray-500">⎿</span>
+              <pre className={`flex-1 min-w-0 text-[11px] rounded p-2 ring-1 whitespace-pre-wrap break-words max-h-64 overflow-auto ${failed ? 'text-red-300 bg-red-500/5 ring-red-500/20' : 'text-gray-300 bg-black/40 ring-gray-800'}`}>{out}</pre>
+            </div>
+          )}
+          {!input && !out && <div className="text-[11px] text-gray-600">không có chi tiết</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A burst of calls: one summary line, the calls themselves a click away.
+ *  The newest call stays visible while the run is still on it. */
+function ToolGroup({ items, live }: { items: ToolItem[]; live: boolean }) {
+  const [open, setOpen] = useState(false)
+  if (items.length < GROUP_AT) {
+    return <div>{items.map((it, i) => <ToolLine key={it.e.id} item={it} live={live && i === items.length - 1} />)}</div>
+  }
+  const failed = items.filter(it => it.result?.label === 'error').length
+  const last = items[items.length - 1]
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-start gap-1.5 text-left font-mono text-[12px] leading-5 hover:bg-gray-900/70 rounded px-1 -mx-1"
+      >
+        <Dot cls={live ? 'text-amber-400 animate-pulse' : failed ? 'text-red-400' : 'text-gray-500'} />
+        <span className="min-w-0 truncate text-gray-300">
+          {summarize(items)}
+          {failed > 0 && <span className="text-red-300"> · {failed} lỗi</span>}
+        </span>
+        <span className="ml-auto shrink-0 text-gray-600 pl-2">{open ? '▾' : `▸ ${items.length}`}</span>
+      </button>
+      {open ? (
+        <div className="ml-[7px] pl-2.5 border-l border-gray-800">
+          {items.map((it, i) => <ToolLine key={it.e.id} item={it} live={live && i === items.length - 1} />)}
+        </div>
+      ) : live ? (
+        <div className="ml-[7px] pl-2.5 border-l border-gray-800"><ToolLine item={last} live /></div>
+      ) : null}
+    </div>
+  )
+}
+
 function Entry({ e, followUp }: { e: TaskLogEntry; followUp?: FollowUp }) {
+  const [open, setOpen] = useState(false)
   switch (e.kind) {
     case 'status': {
       if (e.label === 'start') {
         return (
-          <div className="flex items-center gap-2 pt-3 pb-1 text-[11px] text-gray-500">
+          <div className="flex items-center gap-2 pt-2 text-[11px] text-gray-500">
             <span className="h-px flex-1 bg-gray-800" />
             <span>{e.content}</span>
             <span className="text-gray-600">{clock(e.created_at)}</span>
@@ -134,35 +257,42 @@ function Entry({ e, followUp }: { e: TaskLogEntry; followUp?: FollowUp }) {
       const l = END_LABEL[how] ?? { text: how, cls: 'text-gray-400 ring-gray-700 bg-gray-500/5' }
       return (
         <div className="flex items-baseline gap-2 text-[11px]">
-          <span className={`px-1.5 py-0.5 rounded ring-1 ${l.cls}`}>■ {l.text}</span>
+          <span className={`px-1.5 rounded ring-1 ${l.cls}`}>■ {l.text}</span>
           {e.content && <span className="text-gray-500 truncate" title={e.content}>{e.content}</span>}
         </div>
       )
     }
     case 'prompt':
       return (
-        <Collapsible tone="sky" head={<>
-          <span className="text-sky-300">Brief gửi agent</span>
-          <span className="text-gray-500 truncate">{(e.content ?? '').split('\n').find(l => l.trim()) ?? ''}</span>
-        </>}>
-          <pre className="text-[11px] text-gray-300 whitespace-pre-wrap break-words max-h-96 overflow-auto">{e.content}</pre>
-        </Collapsible>
+        <div className="font-mono text-[12px] leading-5">
+          <button onClick={() => setOpen(o => !o)} className="w-full flex items-start gap-1.5 text-left hover:bg-gray-900/70 rounded px-1 -mx-1">
+            <span className="w-3 shrink-0 text-center text-sky-400">›</span>
+            <span className="min-w-0 truncate">
+              <span className="text-sky-300">Brief gửi agent</span>
+              <span className="text-gray-500"> · {((e.content ?? '').length / 1000).toFixed(1)}k ký tự · bấm để xem</span>
+            </span>
+          </button>
+          {open && <pre className="ml-[18px] mt-1 text-[11px] text-gray-300 bg-gray-900 rounded p-2 ring-1 ring-sky-500/20 whitespace-pre-wrap break-words max-h-96 overflow-auto">{e.content}</pre>}
+        </div>
       )
     case 'thinking':
       return (
-        <Collapsible head={<>
-          <span className="text-gray-500 italic">💭 suy nghĩ</span>
-          <span className="text-gray-600 truncate italic">{(e.content ?? '').trim().slice(0, 90)}</span>
-        </>}>
-          <div className="text-xs text-gray-400 italic whitespace-pre-wrap">{e.content}</div>
-        </Collapsible>
+        <div className="text-[12px] leading-5">
+          <button onClick={() => setOpen(o => !o)} className="w-full flex items-start gap-1.5 text-left hover:bg-gray-900/70 rounded px-1 -mx-1">
+            <span className="w-3 shrink-0 text-center text-violet-400/80">✻</span>
+            <span className="min-w-0 truncate italic text-gray-500">
+              Suy nghĩ{!open && <span className="text-gray-600"> · {(e.content ?? '').trim().replace(/\s+/g, ' ')}</span>}
+            </span>
+          </button>
+          {open && <div className="ml-[18px] text-xs text-gray-400 italic whitespace-pre-wrap">{e.content}</div>}
+        </div>
       )
     case 'user': {
       const st = followUp ? FOLLOWUP_LABEL[followUp.state] : undefined
       return (
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-1">
           <div className="max-w-[85%]">
-            <div className="rounded-lg rounded-br-sm bg-sky-600/20 ring-1 ring-sky-500/30 px-3 py-2 text-sm text-gray-100 whitespace-pre-wrap break-words">
+            <div className="rounded-lg rounded-br-sm bg-sky-600/20 ring-1 ring-sky-500/30 px-3 py-1.5 text-sm text-gray-100 whitespace-pre-wrap break-words">
               {e.content}
             </div>
             <div className="mt-0.5 text-right text-[10px] text-gray-600">
@@ -176,8 +306,11 @@ function Entry({ e, followUp }: { e: TaskLogEntry; followUp?: FollowUp }) {
     case 'text':
     default:
       return (
-        <div className="text-sm text-gray-200">
-          <MessageMarkdown>{e.content ?? ''}</MessageMarkdown>
+        <div className="flex items-start gap-1.5">
+          <Dot cls="text-gray-200" />
+          <div className="min-w-0 flex-1 text-sm text-gray-200 [&_.prose]:leading-relaxed">
+            <MessageMarkdown>{e.content ?? ''}</MessageMarkdown>
+          </div>
         </div>
       )
   }
@@ -326,7 +459,7 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
           const el = e.currentTarget
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
         }}
-        className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-2"
+        className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-1.5"
       >
         {!loaded && !err && <div className="text-sm text-gray-500">Đang tải phiên…</div>}
         {loaded && entries.length === 0 && (
@@ -336,14 +469,14 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
               : 'Chưa có gì được ghi lại cho task này.'}
           </div>
         )}
-        {shown.map(r => r.type === 'tool'
-          ? <ToolRow key={r.e.id} e={r.e} result={r.result} />
+        {shown.map((r, i) => r.type === 'tools'
+          ? <ToolGroup key={`g${r.key}`} items={r.items} live={running && i === shown.length - 1} />
           : <Entry key={r.e.id} e={r.e} followUp={r.e.kind === 'user' && r.e.run_id ? byID.get(r.e.run_id) : undefined} />)}
         {running && (
-          <div className="flex items-center gap-2 text-xs text-amber-300/90 pt-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            <span>agent đang làm</span>
-            {lastTool?.label && <span className="font-mono text-gray-400 truncate">· {lastTool.label}</span>}
+          <div className="flex items-center gap-1.5 text-[12px] text-amber-300/90 pt-1">
+            <span className="w-3 text-center animate-spin [animation-duration:2.5s]">✻</span>
+            <span>Đang làm…</span>
+            {lastTool && <span className="text-gray-600">· {entries.filter(e => e.kind === 'tool').length} tool call</span>}
           </div>
         )}
       </div>
