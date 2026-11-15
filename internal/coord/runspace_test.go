@@ -285,3 +285,45 @@ func TestAFreshlyFinishedTreeKeepsItsFolder(t *testing.T) {
 		t.Fatal("the folder went while the tree was still warm")
 	}
 }
+
+// A mention task runs where its turn ran, because its runs resume the turn's
+// CLI session and the CLI keeps sessions per directory: the folder of the room
+// it was asked in, or the agent's own workspace ("") — even after it is filed
+// under a project it turned out to be about.
+func TestAMentionTaskWorksWhereItsTurnDid(t *testing.T) {
+	db := runsDB(t)
+	p, err := db.CreateProject("trading", "bot giao dịch", "owner", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func(channel string) *Task {
+		t.Helper()
+		m, _, err := db.PostMessage(NewChannelMessage{
+			ChannelID: channel, AuthorKind: MemberUser, AuthorID: OwnerUserID, Body: "@bomclaw2 làm đi",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		task, err := db.OpenMentionTask(*m, "bomclaw2", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+
+	if dir, _ := db.TaskWorkspace(open(p.ID)); dir != p.Workspace {
+		t.Errorf("a mention in a project's room ran in %q, want %q", dir, p.Workspace)
+	}
+	inRoom := open(GeneralChannelID)
+	if dir, shared := db.TaskWorkspace(inRoom); dir != "" || shared {
+		t.Errorf("a mention in a folderless room ran in %q (shared=%v), want the agent's own workspace", dir, shared)
+	}
+	// Filed under the project afterwards: still where the turn ran.
+	if err := db.SetTaskChannel(inRoom.ID, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	filed, _ := db.GetTask(inRoom.ID)
+	if dir, _ := db.TaskWorkspace(filed); dir != "" {
+		t.Errorf("filing a mention under a project moved its folder to %q; the session it resumes is not there", dir)
+	}
+}

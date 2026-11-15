@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -851,6 +852,92 @@ func TestATimeoutSuggestsATask(t *testing.T) {
 	}
 	if strings.Contains(said, "deadline exceeded") {
 		t.Errorf("the raw error is not an instruction: %q", said)
+	}
+}
+
+// A turn that became work and then ran out of time is not a failed task: on
+// 2026-11-15 a job cut off at eight minutes — tests passing, one route left to
+// add — was closed as "failed", with the board still offering it attempts and
+// runs it would never get. It goes to the queue instead, still pinned to the
+// agent doing it, carrying the session it was working in.
+func TestATimedOutTaskContinuesInTheQueue(t *testing.T) {
+	turn := &recordingTurn{err: context.DeadlineExceeded, newID: "cli-long"}
+	turn.duringTurn = func(sink TurnSink) {
+		sink.NoteTool("Bash") // the turn reached for a tool: it is work now
+		sink.Write("Logic thuần + test pass. Giờ thêm route vào Worker.")
+	}
+	deps, cdb := mentionTestDeps(t, turn)
+	deps.Sessions = session.NewManager(nil)
+	poked := 0
+	deps.PokeTasks = func() { poked++ }
+
+	root, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "làm hẳn trang picks", Notify: []coord.Member{{Kind: coord.MemberAgent, ID: "bomclaw2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	NewMentionWatcher(deps).sweep(context.Background())
+
+	tasks, err := cdb.ListTasks(coord.TaskFilter{})
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("want the one mention task, got %d (%v)", len(tasks), err)
+	}
+	task := tasks[0]
+	if task.State != coord.TaskSubmitted || !task.HandedOff() {
+		t.Fatalf("a timed-out task should be queued, not %s (continuations %d)", task.State, task.Continuations)
+	}
+	if task.AssignedTo != "bomclaw2" {
+		t.Errorf("the session lives with bomclaw2, so the task must stay pinned there: %q", task.AssignedTo)
+	}
+	if ref := coord.ParseSessionRef(task.SessionRef); ref.SessionID != "cli-long" || ref.Provider != "claude" {
+		t.Errorf("the next run must resume the turn's session, got %+v", ref)
+	}
+	if !strings.Contains(task.Checkpoint, "route vào Worker") {
+		t.Errorf("the checkpoint should carry where the turn stopped: %q", task.Checkpoint)
+	}
+	if poked == 0 {
+		t.Error("the task runner was not told there is work")
+	}
+
+	// The runner can now take it; the attempt the turn used was given back.
+	claimed, err := cdb.ClaimTask("bomclaw2")
+	if err != nil {
+		t.Fatalf("a handed-off mention task must be claimable: %v", err)
+	}
+	if claimed.ID != task.ID || claimed.Attempts != 1 {
+		t.Errorf("claimed %s at attempt %d, want %s at 1", claimed.ID, claimed.Attempts, task.ID)
+	}
+
+	// The thread says it continues, not that it failed.
+	thread, _ := cdb.ThreadMessages(root.ID)
+	var said string
+	for _, m := range thread {
+		if m.AuthorID == "bomclaw2" {
+			said = m.Body
+		}
+	}
+	if !strings.Contains(said, task.ID) || strings.Contains(said, "Giao việc") {
+		t.Errorf("the thread should say the work carries on as %s: %q", task.ID, said)
+	}
+}
+
+// A mention task still inside its turn is a record, never queue work.
+func TestAMentionTaskInItsTurnIsNotClaimable(t *testing.T) {
+	_, cdb := mentionTestDeps(t, &recordingTurn{})
+	m, _, err := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: coord.GeneralChannelID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID,
+		Body: "@bomclaw2 xem giúp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdb.OpenMentionTask(*m, "bomclaw2", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cdb.ClaimTask("bomclaw2"); !errors.Is(err, coord.ErrNoTask) {
+		t.Fatalf("a mention turn's record was claimed: %+v, %v", got, err)
 	}
 }
 

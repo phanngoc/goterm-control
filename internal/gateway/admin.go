@@ -251,9 +251,10 @@ func handleTaskGet(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	}
 	// A task recorded from a mention lives in its thread: that is where it was
 	// asked, worked and answered, and there is no private session to open —
-	// the CLI conversation is the thread's own.
+	// the CLI conversation is the thread's own. Until it is handed off to the
+	// queue: from then its runs are the task runner's, under the task's id.
 	sessionID := coord.TaskSessionID(task.ID)
-	if task.Kind == coord.KindMention {
+	if task.Kind == coord.KindMention && !task.HandedOff() {
 		sessionID = ""
 	}
 	var live *LiveRun

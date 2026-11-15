@@ -52,6 +52,11 @@ type RoomTurn struct {
 	hints         []coord.ProjectHint
 	unwatch       chan struct{}
 	stopOnce      sync.Once
+
+	// resume names the CLI session the turn ran in, once it has run. Set by a
+	// caller that owns the session; without it a turn that runs out of time
+	// cannot be continued and is closed as before.
+	resume func() coord.SessionRef
 }
 
 // ErrRoomSteered is the cause a room turn is canceled with when the owner
@@ -235,6 +240,45 @@ func (t *RoomTurn) stop() {
 	})
 }
 
+// ContinueAsTask lets a turn that runs out of time carry on as queued work
+// instead of failing: ref is read when the turn ends, and names the CLI
+// session the task runner should resume.
+func (t *RoomTurn) ContinueAsTask(ref func() coord.SessionRef) { t.resume = ref }
+
+// handOff moves the turn's task into the queue (coord.HandOffMentionTask) and
+// returns the line the thread shows in place of the progress line, or ""
+// when the task could not be handed off and the turn should close as before.
+func (t *RoomTurn) handOff(partial string) string {
+	task := t.Task()
+	if task == nil || t.resume == nil {
+		return ""
+	}
+	checkpoint := fmt.Sprintf("The %s reply window ran out mid-work; this run continues it. "+
+		"Finish the job, then reply as you would have in the thread — your reply is posted there.",
+		mentionTurnTimeout)
+	if partial = strings.TrimSpace(partial); partial != "" {
+		// The tail: where it stopped matters more than how it began.
+		if r := []rune(partial); len(r) > 1500 {
+			partial = "…" + string(r[len(r)-1500:])
+		}
+		checkpoint += "\n\nThe end of what you had written so far:\n\n" + partial
+	}
+	moved, err := t.deps.Coord.HandOffMentionTask(task.ID, t.deps.AgentID, t.resume(), checkpoint)
+	if err != nil {
+		log.Printf("room turn: hand off %s: %v", task.ID, err)
+		return ""
+	}
+	t.mu.Lock()
+	t.task = moved
+	t.mu.Unlock()
+	if t.deps.PokeTasks != nil {
+		t.deps.PokeTasks()
+	}
+	return fmt.Sprintf("↻ hết %s cho một lượt trả lời — việc chưa xong nên chuyển sang chạy nền "+
+		"như task `%s`, tiếp tục đúng phiên này. Kết quả sẽ báo vào thread này.",
+		mentionTurnTimeout, task.ID)
+}
+
 // Abandon is for a turn killed by shutdown: nothing is said, the progress
 // line goes, and an open task stays open for the next gateway to answer.
 func (t *RoomTurn) Abandon() {
@@ -257,6 +301,13 @@ func (t *RoomTurn) Finish(reply string, turnErr error) string {
 			note = "■ _bạn đã dừng lượt này để chỉ hướng — agent trả lời tin tiếp theo của bạn_"
 			label = "end:steered"
 		case errors.Is(turnErr, context.DeadlineExceeded):
+			// Work that outgrew a reply is not a failure: when the turn is
+			// already a task, the task carries on in the queue.
+			if moved := t.handOff(reply); moved != "" {
+				t.log.Status("end:handed_off", "")
+				t.finishProgress(moved)
+				return moved
+			}
 			// Say what to do about it: the shape of the fix is a task, which
 			// has five times the budget and survives across runs.
 			note = fmt.Sprintf("⌛ hết %s cho một lượt trả lời — việc này dài hơn một câu trả lời. "+

@@ -51,6 +51,7 @@ func (w *MentionWatcher) answerDirect(ctx context.Context, m coord.ChannelMessag
 	turnCtx, cancel := context.WithCancelCause(timed)
 	defer cancel(nil)
 	rt.WatchInterrupts(cancel)
+	rt.ContinueAsTask(sessionRefOf(w.deps, sess))
 
 	w.live.Store(m.ID, sess)
 	_, err := w.deps.Turn.RunTurn(turnCtx, sess, sess.ChatID, w.model(), strings.TrimSpace(m.Body), rt.Sink())

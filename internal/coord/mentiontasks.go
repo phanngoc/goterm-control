@@ -21,8 +21,8 @@ import (
 // So the turn records itself. A mention that turns out to be work — it reaches
 // for a tool, or runs long — opens a task for it: on the room's board, carried
 // by the agent doing it, closed with the reply. A quick answer never becomes
-// one. The task is a record, not a queue entry: nobody claims it, the reply in
-// the thread is its report, and the run under it is what the economics report
+// one. The task is a record, not a queue entry — until its turn runs out of
+// time (HandOffMentionTask, below): the reply in the thread is its report, and the run under it is what the economics report
 // counts as task work.
 
 // KindMention marks a task that records a mention turn rather than queues one.
@@ -68,7 +68,8 @@ func (db *DB) OpenMentionTask(m ChannelMessage, agent, traceID string) (*Task, e
 	// Working from the first moment, carried by this agent, and already
 	// "reported": its reply lands in the thread, which is where the person
 	// who asked is reading. The long lease is only a guard — ClaimTask skips
-	// this kind, so no runner ever picks it up.
+	// this kind until HandOffMentionTask queues it, so no runner picks up a
+	// turn that is still running.
 	now := time.Now()
 	if _, err := db.conn.Exec(`UPDATE tasks SET state = ?, claimed_by = ?, attempts = 1,
 			lease_until = ?, reported_at = ?, trace_id = ?, updated_at = ?
@@ -98,6 +99,71 @@ func (db *DB) CloseMentionTask(taskID, agent string, ok bool, result string) err
 	_, err := db.conn.Exec(`UPDATE task_runs SET liveness = ?, ended_at = ?
 		WHERE task_id = ? AND liveness = 'running'`, liveness, ts(time.Now()), taskID)
 	return err
+}
+
+// A mention turn has eight minutes; a task has as many fifteen-minute runs as
+// it needs. Until 2026-11-15 a turn that ran out of its eight minutes closed
+// its record as failed, in the middle of the work, with a note telling the
+// owner to send it again as a task. The record WAS a task by then — on the
+// board, with "attempt 1/3 · run 1/20" printed on it — and the only run it
+// ever got was the one that was cut off.
+//
+// So running out of time hands the record over instead: it goes into the
+// queue, pinned to the agent that was doing it, carrying the CLI session the
+// turn used, and the task runner resumes that conversation where it stopped.
+// It is still a mention task — it answers into the thread it was asked in,
+// which ConversationThread already finds — but from here on it is a queued
+// one, and HandedOff says so.
+
+// HandedOff reports whether a mention task has left its turn for the queue.
+// Before that it is a record of a turn: no runner may claim it, and its
+// conversation is the thread's. After, it is ordinary queued work.
+func (t *Task) HandedOff() bool {
+	return t != nil && t.Kind == KindMention && t.Continuations > 0
+}
+
+// HandOffMentionTask moves a mention task whose turn ran out of time into the
+// queue: submitted, pinned to agent, carrying ref so the next run resumes the
+// same CLI conversation, with checkpoint as the note on where it stopped. The
+// turn's run is closed as timed out. The attempt is given back, as FinishRun
+// does for a run that timed out with progress: running out of time is not a
+// failure, and three of them must not fail the task.
+func (db *DB) HandOffMentionTask(taskID, agent string, ref SessionRef, checkpoint string) (*Task, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("hand off %s: %w", taskID, err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+	res, err := tx.Exec(`UPDATE tasks SET state = ?, assigned_to = ?, lease_until = ?,
+			attempts = max(attempts - 1, 0), continuations = continuations + 1,
+			session_ref = ?, checkpoint = ?, updated_at = ?
+		WHERE id = ? AND kind = ? AND state = ? AND claimed_by = ?`,
+		TaskSubmitted, agent, ts(now), ref.String(), checkpoint, ts(now),
+		taskID, KindMention, TaskWorking, agent)
+	if err != nil {
+		return nil, fmt.Errorf("hand off %s: %w", taskID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Canceled from the board meanwhile, or not this agent's: either way
+		// not ours to requeue.
+		return nil, fmt.Errorf("hand off %s: %w", taskID, ErrTaskFinished)
+	}
+	if _, err := tx.Exec(`UPDATE task_runs SET liveness = ?, ended_at = ?, note = ?
+		WHERE task_id = ? AND liveness = ?`,
+		RunTimedOut, ts(now), "reply window ran out; continued in the queue", taskID, RunRunning); err != nil {
+		return nil, fmt.Errorf("hand off %s: close run: %w", taskID, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO task_events (task_id, agent_id, from_state, to_state, note, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, taskID, agent, TaskWorking, TaskSubmitted,
+		"reply window ran out; handed to the task queue", ts(now)); err != nil {
+		return nil, fmt.Errorf("hand off %s: event: %w", taskID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("hand off %s: %w", taskID, err)
+	}
+	return db.GetTask(taskID)
 }
 
 // CloseStaleMentionTask fails the open record for a mention that will not be
