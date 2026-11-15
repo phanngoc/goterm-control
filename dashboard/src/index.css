@@ -1,4 +1,49 @@
 @import "tailwindcss";
+@import "./theme-light.css";
 /* `prose` classes in the chat come from this plugin. Without it Tailwind v4
    generates nothing for them and every message renders as unstyled HTML. */
 @plugin "@tailwindcss/typography";
+
+/* Light theme: the palette turned upside down (generated), plus the few
+   places that do not go through a palette variable. Toggled by the `light`
+   class on <html> — see src/lib/theme.ts. The flipped palette itself is
+   imported at the top: CSS wants every @import before other rules. */
+
+/* Typography's prose-invert carries literal colors for dark backgrounds; on
+   a light one it must read like plain prose. Gray vars are already flipped,
+   so naming the dark shade here yields the light-mode one. */
+html.light .prose-invert {
+  --tw-prose-body: var(--color-gray-300);
+  --tw-prose-headings: var(--color-gray-50);
+  --tw-prose-lead: var(--color-gray-400);
+  --tw-prose-links: var(--color-sky-300);
+  --tw-prose-bold: var(--color-gray-50);
+  --tw-prose-counters: var(--color-gray-400);
+  --tw-prose-bullets: var(--color-gray-600);
+  --tw-prose-hr: var(--color-gray-700);
+  --tw-prose-quotes: var(--color-gray-100);
+  --tw-prose-quote-borders: var(--color-gray-700);
+  --tw-prose-captions: var(--color-gray-400);
+  --tw-prose-kbd: var(--color-gray-50);
+  --tw-prose-code: var(--color-violet-300);
+  --tw-prose-pre-code: var(--color-gray-200);
+  --tw-prose-pre-bg: var(--color-gray-900);
+  --tw-prose-th-borders: var(--color-gray-600);
+  --tw-prose-td-borders: var(--color-gray-700);
+}
+
+/* White is not on a scale, so it does not flip. Hovering to "brighter" on a
+   dark UI means hovering to darker on a light one. Colored buttons keep their
+   white text — that stays right in both. */
+html.light .hover\:text-white:hover { color: var(--color-gray-50); }
+/* "Selected" in a dark list is white text on a slightly lighter gray; that is
+   dark text on a light gray here. Text on a colored button stays white. */
+html.light .text-white:not([class*="bg-sky"]):not([class*="bg-red"]):not([class*="bg-emerald"]):not([class*="bg-violet"]):not([class*="bg-amber"]):not([class*="bg-orange"]):not([class*="bg-blue"]):not([class*="bg-green"]) {
+  color: var(--color-gray-50);
+}
+html.light .hover\:bg-white:hover { background-color: var(--color-gray-200); }
+/* Black overlays behind modals stay; black panels inside the page (tool
+   output, terminals in cards) become a soft gray instead of holes. */
+html.light .bg-black\/40, html.light .bg-black\/30, html.light .bg-black\/20 {
+  background-color: color-mix(in oklab, var(--color-gray-900) 70%, transparent);
+}

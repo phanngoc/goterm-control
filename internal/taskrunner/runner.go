@@ -1010,7 +1010,7 @@ func taskPrompt(t *coord.Task, budget time.Duration, resumed bool, children []co
 		"is looking at a board and not a terminal, and nothing survives the file being moved. An artifact is "+
 		"found by id, shows up beside the task, and can be handed to a child task as an input.\n\n"+
 		"A document the room should KEEP and come back to — a design doc, a guide, a living report — also "+
-		"goes in the room's wiki (markdown or HTML, hosted at /wiki/<room>/<page>): "+
+		"goes in the project's wiki (markdown or HTML, kept in the shared database — not a folder — and hosted at /wiki/<room>/<page>): "+
 		"`bomclaw wiki put --channel <room id> --path <name>.md --file <path>`; `bomclaw wiki list --channel <room id>` "+
 		"shows what is already there, so update a page rather than writing a second one.\n\n"+
 		"When the work is finished: `bomclaw task done --id %s --result \"<the deliverable>\"`. Your result is what "+

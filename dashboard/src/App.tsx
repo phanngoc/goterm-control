@@ -3,6 +3,7 @@ import { useStore } from './stores/store'
 import { useGateway } from './hooks/useGateway'
 import AdminView from './admin/AdminView'
 import type { Me } from './Root'
+import ThemeToggle from './components/ThemeToggle'
 import { parseRoute, pathFor, isRefinement, lineFromHash, type AdminPane } from './lib/route'
 
 // Monaco is several MB; only the editor's own page and dialog load it.
@@ -144,12 +145,15 @@ export default function App({ me, onLogout }: { me: Me; onLogout?: () => void })
       />
     </div>
   )
-  const footer = onLogout ? (
+  // Always there: the theme switch is not something only a signed-in
+  // session should have.
+  const footer = (
     <div className="flex items-center gap-2 px-3 py-2 border-t border-gray-800 text-xs">
-      <span className="truncate text-gray-500">{me.username}</span>
-      <button onClick={onLogout} className="ml-auto text-gray-500 hover:text-gray-200">Logout</button>
+      {onLogout && <span className="truncate text-gray-500">{me.username}</span>}
+      <ThemeToggle className="ml-auto" />
+      {onLogout && <button onClick={onLogout} className="text-gray-500 hover:text-gray-200">Logout</button>}
     </div>
-  ) : undefined
+  )
 
   return (
     <div className="h-full bg-gray-950 text-gray-100">
