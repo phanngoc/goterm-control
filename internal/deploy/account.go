@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,42 @@ type Account struct {
 	Plan string `json:"plan,omitempty"`
 	// PlanHint says why Plan is empty, in words the owner can act on.
 	PlanHint string `json:"plan_hint,omitempty"`
+	// Zones are the account's domains and the plan each is on ("Free
+	// Website"). Readable with the token the setup asks for, where the
+	// Workers plan is not — so the plan question always has an answer.
+	Zones []ZonePlan `json:"zones,omitempty"`
+}
+
+// ZonePlan is one domain of the account and its Cloudflare plan.
+type ZonePlan struct {
+	Zone      string  `json:"zone"`
+	Plan      string  `json:"plan"`
+	Price     float64 `json:"price"`
+	Currency  string  `json:"currency,omitempty"`
+	Frequency string  `json:"frequency,omitempty"`
+}
+
+// ZonePlans lists the account's zones with their plans.
+func (c *Client) ZonePlans(ctx context.Context) ([]ZonePlan, error) {
+	var zones []struct {
+		Name string `json:"name"`
+		Plan struct {
+			Name      string  `json:"name"`
+			Price     float64 `json:"price"`
+			Currency  string  `json:"currency"`
+			Frequency string  `json:"frequency"`
+		} `json:"plan"`
+	}
+	q := "/zones?per_page=50&account.id=" + url.QueryEscape(c.Creds.AccountID)
+	if err := c.do(ctx, http.MethodGet, q, nil, &zones); err != nil {
+		return nil, err
+	}
+	out := make([]ZonePlan, 0, len(zones))
+	for _, z := range zones {
+		out = append(out, ZonePlan{Zone: z.Name, Plan: z.Plan.Name, Price: z.Plan.Price,
+			Currency: z.Plan.Currency, Frequency: z.Plan.Frequency})
+	}
+	return out, nil
 }
 
 // AccountReader is a Provider that can name the account its credentials
@@ -39,7 +76,7 @@ func (d *Cloudflare) Account(ctx context.Context) *Account {
 	if ok, _ := d.Connected(); !ok {
 		return nil
 	}
-	if acc := d.Client.AccountInfo(ctx); acc != (Account{}) {
+	if acc := d.Client.AccountInfo(ctx); acc.Name != "" || acc.Plan != "" || len(acc.Zones) > 0 {
 		return &acc
 	}
 	return nil
@@ -120,6 +157,10 @@ func (c *Client) AccountInfo(ctx context.Context) Account {
 				}
 			}
 		}
+	}
+
+	if zones, err := c.ZonePlans(ctx); err == nil {
+		acc.Zones = zones
 	}
 
 	// Only a lookup that learned something is kept: a network blip must not

@@ -10,7 +10,8 @@ type Call = (method: string, params?: any) => Promise<any>
 // project that had never been deployed looked exactly the same.
 
 export interface DBStatus { engine: string; name: string; exists: boolean; bytes: number; tables: number; error?: string }
-export interface InfraAccount { name?: string; plan?: string; plan_hint?: string }
+export interface ZonePlan { zone: string; plan: string; price: number; currency?: string; frequency?: string }
+export interface InfraAccount { name?: string; plan?: string; plan_hint?: string; zones?: ZonePlan[] }
 export interface EnvStatus {
   channel_id: string
   project_dir?: string
@@ -130,10 +131,11 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
   const p = st?.prod
   const c = toneClass[err ? 'bad' : prod.tone]
   const provider = p?.title || p?.provider || 'Cloudflare'
+  const plan = p?.connected ? planLabel(st) : ''
   const where = prod.tone === 'live' ? host(p?.url) : ''
   const summary = err
     ? `Không đọc được trạng thái hạ tầng: ${err}`
-    : `${provider}: ${prod.label}${where ? ` tại ${where}` : ''}. DEV: ${dev.label}. Bấm để mở Môi trường.`
+    : `${provider}${plan ? ` (gói ${plan})` : ''}: ${prod.label}${where ? ` tại ${where}` : ''}. DEV: ${dev.label}. Bấm để mở Môi trường.`
 
   return (
     <span className="relative group shrink-0">
@@ -145,6 +147,12 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
       >
         <CloudIcon className={`h-3.5 w-3.5 ${c.text}`} />
         <span className="font-medium text-gray-200">{provider}</span>
+        {plan && (
+          <span className={`px-1.5 rounded-full text-[10px] font-medium ring-1 ${
+            /free/i.test(plan) ? 'bg-gray-900/60 text-gray-300 ring-gray-700' : 'bg-violet-500/15 text-violet-200 ring-violet-500/30'}`}>
+            {plan}
+          </span>
+        )}
         <span className="h-3 w-px bg-gray-700" aria-hidden />
         <Dot tone={err ? 'bad' : prod.tone} />
         <span className={`${c.text} whitespace-nowrap`}>
@@ -165,7 +173,7 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
           className="invisible opacity-0 translate-y-1 group-hover:visible group-hover:opacity-100 group-hover:translate-y-0
             group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0
             transition-all duration-150 motion-reduce:transition-none
-            absolute right-0 top-full mt-2 z-40 w-80 rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl p-3 space-y-2.5 text-xs"
+            absolute right-0 top-full mt-2 z-40 w-96 rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl p-3 space-y-2.5 text-xs"
         >
           <div className="flex items-center gap-2">
             <Dot tone={prod.tone} />
@@ -184,6 +192,7 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
 export function Facts({ st }: { st: EnvStatus }) {
   const p = st.prod
   const a = p.account
+  const zones = projectZones(st)
   return (
     <dl className="grid grid-cols-[72px_1fr] gap-x-2 gap-y-1.5">
       <dt className="text-gray-500">Tài khoản</dt>
@@ -191,15 +200,26 @@ export function Facts({ st }: { st: EnvStatus }) {
         {p.connected ? (a?.name || 'đã kết nối') : <span className="text-amber-300">chưa kết nối</span>}
       </dd>
       <dt className="text-gray-500">Gói</dt>
-      <dd className="min-w-0">
-        {a?.plan
-          ? <span className="inline-flex items-center px-1.5 rounded bg-violet-500/15 text-violet-200 ring-1 ring-violet-500/30">{a.plan}</span>
-          : <span className="text-gray-500" title={a?.plan_hint}>
-              chưa đọc được{a?.plan_hint ? ` — ${a.plan_hint}` : ''}
-              {p.connected && a?.plan_hint && p.provider !== 'fly' && (
-                <a href="/admin/connections" className="ml-1 text-sky-300 hover:underline whitespace-nowrap">cấp quyền ▸</a>
-              )}
-            </span>}
+      <dd className="min-w-0 space-y-1">
+        {zones.length === 0 && !a?.plan && <span className="text-gray-500">{p.connected ? 'chưa đọc được' : '—'}</span>}
+        {zones.map(z => (
+          <div key={z.zone} className="flex items-center gap-1.5 min-w-0">
+            <PlanChip name={z.plan} />
+            <span className="font-mono text-gray-400 truncate">{z.zone}</span>
+            {z.price > 0 && <span className="text-gray-500 whitespace-nowrap">{z.price} {z.currency}{z.frequency ? `/${z.frequency}` : ''}</span>}
+          </div>
+        ))}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-gray-500">Workers</span>
+          {a?.plan
+            ? <PlanChip name={a.plan} />
+            : <span className="text-gray-500 truncate" title={a?.plan_hint}>
+                chưa đọc được
+                {p.connected && a?.plan_hint && p.provider !== 'fly' && (
+                  <a href="/admin/connections" title={a.plan_hint} className="ml-1 text-sky-300 hover:underline whitespace-nowrap">cấp quyền Billing ▸</a>
+                )}
+              </span>}
+        </div>
       </dd>
       {!!p.services?.length && (
         <>
@@ -259,5 +279,35 @@ export function SignalIcon({ className = '' }: { className?: string }) {
       <path d="M10 11v6M6.5 7.5a5 5 0 0 1 7 0M4 5a8.5 8.5 0 0 1 12 0" strokeLinecap="round" />
       <circle cx="10" cy="10.5" r="1" fill="currentColor" />
     </svg>
+  )
+}
+
+/** projectZones is the zone the project's domain lives on, or every zone of
+ *  the account when the project has no domain of its own. */
+export function projectZones(st: EnvStatus | null): ZonePlan[] {
+  const all = st?.prod.account?.zones ?? []
+  const domain = st?.prod.domains?.[0] || st?.prod.want_domain || st?.spec?.domain || ''
+  const own = domain ? all.filter(z => domain === z.zone || domain.endsWith('.' + z.zone)) : []
+  return own.length ? own : all
+}
+
+/** planLabel is the plan in a word or two, for the header pill: the Workers
+ *  plan when it is known, else the plan of the project's domain. */
+export function planLabel(st: EnvStatus | null): string {
+  const a = st?.prod.account
+  if (a?.plan) return a.plan
+  const z = projectZones(st)
+  if (!z.length) return ''
+  const names = [...new Set(z.map(x => x.plan.replace(/ Website$/, '')))]
+  return names.join(' / ')
+}
+
+function PlanChip({ name }: { name: string }) {
+  const free = /free/i.test(name)
+  return (
+    <span className={`inline-flex items-center px-1.5 rounded ring-1 whitespace-nowrap ${
+      free ? 'bg-gray-800/80 text-gray-200 ring-gray-700' : 'bg-violet-500/15 text-violet-200 ring-violet-500/30'}`}>
+      {name}
+    </span>
   )
 }

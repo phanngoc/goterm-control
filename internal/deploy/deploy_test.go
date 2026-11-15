@@ -206,6 +206,8 @@ func fakeCloudflare(t *testing.T) (*Client, *[]string) {
 			io.WriteString(w, `{"success":false,"errors":[{"code":10007,"message":"not found"}]}`)
 		case r.Method == "GET" && r.URL.Path == "/accounts/acct":
 			ok(map[string]string{"name": "Ngoc's Account", "type": "standard"})
+		case r.Method == "GET" && r.URL.Path == "/zones" && r.URL.Query().Get("account.id") == "acct":
+			ok([]map[string]any{{"name": "bomclaw.org", "plan": map[string]any{"name": "Free Website", "price": 0, "currency": "USD"}}})
 		case r.Method == "GET" && r.URL.Path == "/accounts/acct/subscriptions":
 			ok([]map[string]any{
 				{"rate_plan": map[string]string{"id": "pro", "public_name": "Pro Plan"}, "state": "Paid"},
@@ -343,6 +345,9 @@ func TestStatusNamesTheAccountPlanAndServices(t *testing.T) {
 	if st.Account == nil || st.Account.Name != "Ngoc's Account" || st.Account.Plan != "Workers Paid" {
 		t.Errorf("account = %+v", st.Account)
 	}
+	if len(st.Account.Zones) != 1 || st.Account.Zones[0].Zone != "bomclaw.org" || st.Account.Zones[0].Plan != "Free Website" {
+		t.Errorf("zones = %+v", st.Account.Zones)
+	}
 	want := []string{"Workers", "Static Assets", "D1", "Custom Domain"}
 	if strings.Join(st.Services, ",") != strings.Join(want, ",") {
 		t.Errorf("services = %v, want %v", st.Services, want)
@@ -357,13 +362,22 @@ func TestAnUnreadablePlanIsLeftEmpty(t *testing.T) {
 			io.WriteString(w, `{"success":true,"result":{"name":"Acct","type":"standard"}}`)
 			return
 		}
+		if r.URL.Path == "/zones" {
+			io.WriteString(w, `{"success":true,"result":[{"name":"x.org","plan":{"name":"Pro Website","price":25}}]}`)
+			return
+		}
 		w.WriteHeader(403)
 		io.WriteString(w, `{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}`)
 	}))
 	defer srv.Close()
 	c := NewClient(Creds{Token: "tok", AccountID: "acct"})
 	c.Base = srv.URL
-	if acc := c.AccountInfo(context.Background()); acc.Name != "Acct" || acc.Plan != "" {
+	acc := c.AccountInfo(context.Background())
+	if acc.Name != "Acct" || acc.Plan != "" || acc.PlanHint == "" {
 		t.Errorf("account = %+v", acc)
+	}
+	// The domains' plans still answer "which plan" when billing is closed.
+	if len(acc.Zones) != 1 || acc.Zones[0].Plan != "Pro Website" {
+		t.Errorf("zones = %+v", acc.Zones)
 	}
 }
