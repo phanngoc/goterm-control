@@ -26,7 +26,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 17
+const schemaVersion = 18
 
 // ProgressPrefix marks a message that exists only while something is running.
 // It lives here because two packages write these lines — the mention watcher
@@ -774,6 +774,11 @@ func (db *DB) migrate() error {
 		if err := db.ensureColumn("tasks", c.name, c.decl); err != nil {
 			return err
 		}
+	}
+	// v18: how a follow-up reaches a running task. task_followups shipped in
+	// v16 without it.
+	if err := db.ensureColumn("task_followups", "mode", "TEXT NOT NULL DEFAULT 'queue'"); err != nil {
+		return err
 	}
 	for _, stmt := range v3Indexes {
 		if _, err := db.conn.Exec(stmt); err != nil {

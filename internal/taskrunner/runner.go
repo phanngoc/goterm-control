@@ -504,6 +504,9 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 		return
 	}
 
+	// The owner can cut in while it runs (see ErrSteered).
+	go r.watchSteer(runCtx, task.ID, abort)
+
 	// The conversation, readable from the board while it happens.
 	slog := newSessionLog(r.db, task.ID, run.ID, r.cfg.AgentID)
 	slog.Status("start", fmt.Sprintf("lượt %d · %s · %s", task.Continuations+1, r.cfg.AgentID, r.llm.Name()))
@@ -602,7 +605,11 @@ func (r *Runner) execute(ctx context.Context, task *coord.Task) {
 	if endNote == "" && sendErr != nil {
 		endNote = sendErr.Error()
 	}
-	slog.Status("end:"+string(outcome.Liveness), endNote)
+	endLabel := "end:" + string(outcome.Liveness)
+	if errors.Is(context.Cause(runCtx), ErrSteered) && outcome.Liveness == coord.RunAdvanced {
+		endLabel = "end:steered"
+	}
+	slog.Status(endLabel, endNote)
 
 	var final *coord.Task
 	finishErr := withRetry("finish run "+run.ID, func() (e error) {
@@ -688,6 +695,12 @@ func classify(before, after *coord.Task, sendErr, ctxErr error, reply string, to
 	case errors.Is(ctxErr, context.DeadlineExceeded) || errors.Is(sendErr, context.DeadlineExceeded):
 		return coord.RunOutcome{Liveness: coord.RunTimedOut, Checkpoint: checkpoint, Result: reply,
 			Note: "hit the run time cap"}
+	case errors.Is(ctxErr, ErrSteered):
+		// Not a failure and not finished: the owner cut in. Back to the queue,
+		// pinned here, attempt refunded; the checkpoint stays as the agent
+		// left it, and the owner's line is in the next prompt.
+		return coord.RunOutcome{Liveness: coord.RunAdvanced, Checkpoint: checkpoint, Result: reply,
+			Note: "owner interrupted to steer; continuing with the new instruction"}
 	case errors.Is(ctxErr, ErrLeaseLost):
 		// Canceled, not failed: the attempt is refunded, which is right —
 		// losing a lease is not the agent's mistake. FinishRun will usually
@@ -785,6 +798,33 @@ func hasPendingTodos(inputJSON string) bool {
 // already in flight by then, and the only way to stop it is through its
 // context.
 var ErrLeaseLost = errors.New("taskrunner: lease lost")
+
+// ErrSteered stops a run because the owner asked to: they typed a new
+// direction into the task and chose to interrupt rather than wait. The task
+// goes back to this agent at once and the next run, resuming the same CLI
+// session, starts from what they wrote.
+var ErrSteered = errors.New("taskrunner: stopped by the owner to steer")
+
+// steerPoll is how often a run in flight checks for an interrupting line.
+var steerPoll = 2 * time.Second
+
+// watchSteer aborts the run when the owner interrupts it.
+func (r *Runner) watchSteer(ctx context.Context, taskID string, abort func(error)) {
+	t := time.NewTicker(steerPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if r.db.WantsInterrupt(taskID) {
+				log.Printf("taskrunner: %s: owner interrupted the run to steer it", taskID)
+				abort(ErrSteered)
+				return
+			}
+		}
+	}
+}
 
 // renewLease holds the task's lease for as long as the run takes, and aborts
 // the run when it can no longer hold it.

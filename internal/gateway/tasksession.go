@@ -151,6 +151,9 @@ func mergeByTime(a, b []coord.TaskLogEntry) []coord.TaskLogEntry {
 type taskFollowUpParams struct {
 	ID      string `json:"id"`
 	Message string `json:"message"`
+	// Interrupt stops the run in flight so the agent picks this up now,
+	// in the same session, instead of after the run ends.
+	Interrupt bool `json:"interrupt,omitempty"`
 }
 
 // handleTaskFollowUp is the owner typing into a task's session.
@@ -174,7 +177,9 @@ func handleTaskFollowUp(deps Deps, params json.RawMessage) (json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
-	f, err := deps.Coord.AddFollowUp(p.ID, "owner", p.Message)
+	// Interrupting only means something to a task that is running.
+	interrupt := p.Interrupt && task.State == coord.TaskWorking
+	f, err := deps.Coord.AddFollowUp(p.ID, "owner", p.Message, interrupt)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +196,8 @@ func handleTaskFollowUp(deps Deps, params json.RawMessage) (json.RawMessage, err
 		ring = task.AssignedTo
 	case coord.IsTerminalState(task.State):
 		how = "followup-turn"
+	case interrupt:
+		how = "interrupt"
 	default:
 		how = "next-run"
 		if task.State == coord.TaskSubmitted {

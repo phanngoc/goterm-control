@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ngocp/goterm-control/internal/chat"
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/session"
 )
 
 // A run's conversation lands in task_log, and a line the owner types while a
@@ -14,7 +16,7 @@ import (
 func TestRunLogsItsSessionAndReadsTheOwnersFollowUps(t *testing.T) {
 	db := testDB(t)
 	created, _ := db.CreateTask(coord.NewTask{CreatedBy: "a1", AssignedTo: "a2", Title: "scout"})
-	if _, err := db.AddFollowUp(created.ID, "owner", "chỉ lấy video Nhật"); err != nil {
+	if _, err := db.AddFollowUp(created.ID, "owner", "chỉ lấy video Nhật", false); err != nil {
 		t.Fatal(err)
 	}
 	llm := &stubLLM{reply: "Đã lọc video Nhật."}
@@ -52,7 +54,7 @@ func TestFollowUpOnFinishedTaskResumesItsSession(t *testing.T) {
 	if !r.claimAndRun(context.Background()) {
 		t.Fatal("no work")
 	}
-	if _, err := db.AddFollowUp(created.ID, "owner", "ý 2 rõ hơn?"); err != nil {
+	if _, err := db.AddFollowUp(created.ID, "owner", "ý 2 rõ hơn?", false); err != nil {
 		t.Fatal(err)
 	}
 	llm.mu.Lock()
@@ -104,5 +106,56 @@ func waitRuns(t *testing.T, r *Runner) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("follow-up turn did not finish")
+	}
+}
+
+// The owner cuts into a run in flight: it stops, the task goes back to the
+// same agent, and the next run resumes the same session from their line.
+func TestOwnerInterruptStopsTheRunAndSteersTheNext(t *testing.T) {
+	old := steerPoll
+	steerPoll = 20 * time.Millisecond
+	t.Cleanup(func() { steerPoll = old })
+
+	db := testDB(t)
+	created, _ := db.CreateTask(coord.NewTask{CreatedBy: "a1", AssignedTo: "a2", Title: "scout"})
+	llm := &stubLLM{reply: "đang làm…", delay: 3 * time.Second}
+	llm.hook = func(ctx context.Context, sess *session.Session, cb chat.StreamCallbacks) {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_, _ = db.AddFollowUp(created.ID, "owner", "dừng, chỉ làm video Nhật", true)
+		}()
+	}
+	r := newRunner(db, llm)
+	start := time.Now()
+	if !r.claimAndRun(context.Background()) {
+		t.Fatal("no work")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("the run was not interrupted")
+	}
+	task, _ := db.GetTask(created.ID)
+	if task.State != coord.TaskSubmitted || task.AssignedTo != "a2" {
+		t.Fatalf("after steer: %s assigned %q", task.State, task.AssignedTo)
+	}
+	entries, _ := db.TaskLog(created.ID, 0, 0)
+	if last := entries[len(entries)-1]; last.Label != "end:steered" {
+		t.Fatalf("last entry %+v", last)
+	}
+
+	llm.mu.Lock()
+	llm.delay, llm.hook, llm.reply = 0, nil, "Đã chuyển sang video Nhật."
+	llm.mu.Unlock()
+	if !r.claimAndRun(context.Background()) {
+		t.Fatal("the steered task was not picked up again")
+	}
+	prompts, sessions := llm.seen(), llm.seenSessions()
+	if !strings.Contains(prompts[1], "dừng, chỉ làm video Nhật") {
+		t.Fatalf("the steer did not reach the next run: %s", prompts[1])
+	}
+	if sessions[1] != "stub-session" {
+		t.Fatalf("next run did not resume the session: %v", sessions)
+	}
+	if fs, _ := db.FollowUps(created.ID); fs[0].State != coord.FollowUpDelivered || fs[0].Mode != coord.FollowUpInterrupt {
+		t.Fatalf("follow-up: %+v", fs[0])
 	}
 }

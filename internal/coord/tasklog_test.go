@@ -42,7 +42,7 @@ func TestFollowUpOnOpenTaskGoesIntoTheNextRun(t *testing.T) {
 	registerTestAgents(t, db, "bomclaw")
 	task, _ := db.CreateTask(NewTask{CreatedBy: "owner", AssignedTo: "bomclaw", Title: "scout"})
 
-	f, err := db.AddFollowUp(task.ID, "owner", "  sao đây  ")
+	f, err := db.AddFollowUp(task.ID, "owner", "  sao đây  ", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,10 +80,10 @@ func TestFollowUpOnFinishedTaskIsClaimedByItsAgent(t *testing.T) {
 	if err := db.FinishTask(task.ID, "bomclaw", TaskCompleted, "3 ý", claimed.Attempts); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AddFollowUp(task.ID, "owner", "ý 2 rõ hơn?"); err != nil {
+	if _, err := db.AddFollowUp(task.ID, "owner", "ý 2 rõ hơn?", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AddFollowUp(task.ID, "owner", "và ý 3?"); err != nil {
+	if _, err := db.AddFollowUp(task.ID, "owner", "và ý 3?", false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,10 +117,10 @@ func TestFollowUpRefusedOnTaskNobodyRan(t *testing.T) {
 	if err := db.CancelTask(task.ID, "owner"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AddFollowUp(task.ID, "owner", "hello"); !errors.Is(err, ErrFollowUpRefused) {
+	if _, err := db.AddFollowUp(task.ID, "owner", "hello", false); !errors.Is(err, ErrFollowUpRefused) {
 		t.Fatalf("want refused, got %v", err)
 	}
-	if _, err := db.AddFollowUp(task.ID, "owner", "   "); err == nil {
+	if _, err := db.AddFollowUp(task.ID, "owner", "   ", false); err == nil {
 		t.Fatal("an empty follow-up was accepted")
 	}
 }

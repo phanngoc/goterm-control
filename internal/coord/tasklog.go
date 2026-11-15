@@ -77,6 +77,7 @@ var taskLogSchema = []string{
 		body       TEXT NOT NULL,
 		state      TEXT NOT NULL DEFAULT 'queued',
 		agent_id   TEXT NOT NULL DEFAULT '',   -- who answered it
+		mode       TEXT NOT NULL DEFAULT 'queue', -- queue | interrupt (stop the run in flight)
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	) STRICT`,
@@ -104,9 +105,20 @@ type FollowUp struct {
 	Body      string    `json:"body"`
 	State     string    `json:"state"`
 	AgentID   string    `json:"agent_id,omitempty"`
+	// Mode is how it reaches a task that is running: "queue" waits for the
+	// run to end; "interrupt" stops it, and the run that follows — same
+	// agent, same CLI session — starts from this line. Claude Code's
+	// Esc-and-type, for a task.
+	Mode      string    `json:"mode"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// Follow-up modes.
+const (
+	FollowUpQueue     = "queue"
+	FollowUpInterrupt = "interrupt"
+)
 
 // IsTerminalState reports whether a task in this state will not run again by
 // itself.
@@ -182,7 +194,7 @@ var ErrFollowUpRefused = errors.New("coord: this task cannot take a follow-up")
 // A task that never ran and never will — canceled or rejected before anyone
 // claimed it — has no session to continue; that is refused rather than queued
 // for an agent that does not exist.
-func (db *DB) AddFollowUp(taskID, author, body string) (*FollowUp, error) {
+func (db *DB) AddFollowUp(taskID, author, body string, interrupt bool) (*FollowUp, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return nil, fmt.Errorf("follow-up: message is required")
@@ -197,10 +209,13 @@ func (db *DB) AddFollowUp(taskID, author, body string) (*FollowUp, error) {
 	now := time.Now()
 	f := &FollowUp{
 		ID: "fu_" + uuid.NewString()[:13], TaskID: taskID, Author: author, Body: body,
-		State: FollowUpQueued, CreatedAt: now, UpdatedAt: now,
+		State: FollowUpQueued, Mode: FollowUpQueue, CreatedAt: now, UpdatedAt: now,
 	}
-	if _, err := db.conn.Exec(`INSERT INTO task_followups (id, task_id, author, body, state, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, f.ID, f.TaskID, f.Author, f.Body, f.State, ts(now), ts(now)); err != nil {
+	if interrupt {
+		f.Mode = FollowUpInterrupt
+	}
+	if _, err := db.conn.Exec(`INSERT INTO task_followups (id, task_id, author, body, state, mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, f.ID, f.TaskID, f.Author, f.Body, f.State, f.Mode, ts(now), ts(now)); err != nil {
 		return nil, fmt.Errorf("follow-up %s: %w", taskID, err)
 	}
 	_ = db.AppendTaskLog(TaskLogEntry{TaskID: taskID, RunID: f.ID, AgentID: author, Kind: LogUser, Content: body, CreatedAt: now})
@@ -209,7 +224,7 @@ func (db *DB) AddFollowUp(taskID, author, body string) (*FollowUp, error) {
 
 // FollowUps lists a task's follow-ups, oldest first.
 func (db *DB) FollowUps(taskID string) ([]FollowUp, error) {
-	rows, err := db.conn.Query(`SELECT id, task_id, author, body, state, agent_id, created_at, updated_at
+	rows, err := db.conn.Query(`SELECT id, task_id, author, body, state, agent_id, mode, created_at, updated_at
 		FROM task_followups WHERE task_id = ? ORDER BY created_at`, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("follow-ups %s: %w", taskID, err)
@@ -223,7 +238,7 @@ func scanFollowUps(rows *sql.Rows) ([]FollowUp, error) {
 	for rows.Next() {
 		var f FollowUp
 		var created, updated string
-		if err := rows.Scan(&f.ID, &f.TaskID, &f.Author, &f.Body, &f.State, &f.AgentID, &created, &updated); err != nil {
+		if err := rows.Scan(&f.ID, &f.TaskID, &f.Author, &f.Body, &f.State, &f.AgentID, &f.Mode, &created, &updated); err != nil {
 			return nil, fmt.Errorf("scan follow-up: %w", err)
 		}
 		f.CreatedAt, f.UpdatedAt = parseTS(created), parseTS(updated)
@@ -240,7 +255,7 @@ func (db *DB) TakeFollowUps(taskID, agentID string) ([]FollowUp, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT id, task_id, author, body, state, agent_id, created_at, updated_at
+	rows, err := tx.Query(`SELECT id, task_id, author, body, state, agent_id, mode, created_at, updated_at
 		FROM task_followups WHERE task_id = ? AND state = ? ORDER BY created_at`, taskID, FollowUpQueued)
 	if err != nil {
 		return nil, err
@@ -267,7 +282,7 @@ func (db *DB) TakeFollowUps(taskID, agentID string) ([]FollowUp, error) {
 // of the loop never answer the same line twice.
 func (db *DB) ClaimFollowUp(agentID string, busy func(taskID string) bool) (*FollowUp, *Task, error) {
 	stale := ts(time.Now().Add(-followUpStale))
-	rows, err := db.conn.Query(`SELECT f.id, f.task_id, f.author, f.body, f.state, f.agent_id, f.created_at, f.updated_at
+	rows, err := db.conn.Query(`SELECT f.id, f.task_id, f.author, f.body, f.state, f.agent_id, f.mode, f.created_at, f.updated_at
 		FROM task_followups f JOIN tasks t ON t.id = f.task_id
 		WHERE (f.state = ? OR (f.state = ? AND f.updated_at < ?))
 		  AND t.claimed_by = ?
@@ -306,6 +321,16 @@ func (db *DB) ClaimFollowUp(agentID string, busy func(taskID string) bool) (*Fol
 		return &f, t, nil
 	}
 	return nil, nil, ErrNoTask
+}
+
+// WantsInterrupt reports whether the owner asked to stop this task's run in
+// flight: an interrupting line no run has taken yet. The runner asks every
+// few seconds while a run is open.
+func (db *DB) WantsInterrupt(taskID string) bool {
+	var n int
+	_ = db.conn.QueryRow(`SELECT count(*) FROM task_followups WHERE task_id = ? AND state = ? AND mode = ?`,
+		taskID, FollowUpQueued, FollowUpInterrupt).Scan(&n)
+	return n > 0
 }
 
 // FinishFollowUp records how a follow-up turn ended.

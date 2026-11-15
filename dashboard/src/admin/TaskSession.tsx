@@ -22,6 +22,7 @@ const END_LABEL: Record<string, { text: string; cls: string }> = {
   completed: { text: 'xong', cls: 'text-emerald-300 ring-emerald-500/30 bg-emerald-500/5' },
   answered: { text: 'đã trả lời', cls: 'text-emerald-300 ring-emerald-500/30 bg-emerald-500/5' },
   advanced: { text: 'chạy tiếp lượt sau', cls: 'text-sky-300 ring-sky-500/30 bg-sky-500/5' },
+  steered: { text: 'bạn đã dừng để chỉ hướng', cls: 'text-amber-300 ring-amber-500/30 bg-amber-500/5' },
   plan_only: { text: 'mới lên kế hoạch', cls: 'text-sky-300 ring-sky-500/30 bg-sky-500/5' },
   blocked: { text: 'chờ', cls: 'text-violet-300 ring-violet-500/30 bg-violet-500/5' },
   empty: { text: 'không ra gì', cls: 'text-amber-300 ring-amber-500/30 bg-amber-500/5' },
@@ -297,6 +298,7 @@ function Entry({ e, followUp }: { e: TaskLogEntry; followUp?: FollowUp }) {
             </div>
             <div className="mt-0.5 text-right text-[10px] text-gray-600">
               bạn · {clock(e.created_at)}
+              {followUp?.mode === 'interrupt' && <span className="ml-1 text-amber-300">· ■ chỉ hướng</span>}
               {st && <span className={`ml-1 ${st.cls}`}>· {st.text}</span>}
             </div>
           </div>
@@ -326,7 +328,7 @@ function composerMode(task: Task, running: boolean): { label: string; hint: stri
     return { label: 'Hỏi tiếp', hint: `Task đã ${task.state}. ${task.claimed_by} mở lại đúng phiên này, trả lời một lượt; task giữ nguyên trạng thái.` }
   }
   if (running) {
-    return { label: 'Xếp hàng', hint: 'Agent đang chạy. Tin được đưa vào lượt kế tiếp — hoặc nếu lượt này kết thúc task, agent trả lời ngay sau đó.' }
+    return { label: 'Xếp hàng', hint: 'Agent đang chạy. Enter: xếp hàng cho lượt kế · ■ Dừng & chỉ hướng: cắt lượt này, agent làm tiếp ngay trong cùng phiên theo tin của bạn.' }
   }
   if (task.state === 'blocked') {
     return { label: 'Gửi', hint: 'Task đang chờ việc con. Tin được đưa vào lượt chạy kế tiếp.' }
@@ -421,13 +423,13 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
   // a reply reaches the agent. There is no separate session to type into.
   const inThread = task.kind === 'mention' && !!threadRoot
 
-  const send = async () => {
+  const send = async (interrupt = false) => {
     const text = draft.trim()
     if (!text || sending || mode.disabled) return
     setSending(true)
     setErr(null)
     try {
-      await call('tasks.followup', { id: task.id, message: text })
+      await call('tasks.followup', { id: task.id, message: text, interrupt })
       setDraft('')
       stick.current = true
       await load()
@@ -501,7 +503,7 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
                   // (Vietnamese Telex) must not send half a word.
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault()
-                    void send()
+                    void send(false)
                   }
                 }}
                 disabled={mode.disabled || sending}
@@ -511,8 +513,18 @@ export default function TaskSession({ call, task, onChanged, threadRoot, onOpenT
               />
               <div className="flex items-center gap-2 px-2 pb-2">
                 <span className="text-[11px] text-gray-500 leading-snug flex-1">{mode.hint}</span>
+                {running && task.state === 'working' && (
+                  <button
+                    onClick={() => send(true)}
+                    disabled={sending || !draft.trim()}
+                    title="Cắt lượt đang chạy; agent làm tiếp ngay trong cùng phiên, bắt đầu từ tin của bạn (như Esc rồi gõ trong Claude Code)"
+                    className="shrink-0 px-3 py-1.5 text-xs rounded-md ring-1 ring-amber-500/50 bg-amber-500/10 text-amber-200 font-medium hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    ■ Dừng & chỉ hướng
+                  </button>
+                )}
                 <button
-                  onClick={send}
+                  onClick={() => send(false)}
                   disabled={mode.disabled || sending || !draft.trim()}
                   className="shrink-0 px-3 py-1.5 text-xs rounded-md bg-sky-500 text-white font-medium hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed"
                 >

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList } from './types'
+import type { Artifact, Channel, ChannelGateway, ChannelMessage, GatewayList, Task } from './types'
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import { AttachmentChips, PostedFiles, attachmentBlock, splitAttachments, useAttachments } from '../components/attachments'
@@ -11,6 +11,8 @@ import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
 import ProgressCard, { ProgressSummary, isProgressLine, parseProgress } from './ProgressCard'
 
 import { ago, clock } from './format'
+import { AgentAvatar, AgentName, agentLook } from './AgentAvatar'
+import TaskSession from './TaskSession'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -79,6 +81,13 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
   const [to, setTo] = useState<string>('')
   useEffect(() => { setTo(t => t || agents[0] || '') }, [agents])
   const [err, setErr] = useState<string | null>(null)
+  // The room's tasks by id, so a "took the task" line can show the task —
+  // its title first, where it stands — instead of a sentence with a uuid in it.
+  const [tasks, setTasks] = useState<Record<string, Task>>({})
+  // A task's thread opens on what the agent is doing; the discussion is the
+  // other tab.
+  const [threadTab, setThreadTab] = useState<'session' | 'talk'>('session')
+  const [threadTask, setThreadTask] = useState<Task | null>(null)
   // What this conversation has produced. A path named in prose is findable for
   // about a day; these are findable by id and survive the file moving.
   const [files, setFiles] = useState<Artifact[]>([])
@@ -158,11 +167,30 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
     }
   }, [active, call, more, msgs])
 
+  const loadTasks = useCallback(async (channelID: string) => {
+    if (!channelID) return
+    try {
+      const list: Task[] = (await call('tasks.list', { channel_id: channelID, limit: 200 })) || []
+      setTasks(Object.fromEntries(list.map(t => [t.id, t])))
+    } catch { /* the cards fall back to the message text */ }
+  }, [call])
+  useEffect(() => { setTasks({}); loadTasks(active) }, [active, loadTasks])
+
   const loadThread = useCallback(async (rootID: string) => {
     try {
       const msgs: ChannelMessage[] = (await call('channels.messages', { thread_root: rootID })) || []
       setThread(msgs)
+      if (rootID !== threadRoot) {
+        // A new thread: a task's opens on its session, anything else on talk.
+        setThreadTab(msgs[0]?.task_id ? 'session' : 'talk')
+      }
       setThreadRoot(rootID)
+      const tid = msgs[0]?.task_id
+      if (tid) {
+        call('tasks.get', { id: tid }).then((d: any) => setThreadTask(d?.task ?? null)).catch(() => setThreadTask(null))
+      } else {
+        setThreadTask(null)
+      }
       // Only a thread bound to a task can have produced anything; that binding
       // is what #134 put on the root message.
       const taskID = msgs[0]?.task_id
@@ -170,7 +198,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     }
-  }, [call])
+  }, [call, threadRoot])
 
   // First load picks the busiest room so the tab opens on something to read —
   // but only when the address named no room. A link to one has to survive the
@@ -250,9 +278,10 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       loadChannels()
       if (atBottom.current) loadMessages(active)
       if (threadRoot) loadThread(threadRoot)
+      loadTasks(active)
     }, working ? 1500 : 4000)
     return () => clearInterval(id)
-  }, [active, threadRoot, loadChannels, loadMessages, loadThread, working])
+  }, [active, threadRoot, loadChannels, loadMessages, loadThread, loadTasks, working])
 
   // Opening a room is reading it — but only for the human. An agent's unread
   // is its own business and must not be cleared by someone looking at a page.
@@ -495,7 +524,8 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             </div>
           )}
           {ordered.map(m => (
-            <Line key={m.id} m={m} selfID={selfID} onThread={() => loadThread(m.id)} onOpenTask={onOpenTask} />
+            <Line key={m.id} m={m} selfID={selfID} task={m.task_id ? tasks[m.task_id] : undefined}
+              active={m.id === threadRoot} onThread={() => loadThread(m.id)} onOpenTask={onOpenTask} />
           ))}
           <div ref={bottom} />
         </div>
@@ -541,15 +571,53 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       )}
 
       {/* Thread */}
-      {thread && !tool && (
-        <aside className="w-96 shrink-0 border-l border-gray-800 bg-gray-900/30 flex flex-col min-h-0">
-          <header className="px-3 py-2 border-b border-gray-800 flex items-center">
-            <span className="text-xs uppercase tracking-wide text-gray-500">Thread</span>
-            <button
-              onClick={() => { setThread(null); setThreadRoot('') }}
-              className="ml-auto text-xs text-gray-500 hover:text-gray-300"
-            >close</button>
+      {thread && !tool && (() => {
+        const rootTask = thread[0]?.task_id ? (threadTask ?? tasks[thread[0].task_id]) : undefined
+        const hasSession = !!rootTask && rootTask.kind !== 'mention'
+        const tab = hasSession ? threadTab : 'talk'
+        return (
+        <aside className={`${hasSession ? 'w-[min(640px,48vw)]' : 'w-96'} shrink-0 border-l border-gray-800 bg-gray-900/30 flex flex-col min-h-0`}>
+          <header className="px-3 py-2 border-b border-gray-800">
+            <div className="flex items-start gap-2">
+              {rootTask ? (
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <TaskStatePill task={rootTask} />
+                    {(rootTask.claimed_by || rootTask.assigned_to) && (
+                      <AgentName id={rootTask.claimed_by || rootTask.assigned_to!} size="sm" />
+                    )}
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-gray-100 leading-snug line-clamp-2">{rootTask.title}</div>
+                  <button onClick={() => onOpenTask?.(rootTask.id)} title="Mở task trên bảng"
+                    className="mt-0.5 font-mono text-[10px] text-gray-600 hover:text-sky-300">{rootTask.id.slice(0, 10)} ↗</button>
+                </div>
+              ) : (
+                <span className="text-xs uppercase tracking-wide text-gray-500">Thread</span>
+              )}
+              <button
+                onClick={() => { setThread(null); setThreadRoot(''); setThreadTask(null) }}
+                className="ml-auto text-xs text-gray-500 hover:text-gray-300"
+              >đóng</button>
+            </div>
+            {hasSession && (
+              <div className="mt-2 flex gap-1 text-xs">
+                {([['session', 'Agent đang làm'], ['talk', `Thảo luận${thread.length > 1 ? ` · ${thread.length - 1}` : ''}`]] as const).map(([k, label]) => (
+                  <button key={k} onClick={() => setThreadTab(k)}
+                    className={`px-2.5 py-1 rounded-md ${tab === k ? 'bg-gray-800 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </header>
+          {tab === 'session' && rootTask ? (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <TaskSession
+                call={call} task={rootTask}
+                onChanged={() => { if (threadRoot) loadThread(threadRoot); loadTasks(active) }}
+              />
+            </div>
+          ) : (<>
           <ThreadPane thread={thread} rootID={threadRoot} selfID={selfID} onOpenTask={onOpenTask} />
           {files.length > 0 && (
             <div className="border-t border-gray-800 px-3 py-2">
@@ -588,8 +656,10 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             to={to} setTo={setTo} agents={agents}
             placeholder="Reply in thread"
           />
+          </>)}
         </aside>
-      )}
+        )
+      })()}
     </div>
   )
 }
@@ -772,74 +842,132 @@ function ChannelRow({ c, active, onPick, bot }: {
   )
 }
 
-function Line({ m, selfID, compact, onThread, onOpenTask }: {
+// Where a task stands, as a word and a color — the first thing a card says.
+const STATE_PILL: Record<string, { text: string; cls: string; live?: boolean }> = {
+  submitted: { text: 'chờ nhận', cls: 'text-gray-300 bg-gray-500/15 ring-gray-500/30' },
+  working: { text: 'đang làm', cls: 'text-amber-300 bg-amber-500/10 ring-amber-500/40', live: true },
+  blocked: { text: 'đang chờ', cls: 'text-violet-300 bg-violet-500/10 ring-violet-500/40' },
+  'input-required': { text: 'cần bạn', cls: 'text-violet-300 bg-violet-500/10 ring-violet-500/40' },
+  completed: { text: 'xong', cls: 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/40' },
+  failed: { text: 'lỗi', cls: 'text-red-300 bg-red-500/10 ring-red-500/40' },
+  canceled: { text: 'đã huỷ', cls: 'text-gray-400 bg-gray-500/10 ring-gray-600/40' },
+  rejected: { text: 'bị từ chối', cls: 'text-gray-400 bg-gray-500/10 ring-gray-600/40' },
+}
+
+function TaskStatePill({ task }: { task: Task }) {
+  const waitingOnYou = task.state === 'blocked' && task.blocked_on === 'human'
+  const p = waitingOnYou
+    ? { text: 'chờ bạn trả lời', cls: 'text-violet-200 bg-violet-500/20 ring-violet-400/60' }
+    : STATE_PILL[task.state] ?? { text: task.state, cls: 'text-gray-300 bg-gray-500/15 ring-gray-500/30' }
+  return (
+    <span className={`inline-flex items-center gap-1 shrink-0 px-1.5 py-px rounded-full ring-1 text-[10px] font-medium ${p.cls}`}>
+      {'live' in p && p.live
+        ? <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+        : <span className="text-[8px]">●</span>}
+      {p.text}
+    </span>
+  )
+}
+
+// "📋 bomclaw2 nhận việc t_…: <title> giao bởi bomclaw" — the line a runner
+// posts when it takes a task. Read for its parts when the task itself is not
+// loaded (another room's, or a list that has not arrived yet).
+const CLAIM = /nhận việc\s+`?(t_[\w-]+)`?:?\s*([\s\S]*?)(?:\s*[_*]*giao bởi\s+([\w.-]+)[_*]*)?\s*$/
+
+function claimParts(body: string): { title: string; by?: string } | null {
+  const m = body.replace(/\*\*/g, '').match(CLAIM)
+  if (!m) return null
+  return { title: m[2].trim(), by: m[3] }
+}
+
+function Line({ m, selfID, compact, task, active, onThread, onOpenTask }: {
   m: ChannelMessage; selfID: string; compact?: boolean
+  /** The task this message is about, when it is one of the room's. */
+  task?: Task
+  /** Its thread is the one open on the right. */
+  active?: boolean
   onThread?: () => void; onOpenTask?: (taskID: string) => void
 }) {
   const mine = m.author_kind === 'user'
   const progress = isProgressLine(m.body) ? parseProgress(m.body) : null
   const posted = splitAttachments(m.body)
+  const claim = m.task_id ? claimParts(posted.text) : null
+  const look = agentLook(m.author_id, mine)
+  // A card for a task is about the task: its title leads, the sentence that
+  // announced it is gone, and the id shrinks to a handle you can click.
+  const asTask = !!m.task_id && (claim !== null || !!task) && !progress && !compact
+  const title = task?.title ?? claim?.title
+  const worker = task?.claimed_by || task?.assigned_to || (claim ? m.author_id : '')
+  const by = task?.created_by ?? claim?.by
+
   return (
-    <div className={`rounded-lg px-3 py-2 ring-1 ${
-      mine ? 'bg-sky-500/10 ring-sky-500/25' : 'bg-gray-900 ring-gray-800'
-    }`}>
+    <div className={`rounded-xl px-3.5 py-2.5 ring-1 transition-colors ${
+      active ? `ring-2 ${look.ring}` : mine ? 'ring-amber-500/25' : 'ring-gray-800'
+    } ${mine ? 'bg-amber-500/5' : 'bg-gray-900'}`}>
       <div className="flex items-center gap-2 text-[11px] text-gray-500">
-        <span className={`font-mono ${m.author_id === selfID ? 'text-gray-300' : 'text-gray-400'}`}>
-          {m.author_kind === 'user' ? 'you' : m.author_id}
-        </span>
-        {m.task_id && (
-          <button
-            onClick={() => onOpenTask?.(m.task_id!)}
-            disabled={!onOpenTask}
-            title="Open this task on the board"
-            className="px-1.5 rounded ring-1 ring-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300 font-mono enabled:hover:bg-fuchsia-500/20"
-          >
-            {m.task_id.slice(0, 10)}
-          </button>
-        )}
+        <AgentName id={mine ? 'owner' : m.author_id} person={mine} />
+        {asTask && <span className="text-gray-500">{task?.state === 'submitted' ? 'tạo việc' : 'nhận việc'}</span>}
         {m.mentions?.map(w => (
           <span key={w} className="px-1.5 rounded bg-amber-500/15 text-amber-300 font-mono">@{w}</span>
         ))}
+        {m.task_id && !asTask && (
+          <button onClick={() => onOpenTask?.(m.task_id!)} disabled={!onOpenTask} title="Mở task trên bảng"
+            className="font-mono text-[10px] text-gray-600 enabled:hover:text-sky-300">#{m.task_id.slice(2, 10)}</button>
+        )}
         <span className="ml-auto" title={ago(m.created_at)}>{clock(m.created_at)}</span>
       </div>
-      {/* The agents write markdown — tables, code, headings — and a thread that
-          shows it raw is a thread where a comparison table is a wall of pipes. */}
-      <div className="mt-1 text-sm text-gray-100 break-words">
-        {mine
-          ? <div className="whitespace-pre-wrap">{posted.text}</div>
-          : progress
-            ? <ProgressCard p={progress} author={m.author_id} fallbackSince={m.created_at} />
-            : <MessageMarkdown>{posted.text}</MessageMarkdown>}
-        {/* Dropped pictures show as pictures; the agent got their paths. */}
-        <PostedFiles files={posted.files} />
-      </div>
 
-      {/* An answered message shows its answer. A count on its own reads like
-          silence next to a question you asked an agent — which is exactly how
-          the first working reply was missed. */}
+      {asTask ? (
+        <div className="mt-1.5">
+          <div className="flex items-start gap-2">
+            {task && <span className="mt-0.5"><TaskStatePill task={task} /></span>}
+            <button onClick={onThread} className="min-w-0 text-left text-[15px] font-semibold leading-snug text-gray-100 hover:text-white">
+              {title || '(không có tiêu đề)'}
+            </button>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-gray-500">
+            {worker && <span className="inline-flex items-center gap-1">làm bởi <AgentName id={worker} size="sm" /></span>}
+            {by && by !== worker && <span>· giao bởi <span className="text-gray-400">{by}</span></span>}
+            <button onClick={() => onOpenTask?.(m.task_id!)} disabled={!onOpenTask} title={`Mở task ${m.task_id} trên bảng`}
+              className="font-mono text-[10px] text-gray-600 enabled:hover:text-sky-300">· {m.task_id!.slice(0, 10)}</button>
+          </div>
+          <PostedFiles files={posted.files} />
+        </div>
+      ) : (
+        // The agents write markdown — tables, code, headings — and a thread
+        // that shows it raw is a thread where a table is a wall of pipes.
+        <div className="mt-1.5 text-sm text-gray-100 break-words">
+          {mine
+            ? <div className="whitespace-pre-wrap">{posted.text}</div>
+            : progress
+              ? <ProgressCard p={progress} author={m.author_id} fallbackSince={m.created_at} />
+              : <MessageMarkdown>{posted.text}</MessageMarkdown>}
+          <PostedFiles files={posted.files} />
+        </div>
+      )}
+
+      {/* An answered message shows its answer, with who gave it. A count on
+          its own reads like silence next to a question you asked an agent. */}
       {!compact && !!m.replies && (
         <button
           onClick={onThread}
-          className="mt-2 w-full text-left rounded-md pl-2 py-1 border-l-2 border-sky-500/40 bg-sky-500/5 hover:bg-sky-500/10 group"
+          className="mt-2 w-full text-left rounded-lg px-2.5 py-1.5 bg-gray-950/60 ring-1 ring-gray-800 hover:ring-gray-700 group"
         >
-          <div className="flex items-baseline gap-2 text-[11px]">
-            <span className="font-mono text-sky-300">{m.last_reply_by}</span>
+          <div className="flex items-center gap-2 text-[11px]">
+            {m.last_reply_by && <AgentName id={m.last_reply_by} person={m.last_reply_by === 'you'} size="sm" />}
             <span className="text-gray-600">{ago(m.last_reply_at)}</span>
             <span className="ml-auto text-gray-500 group-hover:text-sky-300">
-              {m.replies} repl{m.replies === 1 ? 'y' : 'ies'} →
+              {asTask && task && task.kind !== 'mention' ? 'xem agent làm' : 'thread'} · {m.replies} →
             </span>
           </div>
           {m.working
             ? <ProgressSummary p={m.working} />
-            : <div className="text-xs text-gray-300 line-clamp-2 break-words">{plainPreview(m.last_reply_text)}</div>}
+            : <div className="mt-0.5 text-xs text-gray-400 line-clamp-2 break-words">{plainPreview(m.last_reply_text)}</div>}
         </button>
       )}
       {!compact && !m.replies && (
-        <button
-          onClick={onThread}
-          className="mt-1 text-[11px] text-gray-500 hover:text-sky-300"
-        >
-          reply in thread
+        <button onClick={onThread} className="mt-1.5 text-[11px] text-gray-500 hover:text-sky-300">
+          {asTask && task && task.kind !== 'mention' ? 'xem agent làm →' : 'trả lời trong thread'}
         </button>
       )}
     </div>
