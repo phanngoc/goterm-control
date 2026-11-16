@@ -98,6 +98,7 @@ var DetachedMethods = map[string]bool{
 	"plugins.list": true,
 
 	"tokens.list":     true,
+	"tokens.usage":    true,
 	"tokens.save":     true,
 	"tokens.delete":   true,
 	"tokens.settings": true,

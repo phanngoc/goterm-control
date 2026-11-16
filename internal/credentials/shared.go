@@ -25,6 +25,12 @@ func SharedStatePath(coordDB string) string {
 // hours, so turns older than that no longer weigh on a token.
 const loadWindow = 5 * time.Hour
 
+// HistoryKeep is how long turns are kept for the usage chart. The window
+// above is what rotation reads; this is what a person reads, to see which
+// token has carried the work this month — and it used to be forgotten after
+// ten hours, so a token used all afternoon showed "0 lượt" by the evening.
+const HistoryKeep = 30 * 24 * time.Hour
+
 // Shared is what one agent knows about a credential that the others must
 // know too: that it is capped and until when, and how hard it has been used.
 //
@@ -146,8 +152,65 @@ func (s *Shared) RecordTurn(key string, at time.Time) {
 	}
 	// Prune now and then, not on every turn.
 	if at.Unix()%17 == 0 {
-		_, _ = s.db.Exec(`DELETE FROM turns WHERE at < ?`, at.Add(-2*loadWindow).Unix())
+		_, _ = s.db.Exec(`DELETE FROM turns WHERE at < ?`, at.Add(-HistoryKeep).Unix())
 	}
+}
+
+// UsagePoint is the turns one agent ran on one credential in one bucket.
+type UsagePoint struct {
+	Key    string `json:"key"`
+	Agent  string `json:"agent"`
+	Bucket int64  `json:"bucket"` // unix seconds, the bucket's start
+	Turns  int    `json:"turns"`
+}
+
+// History counts turns per credential, agent and bucket since since. bucket
+// is aligned to UTC multiples of its length; offset shifts that alignment so
+// a day bucket starts at local midnight (pass the zone's offset in seconds).
+func (s *Shared) History(since time.Time, bucket time.Duration, offset int64) ([]UsagePoint, error) {
+	if s == nil {
+		return nil, nil
+	}
+	b := int64(bucket / time.Second)
+	if b <= 0 {
+		b = 3600
+	}
+	rows, err := s.db.Query(`SELECT key, agent, ((at + ?) / ?) * ? - ? AS bk, COUNT(*)
+		FROM turns WHERE at >= ? GROUP BY key, agent, bk ORDER BY bk`,
+		offset, b, b, offset, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsagePoint
+	for rows.Next() {
+		var p UsagePoint
+		if err := rows.Scan(&p.Key, &p.Agent, &p.Bucket, &p.Turns); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out, rows.Err()
+}
+
+// LastUsed is each credential's newest turn on any agent.
+func (s *Shared) LastUsed() map[string]time.Time {
+	out := map[string]time.Time{}
+	if s == nil {
+		return out
+	}
+	rows, err := s.db.Query(`SELECT key, MAX(at) FROM turns GROUP BY key`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var at int64
+		if rows.Scan(&k, &at) == nil {
+			out[k] = time.Unix(at, 0)
+		}
+	}
+	return out
 }
 
 // Load counts each key's turns, on every agent, within the window before now.

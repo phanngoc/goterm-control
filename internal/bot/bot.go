@@ -255,20 +255,33 @@ func PoolsFromConfig(cfg *config.Config) (map[string]*credentials.Pool, error) {
 		})
 	}
 	cooldown := time.Duration(cfg.Accounts.CooldownMinutes) * time.Minute
+	coordPath := cfg.Coord.Path
+	if coordPath == "" {
+		coordPath = coord.DefaultPath()
+	}
+	store := credentials.NewTokenStore(credentials.TokenStorePath(coordPath))
 	out := make(map[string]*credentials.Pool, len(byProvider))
 	for provider, accts := range byProvider {
+		// One store. config.yaml's accounts move into it (once; kept for
+		// this agent only, as before) and come back through it below. What
+		// it cannot hold — a secret read from an env var — stays here.
+		if rest, moved, err := store.Adopt(provider, cfg.Agent.ID, accts); err != nil {
+			log.Printf("credentials: could not move %s accounts from config.yaml into the token store: %v", provider, err)
+		} else {
+			if len(moved) > 0 {
+				log.Printf("credentials: moved %v from config.yaml into %s — accounts.pool in config.yaml can be deleted", moved, store.Path())
+			}
+			accts = rest
+		}
 		p, err := credentials.NewPool(provider, accts, cooldown)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", provider, err)
 		}
 		p.SetRotateEvery(cfg.Accounts.RotateEvery)
+		p.SetAgent(cfg.Agent.ID)
 		// Tokens added from the dashboard (Admin → Accounts) join the pool
 		// and are re-read whenever that file changes.
-		coordPath := cfg.Coord.Path
-		if coordPath == "" {
-			coordPath = coord.DefaultPath()
-		}
-		p.AttachStore(credentials.NewTokenStore(credentials.TokenStorePath(coordPath)))
+		p.AttachStore(store)
 		// Cooldowns and load are shared with the other agents on this
 		// machine: a cap one of them hits benches the token for all, and a
 		// new run starts on the token they have used least. Without the

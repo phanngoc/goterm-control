@@ -275,7 +275,8 @@ type Pool struct {
 	// The token store, when attached: re-read when its file changes.
 	store      *TokenStore
 	storeMtime time.Time
-	baseRotate int // rotate_every from config; the store may override it
+	baseRotate int    // rotate_every from config; the store may override it
+	agent      string // whose pool this is: stored credentials may name their agents
 }
 
 // GroupPin is what a session on the rotation is pinned to: the rotation as
@@ -351,6 +352,18 @@ func (p *Pool) syncSharedLocked(now time.Time) {
 // AttachStore makes the dashboard's token store part of this pool. Its
 // tokens join the config's accounts and are re-read whenever the file
 // changes, so an edit reaches the agent's next turn without a restart.
+// SetAgent names the agent this pool belongs to, for stored credentials that
+// serve only some agents. Call before AttachStore.
+func (p *Pool) SetAgent(id string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.agent = id
+	p.storeMtime = time.Time{}
+	p.mu.Unlock()
+}
+
 func (p *Pool) AttachStore(s *TokenStore) {
 	if p == nil || s == nil {
 		return
@@ -394,7 +407,7 @@ func (p *Pool) syncLocked() {
 		kept = append(kept, s)
 		taken[s.acct.Name] = true
 	}
-	for _, a := range pt.accounts(p.provider) {
+	for _, a := range pt.accounts(p.provider, p.agent) {
 		if taken[a.Name] {
 			log.Printf("credentials: stored %s token %q is shadowed by a config account of that name", p.provider, a.Name)
 			continue

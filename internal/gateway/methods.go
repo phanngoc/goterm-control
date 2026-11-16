@@ -296,6 +296,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleInfraLogs(deps, params)
 		case "tokens.list":
 			return handleTokensList(deps, params)
+		case "tokens.usage":
+			return handleTokensUsage(deps, params)
 		case "tokens.save", "tokens.delete", "tokens.settings":
 			return handleTokensMutate(deps, method, params)
 		case "plugins.files":

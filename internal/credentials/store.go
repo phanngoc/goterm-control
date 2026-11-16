@@ -41,15 +41,26 @@ const (
 	// KindAPIKey is a plain API key → ANTHROPIC_API_KEY for claude,
 	// CODEX_API_KEY for codex.
 	KindAPIKey TokenKind = "api_key"
+	// KindLogin is a CLI login: a config directory someone ran `claude login`
+	// (or `codex login`) in → CLAUDE_CONFIG_DIR / CODEX_HOME. No secret is
+	// stored; the directory is the credential. These used to live only in
+	// each agent's config.yaml, a second store beside this one.
+	KindLogin TokenKind = "login"
 )
 
 // StoredToken is one credential in the store.
 type StoredToken struct {
-	Name    string    `yaml:"name" json:"name"`
-	Kind    TokenKind `yaml:"kind" json:"kind"`
-	Value   string    `yaml:"value" json:"-"`
-	Rotate  bool      `yaml:"rotate" json:"rotate"`
-	Note    string    `yaml:"note,omitempty" json:"note,omitempty"`
+	Name   string    `yaml:"name" json:"name"`
+	Kind   TokenKind `yaml:"kind" json:"kind"`
+	Value  string    `yaml:"value" json:"-"`
+	Rotate bool      `yaml:"rotate" json:"rotate"`
+	Note   string    `yaml:"note,omitempty" json:"note,omitempty"`
+	// ConfigDir is a login's directory (KindLogin only).
+	ConfigDir string `yaml:"config_dir,omitempty" json:"config_dir,omitempty"`
+	// Agents limits which agents may use this credential; empty is all of
+	// them. A login brought over from one agent's config.yaml keeps serving
+	// that agent only, as it did before.
+	Agents  []string  `yaml:"agents,omitempty" json:"agents,omitempty"`
 	Added   time.Time `yaml:"added" json:"added"`
 	Updated time.Time `yaml:"updated" json:"updated"`
 }
@@ -140,13 +151,15 @@ var tokenNameOK = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,47}$`)
 // TokenInput is a create-or-update. Value empty on an update keeps the old
 // one: the dashboard never has it to send back.
 type TokenInput struct {
-	Provider string    `json:"provider"`
-	Name     string    `json:"name"`
-	OldName  string    `json:"old_name,omitempty"` // set to rename
-	Kind     TokenKind `json:"kind"`
-	Value    string    `json:"value,omitempty"`
-	Rotate   bool      `json:"rotate"`
-	Note     string    `json:"note,omitempty"`
+	Provider  string    `json:"provider"`
+	Name      string    `json:"name"`
+	OldName   string    `json:"old_name,omitempty"` // set to rename
+	Kind      TokenKind `json:"kind"`
+	Value     string    `json:"value,omitempty"`
+	Rotate    bool      `json:"rotate"`
+	Note      string    `json:"note,omitempty"`
+	ConfigDir string    `json:"config_dir,omitempty"`
+	Agents    []string  `json:"agents,omitempty"`
 }
 
 // Save creates or updates one token.
@@ -195,14 +208,19 @@ func (s *TokenStore) Save(in TokenInput) error {
 				return fmt.Errorf("credentials: %s already has a token named %q", in.Provider, in.Name)
 			}
 		}
-		if value == "" {
+		if value == "" && in.Kind != KindLogin {
 			return fmt.Errorf("credentials: a new token needs its value")
 		}
 		pt.Tokens = append(pt.Tokens, StoredToken{Name: in.Name, Kind: in.Kind, Value: value,
-			Rotate: in.Rotate, Note: in.Note, Added: now, Updated: now})
+			Rotate: in.Rotate, Note: in.Note, ConfigDir: strings.TrimSpace(in.ConfigDir), Agents: in.Agents,
+			Added: now, Updated: now})
 	} else {
 		t := &pt.Tokens[idx]
 		t.Name, t.Kind, t.Rotate, t.Note, t.Updated = in.Name, in.Kind, in.Rotate, in.Note, now
+		t.ConfigDir, t.Agents = strings.TrimSpace(in.ConfigDir), in.Agents
+		if in.Kind == KindLogin {
+			t.Value = ""
+		}
 		if value != "" {
 			t.Value = value
 		}
@@ -271,6 +289,12 @@ func validTokenInput(in TokenInput) error {
 	if strings.HasPrefix(in.Name, "@") {
 		return fmt.Errorf("credentials: names starting with @ are reserved")
 	}
+	if in.Kind == KindLogin {
+		if strings.TrimSpace(in.ConfigDir) == "" {
+			return fmt.Errorf("credentials: a login needs its config directory (e.g. ~/.claude-tam)")
+		}
+		return nil
+	}
 	switch {
 	case in.Provider == ProviderClaude && (in.Kind == KindSetupToken || in.Kind == KindAPIKey):
 	case in.Provider == ProviderCodex && (in.Kind == KindAccessToken || in.Kind == KindAPIKey):
@@ -302,20 +326,112 @@ func Mask(v string) string {
 }
 
 // accounts turns one provider's stored tokens into pool accounts.
-func (pt *ProviderTokens) accounts(provider string) []Account {
+func (pt *ProviderTokens) accounts(provider, agent string) []Account {
 	if pt == nil {
 		return nil
 	}
 	out := make([]Account, 0, len(pt.Tokens))
 	for _, t := range pt.Tokens {
-		a := Account{Name: t.Name, Provider: provider, NoRotate: !t.Rotate, managed: true}
-		switch t.Kind {
-		case KindAPIKey:
-			a.APIKey = t.Value
-		default:
-			a.OAuthToken = t.Value
+		if !t.ServesAgent(agent) {
+			continue
 		}
-		out = append(out, a)
+		out = append(out, t.Account(provider))
 	}
 	return out
+}
+
+// ServesAgent says whether agent may use this credential.
+func (t StoredToken) ServesAgent(agent string) bool {
+	if len(t.Agents) == 0 || agent == "" {
+		return true
+	}
+	for _, a := range t.Agents {
+		if a == agent {
+			return true
+		}
+	}
+	return false
+}
+
+// Account is the pool account this stored credential becomes.
+func (t StoredToken) Account(provider string) Account {
+	a := Account{Name: t.Name, Provider: provider, NoRotate: !t.Rotate, managed: true}
+	switch t.Kind {
+	case KindAPIKey:
+		a.APIKey = t.Value
+	case KindLogin:
+		a.ConfigDir = t.ConfigDir
+	default:
+		a.OAuthToken = t.Value
+	}
+	return a
+}
+
+// Adopt moves an agent's config.yaml accounts into the store, so there is
+// one place credentials live. It returns the accounts it could not take —
+// ones that read their secret from an environment variable, which the store
+// has no way to follow — for the pool to keep using from config as before.
+//
+// Idempotent: an account whose name the store already has is not written
+// again and not returned, so config.yaml can keep its old list while nobody
+// has deleted it yet, without shadowing the stored entry.
+func (s *TokenStore) Adopt(provider, agent string, accts []Account) (rest []Account, moved []string, err error) {
+	if s == nil || len(accts) == 0 {
+		return accts, nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all, err := s.load()
+	if err != nil {
+		return accts, nil, err
+	}
+	pt := all[provider]
+	if pt == nil {
+		pt = &ProviderTokens{}
+		all[provider] = pt
+	}
+	have := map[string]bool{}
+	for _, t := range pt.Tokens {
+		have[t.Name] = true
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	changed := false
+	for _, a := range accts {
+		if have[a.Name] {
+			continue
+		}
+		t := StoredToken{Name: a.Name, Rotate: !a.NoRotate, Added: now, Updated: now,
+			Note: "chuyển từ config.yaml của " + agent}
+		if agent != "" {
+			t.Agents = []string{agent}
+		}
+		switch {
+		case a.APIKeyEnv != "" || a.OAuthTokenEnv != "":
+			rest = append(rest, a) // a secret in the environment stays there
+			continue
+		case strings.TrimSpace(a.OAuthToken) != "":
+			t.Kind, t.Value = KindSetupToken, strings.TrimSpace(a.OAuthToken)
+		case strings.TrimSpace(a.APIKey) != "":
+			t.Kind, t.Value = KindAPIKey, strings.TrimSpace(a.APIKey)
+		default:
+			dir := a.ConfigDir
+			if dir == "" {
+				dir = "~/.claude"
+				if provider == ProviderCodex {
+					dir = "~/.codex"
+				}
+			}
+			t.Kind, t.ConfigDir = KindLogin, dir
+		}
+		pt.Tokens = append(pt.Tokens, t)
+		have[a.Name] = true
+		moved = append(moved, a.Name)
+		changed = true
+	}
+	if changed {
+		if err := s.save(all); err != nil {
+			return accts, nil, err
+		}
+	}
+	return rest, moved, nil
 }

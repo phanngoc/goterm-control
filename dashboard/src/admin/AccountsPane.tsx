@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
+import TokenUsage from './TokenUsage'
+import { ago } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
 
-type Kind = 'setup_token' | 'access_token' | 'api_key'
+type Kind = 'setup_token' | 'access_token' | 'api_key' | 'login'
 
 interface TokenLive {
   agent_id: string
@@ -20,6 +22,9 @@ interface TokenView {
   masked: string
   rotate: boolean
   note?: string
+  config_dir?: string
+  agents?: string[]
+  last_used?: string
   added: string
   updated: string
   live?: TokenLive[]
@@ -48,6 +53,11 @@ const KINDS: Record<string, { kind: Kind; label: string; help: string; placehold
       help: 'Key từ console.anthropic.com — tính tiền theo token, không theo gói.',
       placeholder: 'sk-ant-api03-…',
     },
+    {
+      kind: 'login', label: 'login (thư mục)',
+      help: 'Thư mục đã chạy `CLAUDE_CONFIG_DIR=<thư mục> claude login` trên máy này. Không có giá trị bí mật nào được lưu — thư mục chính là thông tin đăng nhập.',
+      placeholder: '~/.claude-ten',
+    },
   ],
   codex: [
     {
@@ -60,10 +70,15 @@ const KINDS: Record<string, { kind: Kind; label: string; help: string; placehold
       help: 'Key từ platform.openai.com — tính tiền theo token.',
       placeholder: 'sk-proj-…',
     },
+    {
+      kind: 'login', label: 'login (thư mục)',
+      help: 'Thư mục đã chạy `CODEX_HOME=<thư mục> codex login` trên máy này.',
+      placeholder: '~/.codex-ten',
+    },
   ],
 }
 
-const KIND_LABEL: Record<Kind, string> = { setup_token: 'setup-token', access_token: 'access token', api_key: 'API key' }
+const KIND_LABEL: Record<Kind, string> = { setup_token: 'setup-token', access_token: 'access token', api_key: 'API key', login: 'login' }
 
 function until(stamp?: string): string {
   if (!stamp) return ''
@@ -120,22 +135,27 @@ interface Draft {
   value: string
   rotate: boolean
   note: string
+  config_dir: string
+  agents: string[]
 }
 
 // TokenForm adds a token, or edits one. Editing never shows the value — the
 // server does not send it — so an empty value field means "keep it".
-function TokenForm({ provider, initial, taken, busy, onSave, onCancel }: {
-  provider: string; initial?: TokenView; taken: string[]; busy: boolean
+function TokenForm({ provider, initial, taken, busy, onSave, onCancel, allAgents }: {
+  provider: string; initial?: TokenView; taken: string[]; busy: boolean; allAgents: string[]
   onSave: (d: Draft) => Promise<boolean>; onCancel: () => void
 }) {
   const kinds = KINDS[provider]
   const [d, setD] = useState<Draft>(() => initial
-    ? { old_name: initial.name, name: initial.name, kind: initial.kind, value: '', rotate: initial.rotate, note: initial.note ?? '' }
-    : { name: '', kind: kinds[0].kind, value: '', rotate: true, note: '' })
+    ? { old_name: initial.name, name: initial.name, kind: initial.kind, value: '', rotate: initial.rotate, note: initial.note ?? '',
+        config_dir: initial.config_dir ?? '', agents: initial.agents ?? [] }
+    : { name: '', kind: kinds[0].kind, value: '', rotate: true, note: '', config_dir: '', agents: [] })
   const meta = kinds.find(k => k.kind === d.kind) ?? kinds[0]
   const editing = !!initial
   const problem = nameProblem(d.name, taken.filter(n => n !== initial?.name))
-    || (!editing && d.value.trim() === '' ? 'Dán giá trị token vào ô "giá trị".' : '')
+    || (d.kind === 'login'
+      ? (d.config_dir.trim() === '' ? 'Nhập thư mục đăng nhập.' : '')
+      : (!editing && d.value.trim() === '' ? 'Dán giá trị token vào ô "giá trị".' : ''))
   const valid = problem === ''
 
   return (
@@ -161,6 +181,18 @@ function TokenForm({ provider, initial, taken, busy, onSave, onCancel }: {
           </select>
         </label>
       </div>
+      {d.kind === 'login' ? (
+      <label className="block">
+        <span className="block text-[10px] uppercase tracking-wider text-gray-600">thư mục</span>
+        <input
+          value={d.config_dir}
+          onChange={e => setD({ ...d, config_dir: e.target.value })}
+          placeholder={meta.placeholder}
+          className="w-full mt-0.5 px-2 py-1 text-xs bg-gray-900 rounded ring-1 ring-gray-800 focus:ring-gray-600 text-gray-200 outline-none font-mono"
+        />
+        <span className="block mt-1 text-[11px] text-gray-500">{meta.help}</span>
+      </label>
+      ) : (
       <label className="block">
         <span className="block text-[10px] uppercase tracking-wider text-gray-600">giá trị</span>
         <input
@@ -173,6 +205,26 @@ function TokenForm({ provider, initial, taken, busy, onSave, onCancel }: {
         />
         <span className="block mt-1 text-[11px] text-gray-500">{meta.help}</span>
       </label>
+      )}
+      {allAgents.length > 1 && (
+        <div className="text-xs text-gray-300">
+          <span className="block text-[10px] uppercase tracking-wider text-gray-600">agent được dùng</span>
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            {allAgents.map(a => (
+              <label key={a} className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={d.agents.length === 0 || d.agents.includes(a)}
+                  onChange={e => {
+                    const cur = d.agents.length === 0 ? allAgents : d.agents
+                    const next = e.target.checked ? [...new Set([...cur, a])] : cur.filter(x => x !== a)
+                    setD({ ...d, agents: next.length === allAgents.length ? [] : next })
+                  }} />
+                <span className="font-mono">{a}</span>
+              </label>
+            ))}
+            <span className="text-[11px] text-gray-500">— bỏ chọn để agent đó không dùng (vd login riêng của một agent)</span>
+          </div>
+        </div>
+      )}
       <label className="block">
         <span className="block text-[10px] uppercase tracking-wider text-gray-600">ghi chú</span>
         <input
@@ -204,8 +256,8 @@ function TokenForm({ provider, initial, taken, busy, onSave, onCancel }: {
   )
 }
 
-function ProviderSection({ pv, busy, act }: {
-  pv: ProviderView; busy: boolean
+function ProviderSection({ call, pv, busy, act }: {
+  call: Call; pv: ProviderView; busy: boolean
   act: (method: string, params: any, confirmText?: string) => Promise<boolean>
 }) {
   const [adding, setAdding] = useState(false)
@@ -216,6 +268,7 @@ function ProviderSection({ pv, busy, act }: {
   const save = (d: Draft) => act('tokens.save', {
     provider: pv.provider, old_name: d.old_name, name: d.name, kind: d.kind,
     value: d.value, rotate: d.rotate, note: d.note,
+    config_dir: d.kind === 'login' ? d.config_dir : '', agents: d.agents,
   })
 
   const n = parseInt(every || '0', 10)
@@ -254,13 +307,18 @@ function ProviderSection({ pv, busy, act }: {
           : <>0 = mỗi hội thoại ở yên trên tài khoản nó bắt đầu (theo <code>accounts.rotate_every</code> trong config). Token vẫn được dùng để chia hội thoại mới, và để chạy tiếp khi một tài khoản hết hạn mức.</>}
       </p>
 
+      {pv.tokens.length > 0 && (
+        <TokenUsage call={call} provider={pv.provider}
+          lastUsed={Object.fromEntries(pv.tokens.map(t => [t.name, t.last_used]))} />
+      )}
+
       <ul className="mt-3 space-y-2">
         {pv.tokens.length === 0 && !adding && (
           <li className="text-xs text-gray-600">chưa có token nào</li>
         )}
         {pv.tokens.map(t => editing === t.name ? (
           <li key={t.name}>
-            <TokenForm provider={pv.provider} initial={t} taken={pv.tokens.map(x => x.name)} busy={busy} onSave={save} onCancel={() => setEditing(null)} />
+            <TokenForm provider={pv.provider} initial={t} taken={pv.tokens.map(x => x.name)} busy={busy} onSave={save} onCancel={() => setEditing(null)} allAgents={pv.agents} />
           </li>
         ) : (
           <li key={t.name} className="rounded ring-1 ring-gray-800 px-3 py-2">
@@ -271,10 +329,14 @@ function ProviderSection({ pv, busy, act }: {
               {!t.rotate && (
                 <span title="Chỉ dùng khi chọn đích danh" className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-amber-500/30 text-amber-300">ngoài vòng xoay</span>
               )}
+              {!!t.agents?.length && (
+                <span title="Chỉ các agent này dùng" className="text-[10px] px-1.5 py-0.5 rounded ring-1 ring-sky-500/30 text-sky-300">chỉ {t.agents.join(', ')}</span>
+              )}
+              <span className="text-[11px] text-gray-500">{t.last_used ? `dùng ${ago(t.last_used)}` : 'chưa dùng'}</span>
               <div className="ml-auto flex items-center gap-1.5">
                 <button
                   disabled={busy}
-                  onClick={() => act('tokens.save', { provider: pv.provider, old_name: t.name, name: t.name, kind: t.kind, rotate: !t.rotate, note: t.note })}
+                  onClick={() => act('tokens.save', { provider: pv.provider, old_name: t.name, name: t.name, kind: t.kind, rotate: !t.rotate, note: t.note, config_dir: t.config_dir, agents: t.agents })}
                   className="px-1.5 py-0.5 text-[11px] rounded ring-1 ring-gray-800 text-gray-400 hover:text-gray-200"
                 >
                   {t.rotate ? 'bỏ khỏi vòng xoay' : 'cho vào vòng xoay'}
@@ -302,7 +364,7 @@ function ProviderSection({ pv, busy, act }: {
           </li>
         ))}
         {adding && (
-          <li><TokenForm provider={pv.provider} taken={pv.tokens.map(x => x.name)} busy={busy} onSave={save} onCancel={() => setAdding(false)} /></li>
+          <li><TokenForm provider={pv.provider} taken={pv.tokens.map(x => x.name)} busy={busy} onSave={save} onCancel={() => setAdding(false)} allAgents={pv.agents} /></li>
         )}
       </ul>
 
@@ -318,7 +380,7 @@ function ProviderSection({ pv, busy, act }: {
       {(pv.other?.length ?? 0) > 0 && (
         <div className="mt-4 pt-3 border-t border-gray-800">
           <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1">
-            tài khoản từ config.yaml (sửa trong file)
+            còn trong config.yaml — đọc giá trị từ biến môi trường nên không chuyển vào kho được
           </div>
           <ul className="space-y-1">
             {pv.other!.map((l, i) => (
@@ -385,7 +447,7 @@ export default function AccountsPane({ call }: { call: Call }) {
       </div>
       {err && <div className="mb-3 text-xs text-red-300 bg-red-500/10 ring-1 ring-red-500/30 rounded p-2 max-w-3xl">{err}</div>}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {views.map(pv => <ProviderSection key={pv.provider} pv={pv} busy={busy} act={act} />)}
+        {views.map(pv => <ProviderSection key={pv.provider} call={call} pv={pv} busy={busy} act={act} />)}
       </div>
     </div>
   )
