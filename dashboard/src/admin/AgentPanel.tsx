@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePersisted } from '../lib/persisted'
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
 import type { Channel, ChannelMessage } from './types'
@@ -34,12 +35,14 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
   onClose: () => void
 }) {
   const [agents, setAgents] = useState<string[]>([])
-  const [agent, setAgent] = useState('')
+  // Who you were talking to and in which session, per project; and whether
+  // the open file goes along — kept across reloads like the rest of the layout.
+  const [agent, setAgent] = usePersisted(`agentPick.${channelID}`, '')
   const [sessions, setSessions] = useState<ChannelMessage[]>([])
-  const [session, setSession] = useState<string>('') // thread root; '' = a new session
+  const [session, setSession] = usePersisted<string>(`agentSession.${channelID}`, '') // thread root; '' = a new session
   const [thread, setThread] = useState<ChannelMessage[]>([])
   const [draft, setDraft] = useState('')
-  const [attach, setAttach] = useState(true)
+  const [attach, setAttach] = usePersisted('agentAttach', true)
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -52,7 +55,7 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
         const ch = (cs || []).find(c => c.id === channelID)
         const ids = (ch?.members ?? []).filter(m => m.kind === 'agent').map(m => m.id)
         setAgents(ids)
-        setAgent(a => a || ids[0] || '')
+        setAgent(a => (a && ids.includes(a) ? a : ids[0] || ''))
       })
       .catch(e => setErr(errText(e)))
   }, [call, channelID])

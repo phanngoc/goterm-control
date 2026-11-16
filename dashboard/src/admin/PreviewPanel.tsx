@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePersisted } from '../lib/persisted'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -28,11 +29,12 @@ export default function PreviewPanel({ call, channelID, onClose }: {
   const [st, setSt] = useState<Status | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [sub, setSub] = useState('') // path inside the app, after its base
+  // The page inside the app is the project's; how it is viewed is yours.
+  const [sub, setSub] = usePersisted(`previewPath.${channelID}`, '') // path inside the app, after its base
   const [frameKey, setFrameKey] = useState(0)
-  const [showLogs, setShowLogs] = useState(false)
+  const [showLogs, setShowLogs] = usePersisted('previewLogs', false)
   const [logs, setLogs] = useState('')
-  const [mobile, setMobile] = useState(false)
+  const [mobile, setMobile] = usePersisted('previewMobile', false)
   const autoStarted = useRef(false)
   const logRef = useRef<HTMLPreElement>(null)
 

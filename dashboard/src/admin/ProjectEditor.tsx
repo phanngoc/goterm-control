@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import PublishButton from './PublishButton'
+import { usePersisted } from '../lib/persisted'
 import EnvPanel from './EnvPanel'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { monaco } from './monacoSetup'
@@ -15,29 +16,15 @@ const AgentPanel = lazy(() => import('./AgentPanel'))
 // usePersisted is useState remembered in this browser, so the editor opens the
 // way it was left — which panels, how big. Storage can be unavailable (private
 // windows); the editor then simply starts from the defaults.
-function usePersisted<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [v, setV] = useState<T>(() => {
-    try {
-      const raw = localStorage.getItem('editor.' + key)
-      return raw === null ? initial : (JSON.parse(raw) as T)
-    } catch {
-      return initial
-    }
-  })
-  useEffect(() => {
-    try { localStorage.setItem('editor.' + key, JSON.stringify(v)) } catch {}
-  }, [key, v])
-  return [v, setV]
-}
 
 // A column resize by dragging its left edge.
 // dragWidth resizes a column from its handle: a column on the right grows as
 // the handle moves left (dir -1, the default), one on the left as it moves
 // right (dir 1).
-function dragWidth(e: React.PointerEvent, width: number, set: (w: number) => void, dir: 1 | -1 = -1) {
+function dragWidth(e: React.PointerEvent, width: number, set: (w: number) => void, dir: 1 | -1 = -1, min = 280) {
   e.preventDefault()
   const startX = e.clientX
-  const move = (ev: PointerEvent) => set(Math.max(280, Math.min(window.innerWidth - 320, width + dir * (ev.clientX - startX))))
+  const move = (ev: PointerEvent) => set(Math.max(min, Math.min(window.innerWidth - 320, width + dir * (ev.clientX - startX))))
   const up = () => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
@@ -95,7 +82,7 @@ const narrow = () => window.innerWidth < 768
 // Agents write in this folder while it is open. A save therefore carries the
 // mtime the file was opened at and is refused if the file moved on since; the
 // person then picks between the version on disk and their own.
-export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine, initialPreview, initialAgent }: {
+export default function ProjectEditor({ call, channelID, root, onClose, standalone, initialFile, initialLine, initialPreview, initialAgent, initialCode }: {
   call: Call; channelID: string; root: string; onClose: () => void
   /** standalone is the editor as its own page, /files/<channel>/<path>: it
    *  keeps the address bar pointing at the open file and line. */
@@ -108,9 +95,19 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   /** initialAgent opens the agent column on arrival (?agent=1): the room
    *  header's "Code" button lands a reviewer on code, app and agent at once. */
   initialAgent?: boolean
+  /** initialCode shows the code on arrival (?code=1) — the room's "Code"
+   *  button. A file in the address alone does not: after a reload the address
+   *  is simply the last file you had open, and the layout you left wins. */
+  initialCode?: boolean
 }) {
   const [dirs, setDirs] = useState<Record<string, Entry[]>>({})
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
+  // Folders left open stay open, per project.
+  const [savedExpanded, setSavedExpanded] = usePersisted<string[]>(`expanded.${channelID}`, [''])
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['', ...savedExpanded]))
+  useEffect(() => { setSavedExpanded([...expanded]) }, [expanded]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Open tabs and the file in view, per project — restored on the next visit.
+  const [savedTabs, setSavedTabs] = usePersisted<{ path: string; preview?: boolean }[]>(`tabs.${channelID}`, [])
+  const [savedActive, setSavedActive] = usePersisted(`active.${channelID}`, '')
   const [tabs, setTabs] = useState<Tab[]>([])
   const [active, setActive] = useState('')
   const [folder, setFolder] = useState('') // where "new file" and "new folder" land
@@ -120,14 +117,15 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const [lang, setLang] = useState('')
   const [live, setLive] = useState('') // the active buffer, for the markdown preview
   const [sidebar, setSidebar] = usePersisted('sidebar', !narrow())
-  const [view, setView] = useState<'explorer' | 'search'>('explorer')
+  const [view, setView] = usePersisted<'explorer' | 'search'>('explorerView', 'explorer')
+  const [explorerWidth, setExplorerWidth] = usePersisted('explorerWidth', 256)
   const [quickOpen, setQuickOpen] = useState(false)
   const [searchFocus, setSearchFocus] = useState(0)
   // The terminal panel: mounted on first open and kept mounted after, so
   // hiding it does not end the shells in it.
   const [termOpen, setTermOpen] = usePersisted('terminal', false)
   const [termMounted, setTermMounted] = useState(termOpen)
-  const [termMax, setTermMax] = useState(false)
+  const [termMax, setTermMax] = usePersisted('terminalMax', false)
   const [termHeight, setTermHeight] = usePersisted('terminalHeight', Math.round(window.innerHeight * 0.35))
   // The running project, and the agents, beside the code — each its own
   // column, each shown or hidden on its own.
@@ -163,7 +161,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const showPreviewCol = previewOpen && (!phone || !agentOpen)
   const previewFlex = !showMain && showPreviewCol && !phone
   const agentFlex = !showMain && !showPreviewCol && agentOpen && !phone
-  const room = vw - (showMain ? (codeOpen && sidebar ? 256 : 0) : 0) - MIN_MAIN
+  const room = vw - (showMain ? (codeOpen && sidebar ? explorerWidth : 0) : 0) - MIN_MAIN
   const asked = (showPreviewCol && !previewFlex ? previewWidth : 0) + (agentOpen && !agentFlex ? agentWidth : 0)
   const fit = asked > room && asked > 0 ? Math.max(room, 0) / asked : 1
   const previewW = Math.max(260, Math.round(previewWidth * fit))
@@ -191,14 +189,22 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
     }
   }, [call, channelID])
 
-  useEffect(() => { loadDir('') }, [loadDir])
+  useEffect(() => { for (const d of expanded) loadDir(d) }, [loadDir]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ?preview=1 is a request to see the project running, whatever was left last time.
   useEffect(() => { if (initialPreview) setPreviewOpen(true) }, [initialPreview]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (initialAgent) setAgentOpen(true) }, [initialAgent]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Opening a file always shows it: a search hit or ⌘P with the code hidden
-  // would otherwise open into nothing.
-  useEffect(() => { if (active && !codeOpen) setCodeOpen(true) }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialCode) setCodeOpen(true) }, [initialCode]) // eslint-disable-line react-hooks/exhaustive-deps
+  // ?preview=1, ?agent=1 and ?code=1 are requests made by the link that
+  // brought you here — once. Left in the address they would be made again by
+  // every reload, undoing whatever you have changed since.
+  useEffect(() => {
+    if (!standalone) return
+    const q = new URLSearchParams(location.search)
+    let changed = false
+    for (const k of ['preview', 'agent', 'code']) if (q.has(k)) { q.delete(k); changed = true }
+    if (changed) history.replaceState(history.state, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A link to a file opens it, with the tree unfolded down to it so you can see
   // where it sits. Once only: the link is where you arrived, not where you are.
@@ -206,12 +212,11 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   useEffect(() => {
     if (arrived.current || !initialFile) return
     arrived.current = true
-    setCodeOpen(true)
     const parents: string[] = []
     for (let d = parentOf(initialFile); d; d = parentOf(d)) parents.unshift(d)
     setExpanded(s => new Set([...s, ...parents]))
     parents.forEach(d => loadDir(d))
-    openFile(initialFile, initialLine ? { line: initialLine, col: 1, len: 0 } : undefined)
+    openFile(initialFile, initialLine ? { line: initialLine, col: 1, len: 0 } : undefined, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialFile])
 
@@ -259,7 +264,11 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
     ed.focus()
   }
 
-  const openFile = async (path: string, at?: Reveal) => {
+  // show: opened by you (tree, ⌘P, a search hit) — so the code comes into
+  // view. A restore or an address after a reload passes false: it opens the
+  // tab and leaves the layout as it was.
+  const openFile = async (path: string, at?: Reveal, show = true) => {
+    if (show) setCodeOpen(true)
     setFolder(parentOf(path))
     if (narrow()) setSidebar(false)
     pendingReveal.current = at ? { path, at } : null
@@ -282,6 +291,37 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
       setErr(errText(e))
     }
   }
+
+  // The tabs you left, back on the next visit: read again from disk (a file
+  // gone since is skipped), the markdown preview of each as it was, and the
+  // one in view — unless the address names a file, which then wins.
+  const restored = useRef(false)
+  useEffect(() => {
+    if (restored.current) return
+    restored.current = true
+    ;(async () => {
+      for (const t of savedTabs) {
+        if (tabsRef.current.some(x => x.path === t.path)) continue
+        try {
+          const tab = await read(t.path)
+          modelFor(t.path)?.dispose()
+          setTabs(ts => (ts.some(x => x.path === t.path) ? ts : [...ts, { ...tab, preview: t.preview }]))
+        } catch { /* deleted or moved since: leave it closed */ }
+      }
+      if (!initialFile && savedActive && tabsRef.current.some(x => x.path === savedActive)) setActive(savedActive)
+      restoreDone.current = true
+    })()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const restoreDone = useRef(false)
+  // Saved only once the restore is over, so it cannot overwrite the list it
+  // is still reading with the empty one the page started with.
+  useEffect(() => {
+    if (!restoreDone.current) return
+    setSavedTabs(tabs.map(t => ({ path: t.path, ...(t.preview ? { preview: true } : {}) })))
+  }, [tabs]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (restoreDone.current) setSavedActive(active)
+  }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const closeTab = (path: string, ask = true) => {
     const tab = tabsRef.current.find(t => t.path === path)
@@ -702,7 +742,11 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
         )}
         {/* Explorer */}
         {showMain && codeOpen && sidebar && (
-          <aside className="w-64 max-w-[45vw] shrink-0 flex flex-col border-r border-black/40 bg-[#181818]">
+          <aside className="max-w-[45vw] shrink-0 flex flex-col border-r border-black/40 bg-[#181818] relative" style={{ width: explorerWidth }}>
+            <div
+              onPointerDown={e => dragWidth(e, explorerWidth, w => setExplorerWidth(Math.min(520, w)), 1, 180)}
+              className="absolute top-0 right-0 h-full w-1 cursor-col-resize hover:bg-sky-700 z-10" title="Kéo để đổi cỡ"
+            />
             <div className="flex items-center gap-2 px-3 h-8 text-[11px] uppercase tracking-wide shrink-0">
               <button
                 onClick={() => setView('explorer')}
