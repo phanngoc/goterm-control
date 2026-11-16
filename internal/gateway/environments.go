@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,6 +43,7 @@ type deployJob struct {
 	log      ringLog
 	result   *deploy.Result
 	err      string
+	done     chan struct{} // closed when the deploy ends
 }
 
 func NewEnvManager(cdb *coord.DB, previews *PreviewManager) *EnvManager {
@@ -180,6 +183,15 @@ func (m *EnvManager) candidates(c *coord.Channel) []deploy.Candidate {
 
 // Deploy starts a deploy in the background; Status and Logs follow it.
 func (m *EnvManager) Deploy(channelID string, opts deploy.Options) (*DeployJobView, error) {
+	return m.DeployBy(channelID, opts, coord.Member{Kind: coord.MemberUser, ID: coord.OwnerUserID})
+}
+
+// DeployBy is Deploy on someone's behalf: the person at the Publish button,
+// or the agent calling the publish tool. A real publish — not a dry run — is
+// announced in the project's room when it ends, by whoever started it, so
+// the team learns a new version is live (or that it failed) where they talk
+// about the project rather than by opening a panel.
+func (m *EnvManager) DeployBy(channelID string, opts deploy.Options, by coord.Member) (*DeployJobView, error) {
 	c, spec, err := m.resolve(channelID)
 	if err != nil {
 		return nil, err
@@ -205,7 +217,7 @@ func (m *EnvManager) Deploy(channelID string, opts deploy.Options) (*DeployJobVi
 			return nil, fmt.Errorf("a deploy of %s is already running", channelID)
 		}
 	}
-	job = &deployJob{running: true, started: time.Now(), opts: opts, log: ringLog{max: 256 << 10}}
+	job = &deployJob{running: true, started: time.Now(), opts: opts, log: ringLog{max: 256 << 10}, done: make(chan struct{})}
 	m.jobs[channelID] = job
 	m.mu.Unlock()
 
@@ -223,8 +235,61 @@ func (m *EnvManager) Deploy(channelID string, opts deploy.Options) (*DeployJobVi
 			fmt.Fprintf(&job.log, "✓ done\n")
 		}
 		job.mu.Unlock()
+		if !opts.DryRun {
+			m.announce(channelID, by, res, err)
+		} else if res != nil && strings.HasSuffix(res.ConfigPath, "/wrangler.json") {
+			// A rehearsal's generated config is for reading in the log, not
+			// for keeping: one temp folder per dry run otherwise piles up.
+			_ = os.RemoveAll(strings.TrimSuffix(res.ConfigPath, "/wrangler.json"))
+		}
+		close(job.done)
 	}()
 	return m.jobView(channelID), nil
+}
+
+// Wait blocks until the channel's current deploy ends, or ctx does, and
+// returns how it ended. For the publish tool, which answers when it is over.
+func (m *EnvManager) Wait(ctx context.Context, channelID string) (*DeployJobView, error) {
+	m.mu.Lock()
+	job := m.jobs[channelID]
+	m.mu.Unlock()
+	if job == nil {
+		return nil, fmt.Errorf("no deploy of %s has started", channelID)
+	}
+	select {
+	case <-job.done:
+	case <-ctx.Done():
+		return m.jobView(channelID), ctx.Err()
+	}
+	return m.jobView(channelID), nil
+}
+
+// announce posts the end of a publish into the project's room.
+func (m *EnvManager) announce(channelID string, by coord.Member, res *deploy.Result, err error) {
+	if m.coord == nil {
+		return
+	}
+	body := ""
+	switch {
+	case err != nil:
+		body = "✗ Publish lỗi: " + truncateLine(err.Error(), 300)
+	case res != nil && res.URL != "":
+		body = "🚀 Đã publish bản mới lên PROD: " + res.URL
+		if res.DBUploaded {
+			body += " (kèm database)"
+		}
+	default:
+		body = "🚀 Đã publish bản mới lên PROD."
+	}
+	kind := by.Kind
+	if kind == "" {
+		kind = coord.MemberAgent
+	}
+	if _, _, perr := m.coord.PostMessage(coord.NewChannelMessage{
+		ChannelID: channelID, AuthorKind: kind, AuthorID: by.ID, Body: body,
+	}); perr != nil {
+		log.Printf("env: announce publish of %s: %v", channelID, perr)
+	}
 }
 
 func (m *EnvManager) jobView(channelID string) *DeployJobView {

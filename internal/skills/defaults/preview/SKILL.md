@@ -1,6 +1,6 @@
 ---
 name: preview
-description: 'Make a project runnable from the dashboard''s Preview button (DEV) and publish it to Cloudflare (PROD: bomclaw env). Use when: a project has anything to look at or click, when you create a project, change how it runs, or deploy it. NOT for: a library or a script with nothing to show — say so in bomclaw.json instead of inventing a page.'
+description: 'Make a project runnable from the dashboard''s Preview button (bomclaw.json). Use when: a project has anything to look at, when you create one or change how it runs. NOT for: a library with nothing to show.'
 ---
 
 # preview
@@ -122,8 +122,11 @@ published site:
 | changes | live as you edit | only when someone **deploys** |
 
 Both are declared in the project's `bomclaw.json` — `preview` for DEV,
-`deploy` for PROD. The dashboard shows them side by side (button **DEV · PROD**
-in the room's header), and you see the same from the shell.
+`deploy` for PROD. The dashboard shows them in the room header's
+infrastructure badge and the editor's **Publish** button, and you see the same
+from the shell — or, better, with the `publish_status` / `publish_setup` /
+`publish` MCP tools (the `publish` plugin), which do what the button does and
+announce a publish in the room.
 
 ### Check
 

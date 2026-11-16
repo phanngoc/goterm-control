@@ -131,6 +131,8 @@ func main() {
 		runPreview(os.Args[2:])
 	case "env":
 		runEnv(os.Args[2:])
+	case "mcp":
+		runMCP(os.Args[2:])
 	case "secrets", "secret":
 		runSecrets(os.Args[2:])
 	case "skills", "skill":

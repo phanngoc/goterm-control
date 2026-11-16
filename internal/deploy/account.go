@@ -159,13 +159,15 @@ func (c *Client) AccountInfo(ctx context.Context) Account {
 		}
 	}
 
-	if zones, err := c.ZonePlans(ctx); err == nil {
+	zones, zerr := c.ZonePlans(ctx)
+	if zerr == nil {
 		acc.Zones = zones
 	}
 
-	// Only a lookup that learned something is kept: a network blip must not
-	// pin an empty answer for ten minutes.
-	if acc.Name != "" {
+	// Only a complete lookup is kept: a blip on any one of these calls must
+	// not pin a half answer — the account without its plans — for ten
+	// minutes. It did, the first time the dashboard opened every room at once.
+	if acc.Name != "" && zerr == nil {
 		accountMu.Lock()
 		accountCache[key] = cachedAccount{at: time.Now(), acc: acc}
 		accountMu.Unlock()
