@@ -31,10 +31,13 @@ function usePersisted<T>(key: string, initial: T): [T, React.Dispatch<React.SetS
 }
 
 // A column resize by dragging its left edge.
-function dragWidth(e: React.PointerEvent, width: number, set: (w: number) => void) {
+// dragWidth resizes a column from its handle: a column on the right grows as
+// the handle moves left (dir -1, the default), one on the left as it moves
+// right (dir 1).
+function dragWidth(e: React.PointerEvent, width: number, set: (w: number) => void, dir: 1 | -1 = -1) {
   e.preventDefault()
   const startX = e.clientX
-  const move = (ev: PointerEvent) => set(Math.max(280, Math.min(window.innerWidth - 320, width + (startX - ev.clientX))))
+  const move = (ev: PointerEvent) => set(Math.max(280, Math.min(window.innerWidth - 320, width + dir * (ev.clientX - startX))))
   const up = () => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
@@ -46,6 +49,7 @@ function dragWidth(e: React.PointerEvent, width: number, set: (w: number) => voi
 // Toggle icons for the title bar, drawn like VS Code's layout controls.
 const Icon = {
   sidebar: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1" /><path d="M5.5 2.5v11" /></svg>,
+  code: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="m5.5 4.5-3.5 3.5 3.5 3.5M10.5 4.5l3.5 3.5-3.5 3.5" /></svg>,
   panel: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1" /><path d="M1.5 9.5h13" /></svg>,
   preview: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><rect x="1.5" y="2.5" width="13" height="11" rx="1" /><path d="M9.5 2.5v11M5 6.5l2 1.5-2 1.5" /></svg>,
   agent: <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" /><path d="M5.5 7h5" /></svg>,
@@ -127,11 +131,19 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const [termHeight, setTermHeight] = usePersisted('terminalHeight', Math.round(window.innerHeight * 0.35))
   // The running project, and the agents, beside the code — each its own
   // column, each shown or hidden on its own.
-  const [previewOpen, setPreviewOpen] = usePersisted('preview', !!initialPreview)
+  // Preview and the agent are what the page opens on; the code is one click
+  // away. A link to a file (?file / the room's "Code" button) opens the code,
+  // because that is what it was clicked for.
+  const [previewOpen, setPreviewOpen] = usePersisted('preview', true)
+  // Code is the editor column as a whole — tabs, editor and the explorer
+  // beside it. Off means all of it goes; the explorer's own state (Files,
+  // ⌘B) is kept apart, so turning Code back on brings the tree back the way
+  // it was left instead of needing it opened again.
+  const [codeOpen, setCodeOpen] = usePersisted('code', !!initialFile)
   const [previewWidth, setPreviewWidth] = usePersisted('previewWidth', Math.round(window.innerWidth * 0.4))
-  const [agentOpen, setAgentOpen] = usePersisted('agent', false)
+  const [agentOpen, setAgentOpen] = usePersisted('agent', true)
   const [envOpen, setEnvOpen] = useState(false)
-  const [agentWidth, setAgentWidth] = usePersisted('agentWidth', 380)
+  const [agentWidth, setAgentWidth] = usePersisted('agentWidth', 440)
   // On a phone one column fits: the agent, else the preview, else the code.
   const phone = narrow()
   // The code keeps at least MIN_MAIN px: when the side columns asked for more
@@ -144,13 +156,18 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
     return () => window.removeEventListener('resize', on)
   }, [])
   const MIN_MAIN = 360
-  const room = vw - (sidebar ? 256 : 0) - MIN_MAIN
-  const asked = (previewOpen ? previewWidth : 0) + (agentOpen ? agentWidth : 0)
+  // The main column holds the code and the terminal; with neither, the
+  // preview (or else the agent) takes the remaining width instead.
+  const mainWanted = codeOpen || termOpen
+  const showMain = mainWanted && (!phone || (!previewOpen && !agentOpen))
+  const showPreviewCol = previewOpen && (!phone || !agentOpen)
+  const previewFlex = !showMain && showPreviewCol && !phone
+  const agentFlex = !showMain && !showPreviewCol && agentOpen && !phone
+  const room = vw - (showMain ? (codeOpen && sidebar ? 256 : 0) : 0) - MIN_MAIN
+  const asked = (showPreviewCol && !previewFlex ? previewWidth : 0) + (agentOpen && !agentFlex ? agentWidth : 0)
   const fit = asked > room && asked > 0 ? Math.max(room, 0) / asked : 1
   const previewW = Math.max(260, Math.round(previewWidth * fit))
   const agentW = Math.max(300, Math.round(agentWidth * fit))
-  const showMain = !phone || (!previewOpen && !agentOpen)
-  const showPreviewCol = previewOpen && (!phone || !agentOpen)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   // A search hit waits here until its file's model is in the editor.
   const pendingReveal = useRef<{ path: string; at: Reveal } | null>(null)
@@ -179,6 +196,9 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   // ?preview=1 is a request to see the project running, whatever was left last time.
   useEffect(() => { if (initialPreview) setPreviewOpen(true) }, [initialPreview]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (initialAgent) setAgentOpen(true) }, [initialAgent]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Opening a file always shows it: a search hit or ⌘P with the code hidden
+  // would otherwise open into nothing.
+  useEffect(() => { if (active && !codeOpen) setCodeOpen(true) }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A link to a file opens it, with the tree unfolded down to it so you can see
   // where it sits. Once only: the link is where you arrived, not where you are.
@@ -186,6 +206,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   useEffect(() => {
     if (arrived.current || !initialFile) return
     arrived.current = true
+    setCodeOpen(true)
     const parents: string[] = []
     for (let d = parentOf(initialFile); d; d = parentOf(d)) parents.unshift(d)
     setExpanded(s => new Set([...s, ...parents]))
@@ -366,9 +387,11 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   }
   const toggleTermRef = useRef(toggleTerm)
   toggleTermRef.current = toggleTerm
-  const layoutRef = useRef({ sidebar: () => {}, preview: () => {}, agent: () => {} })
+  const layoutRef = useRef({ sidebar: () => {}, code: () => {}, preview: () => {}, agent: () => {} })
   layoutRef.current = {
-    sidebar: () => setSidebar(v => !v),
+    // ⌘B with the code hidden shows the code, explorer open.
+    sidebar: () => { if (!codeOpen) { setCodeOpen(true); setSidebar(true) } else setSidebar(v => !v) },
+    code: () => setCodeOpen(v => !v),
     preview: () => setPreviewOpen(!previewOpen),
     agent: () => setAgentOpen(v => !v),
   }
@@ -606,18 +629,26 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           the middle as one segmented control, Publish on the right as the one
           primary action. The views stay independent toggles (VS Code's
           layout), so code, the running app and the agent can sit side by side. */}
-      <header className="relative flex items-center gap-3 h-12 px-3 border-b border-black/40 bg-[#181818] text-sm shrink-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+      <header className="relative flex items-center gap-3 h-12 pr-3 border-b border-black/40 bg-[#181818] text-sm shrink-0">
+        {/* Above the agent column, as wide as it: the project, and the
+            switch that folds the conversation away. */}
+        <div className="flex items-center gap-2 min-w-0 pl-3 shrink-0"
+          style={agentOpen && !phone && !agentFlex ? { width: agentW + 4 } : undefined}>
           <span className="font-semibold text-gray-100 truncate">{project}</span>
-          <span className="text-[11px] text-gray-500 font-mono truncate hidden xl:block">{root}</span>
+          <button
+            onClick={() => layoutRef.current.agent()} aria-pressed={agentOpen} aria-label="Agent"
+            title={agentOpen ? 'Ẩn khung agent (⌘⇧I)' : 'Hiện khung agent (⌘⇧I)'}
+            className={`ml-auto shrink-0 h-7 w-7 grid place-items-center rounded-lg cursor-pointer transition-colors duration-150
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400
+              ${agentOpen ? 'text-sky-300 bg-[#2f3540]' : 'text-gray-400 hover:text-gray-100 hover:bg-white/5'}`}
+          >{Icon.agent}</button>
         </div>
         {/* Views. */}
         <nav aria-label="Chế độ xem" className="shrink-0 flex items-center gap-0.5 rounded-full bg-black/30 ring-1 ring-white/5 p-0.5">
           {([
             ['preview', previewOpen, layoutRef.current.preview, 'Preview — chạy dự án (⌘⇧V)', 'Preview'],
-            ['sidebar', sidebar, layoutRef.current.sidebar, 'Code — cây thư mục / tìm kiếm (⌘B)', 'Code'],
+            ['code', codeOpen, layoutRef.current.code, 'Code — editor và cây thư mục', 'Code'],
             ['panel', termOpen, toggleTerm, 'Terminal (⌘J · Ctrl+`)', 'Terminal'],
-            ['agent', agentOpen, layoutRef.current.agent, 'Agent — hỏi agent theo phiên (⌘⇧I)', 'Agent'],
           ] as const).map(([icon, on, toggle, title, label]) => (
             <button
               key={icon} onClick={() => toggle()} title={title} aria-pressed={on} aria-label={label}
@@ -629,6 +660,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
             </button>
           ))}
         </nav>
+        <span className="hidden xl:block text-[11px] text-gray-500 font-mono truncate min-w-0" title={root}>{root}</span>
         <div className="flex items-center justify-end gap-2 min-w-0 flex-1">
           {standalone ? (
             <button
@@ -654,8 +686,22 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
       )}
 
       <div className="flex flex-1 min-h-0">
+        {/* The agent, on the left — Lovable's layout: the conversation is
+            where work continues, and the project is the stage beside it. */}
+        {agentOpen && (
+          <>
+            <div className={agentFlex ? 'flex-1 min-w-0' : 'shrink-0 min-w-0'} style={phone ? { width: '100%' } : agentFlex ? undefined : { width: agentW }}>
+              <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở…</div>}>
+                <AgentPanel call={call} channelID={channelID} getContext={getContext} onClose={() => setAgentOpen(false)} />
+              </Suspense>
+            </div>
+            {!phone && !agentFlex && (
+              <div onPointerDown={e => dragWidth(e, agentWidth, setAgentWidth, 1)} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
+            )}
+          </>
+        )}
         {/* Explorer */}
-        {sidebar && (
+        {showMain && codeOpen && sidebar && (
           <aside className="w-64 max-w-[45vw] shrink-0 flex flex-col border-r border-black/40 bg-[#181818]">
             <div className="flex items-center gap-2 px-3 h-8 text-[11px] uppercase tracking-wide shrink-0">
               <button
@@ -687,10 +733,27 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           </aside>
         )}
 
+        {!showMain && !showPreviewCol && !agentOpen && (
+          <div className="flex-1 grid place-items-center text-sm text-gray-500">
+            <div className="text-center space-y-3">
+              <div>Không panel nào đang mở.</div>
+              <div className="flex gap-2 justify-center">
+                <button onClick={() => setPreviewOpen(true)} className="px-3 h-8 rounded-full ring-1 ring-gray-700 text-gray-300 hover:text-white cursor-pointer">Preview</button>
+                <button onClick={() => setCodeOpen(true)} className="px-3 h-8 rounded-full ring-1 ring-gray-700 text-gray-300 hover:text-white cursor-pointer">Code</button>
+                <button onClick={() => setAgentOpen(true)} className="px-3 h-8 rounded-full ring-1 ring-gray-700 text-gray-300 hover:text-white cursor-pointer">Agent</button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* Editor area */}
         <main className="flex-1 min-w-0 flex flex-col" hidden={!showMain}>
-          {/* Tabs */}
-          <div className="flex items-stretch h-9 bg-[#181818] overflow-x-auto shrink-0">
+          {/* Tabs — led by the explorer toggle, where VS Code keeps it. */}
+          <div className="flex items-stretch h-9 bg-[#181818] overflow-x-auto shrink-0" hidden={!codeOpen}>
+            <button
+              onClick={() => setSidebar(v => !v)} aria-pressed={sidebar}
+              title="Files — cây thư mục / tìm kiếm (⌘B)" aria-label="Files"
+              className={`shrink-0 px-2.5 grid place-items-center border-r border-black/40 cursor-pointer ${sidebar ? 'text-sky-300' : 'text-gray-500 hover:text-gray-200'}`}
+            >{Icon.sidebar}</button>
             {tabs.map(t => (
               <div
                 key={t.path}
@@ -715,7 +778,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
             )}
           </div>
 
-          {activeTab?.conflict && (
+          {codeOpen && activeTab?.conflict && (
             <div className="flex flex-wrap items-center gap-3 px-3 py-2 text-xs bg-amber-950/70 text-amber-100 shrink-0">
               <span>File đã bị sửa trên đĩa (có thể bởi một agent) sau khi bạn mở.</span>
               <button onClick={() => reloadFromDisk(active)} className="underline hover:text-white">Lấy bản trên đĩa</button>
@@ -723,13 +786,13 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
               <button onClick={() => setTabs(ts => ts.map(t => t.path === active ? { ...t, conflict: false } : t))} className="ml-auto hover:text-white">để sau</button>
             </div>
           )}
-          {activeTab?.truncated && (
+          {codeOpen && activeTab?.truncated && (
             <div className="px-3 py-1.5 text-xs bg-gray-800 text-gray-300 shrink-0">
               File lớn hơn 512 KB — chỉ hiện phần đầu và không sửa được ở đây.
             </div>
           )}
 
-          <div className="flex-1 min-h-0 flex" hidden={termOpen && termMax}>
+          <div className="flex-1 min-h-0 flex" hidden={!codeOpen || (termOpen && termMax)}>
             {!activeTab ? (
               <div className="flex-1 flex items-center justify-center text-sm text-gray-500">
                 ⌘P mở file theo tên · ⌘⇧F tìm trong mọi file · ⌘S lưu
@@ -774,10 +837,10 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           {termMounted && (
             <div
               hidden={!termOpen}
-              className={termMax ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0 flex flex-col'}
-              style={termMax ? undefined : { height: termHeight }}
+              className={termMax || !codeOpen ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0 flex flex-col'}
+              style={termMax || !codeOpen ? undefined : { height: termHeight }}
             >
-              {!termMax && (
+              {!termMax && codeOpen && (
                 <div onPointerDown={startDrag} className="h-1 shrink-0 cursor-row-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
               )}
               <div className="flex-1 min-h-0">
@@ -795,7 +858,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           )}
 
           {/* Status bar */}
-          <footer className="flex items-center gap-4 h-6 px-3 text-[11px] bg-[#007acc] text-white shrink-0">
+          <footer className="flex items-center gap-4 h-6 px-3 text-[11px] bg-[#007acc] text-white shrink-0" hidden={!codeOpen}>
             <span className="truncate">{active || project}</span>
             {activeTab && !activeTab.binary && (
               <span className="ml-auto flex items-center gap-4 whitespace-nowrap">
@@ -809,24 +872,12 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
 
         {showPreviewCol && (
           <>
-            {!phone && (
+            {!phone && showMain && (
               <div onPointerDown={e => dragWidth(e, previewWidth, setPreviewWidth)} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
             )}
-            <div className="shrink-0 min-w-0" style={phone ? { width: '100%' } : { width: previewW }}>
+            <div className={previewFlex ? 'flex-1 min-w-0' : 'shrink-0 min-w-0'} style={phone ? { width: '100%' } : previewFlex ? undefined : { width: previewW }}>
               <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở preview…</div>}>
                 <PreviewPanel call={call} channelID={channelID} onClose={() => setPreviewOpen(false)} />
-              </Suspense>
-            </div>
-          </>
-        )}
-        {agentOpen && (
-          <>
-            {!phone && (
-              <div onPointerDown={e => dragWidth(e, agentWidth, setAgentWidth)} className="w-1 shrink-0 cursor-col-resize bg-black/40 hover:bg-sky-700" title="Kéo để đổi cỡ" />
-            )}
-            <div className="shrink-0 min-w-0" style={phone ? { width: '100%' } : { width: agentW }}>
-              <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-gray-500">Đang mở…</div>}>
-                <AgentPanel call={call} channelID={channelID} getContext={getContext} onClose={() => setAgentOpen(false)} />
               </Suspense>
             </div>
           </>
