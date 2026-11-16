@@ -208,6 +208,8 @@ func fakeCloudflare(t *testing.T) (*Client, *[]string) {
 			ok(map[string]string{"name": "Ngoc's Account", "type": "standard"})
 		case r.Method == "GET" && r.URL.Path == "/zones" && r.URL.Query().Get("account.id") == "acct":
 			ok([]map[string]any{{"name": "bomclaw.org", "plan": map[string]any{"name": "Free Website", "price": 0, "currency": "USD"}}})
+		case r.Method == "GET" && r.URL.Path == "/accounts/acct/workers/scripts":
+			ok([]map[string]any{{"id": "other"}, {"id": "phim", "modified_on": "2026-11-08T08:00:00Z"}})
 		case r.Method == "GET" && r.URL.Path == "/accounts/acct/subscriptions":
 			ok([]map[string]any{
 				{"rate_plan": map[string]string{"id": "pro", "public_name": "Pro Plan"}, "state": "Paid"},
@@ -379,5 +381,43 @@ func TestAnUnreadablePlanIsLeftEmpty(t *testing.T) {
 	// The domains' plans still answer "which plan" when billing is closed.
 	if len(acc.Zones) != 1 || acc.Zones[0].Plan != "Pro Website" {
 		t.Errorf("zones = %+v", acc.Zones)
+	}
+}
+
+// A project published by hand is found by the names it could be live under,
+// in order, and reported live with its domain — not as "no PROD".
+func TestALiveWorkerIsFoundWithoutADeclaration(t *testing.T) {
+	c, _ := fakeCloudflare(t)
+	d := &Cloudflare{Client: c}
+	st, from := d.Discover(context.Background(), []Candidate{
+		{Name: "missing", Source: "tên phòng"},
+		{Name: "phim", Source: "cloud/wrangler.jsonc"},
+	})
+	if st == nil || !st.Deployed || st.Name != "phim" || st.URL != "https://phim.bomclaw.org" || from != "cloud/wrangler.jsonc" {
+		t.Fatalf("found = %+v from %q", st, from)
+	}
+	if st, _ := d.Discover(context.Background(), []Candidate{{Name: "nope"}}); st != nil {
+		t.Errorf("a name with no Worker was reported live: %+v", st)
+	}
+}
+
+func TestWranglerNamesReadsTheProjectsConfigs(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(dir, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("cloud/wrangler.jsonc", "// comment\n{\n  \"name\": \"rebds-danang\",\n  \"main\": \"src/index.ts\"\n}")
+	write("apps/web/wrangler.toml", "name = \"web-app\"\nmain = \"x.js\"\n")
+	write("node_modules/pkg/wrangler.toml", "name = \"ignored\"\n")
+	got := map[string]string{}
+	for _, c := range WranglerNames(dir) {
+		got[c.Name] = c.Source
+	}
+	if got["rebds-danang"] != filepath.Join("cloud", "wrangler.jsonc") || got["web-app"] == "" || got["ignored"] != "" {
+		t.Errorf("names = %v", got)
 	}
 }

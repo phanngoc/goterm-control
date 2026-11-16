@@ -28,6 +28,7 @@ export interface EnvStatus {
     deployed_at?: string; url?: string; workers_dev?: string; domains?: string[]; want_domain?: string
     database?: DBStatus
     account?: InfraAccount
+    discovered_from?: string
     services?: string[]
   }
   deploy?: { running: boolean; started: string; finished?: string; with_db: boolean; dry_run: boolean; error?: string; result?: { url?: string } }
@@ -79,15 +80,17 @@ export const toneClass: Record<Tone, { dot: string; ring: string; text: string; 
 }
 
 /** prodState is PROD in one tone and a few words. */
-export function prodState(st: EnvStatus | null): { tone: Tone; label: string } {
-  if (!st) return { tone: 'idle', label: 'đang kiểm tra…' }
+export function prodState(st: EnvStatus | null): { tone: Tone; label: string; short: string } {
+  if (!st) return { tone: 'idle', label: 'đang kiểm tra…', short: '…' }
   const p = st.prod
-  if (st.deploy?.running) return { tone: 'busy', label: 'đang deploy…' }
-  if (!p.connected) return { tone: 'warn', label: 'chưa kết nối' }
-  if (!st.declared) return { tone: 'ok', label: 'đã kết nối · chưa có PROD' }
-  if (p.error) return { tone: 'bad', label: 'PROD lỗi' }
-  if (p.deployed) return { tone: 'live', label: 'live' }
-  return { tone: 'ok', label: 'chưa deploy' }
+  if (st.deploy?.running) return { tone: 'busy', label: 'đang deploy…', short: 'deploy…' }
+  if (!p.connected) return { tone: 'warn', label: 'chưa kết nối', short: 'chưa nối' }
+  // Live but never declared in bomclaw.json: published by hand, found by name.
+  if (!st.declared && p.deployed) return { tone: 'live', label: 'live', short: 'live' }
+  if (!st.declared) return { tone: 'ok', label: 'đã kết nối · chưa có PROD', short: 'chưa PROD' }
+  if (p.error) return { tone: 'bad', label: 'PROD lỗi', short: 'lỗi' }
+  if (p.deployed) return { tone: 'live', label: 'live', short: 'live' }
+  return { tone: 'ok', label: 'chưa deploy', short: 'chưa deploy' }
 }
 
 /** devState is the local Preview in one tone and a word. */
@@ -142,25 +145,30 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
       <button
         onClick={e => { e.currentTarget.blur(); onOpen() }}
         aria-label={summary}
-        className={`flex items-center gap-2 h-7 pl-2 pr-2.5 rounded-full ring-1 ${c.ring} ${c.soft} text-[11px] cursor-pointer
+        className={`flex items-center gap-1.5 @2xl:gap-2 h-7 pl-2 pr-2.5 rounded-full ring-1 ${c.ring} ${c.soft} text-[11px] cursor-pointer
           transition-colors duration-200 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400`}
       >
-        <CloudIcon className={`h-3.5 w-3.5 ${c.text}`} />
-        <span className="font-medium text-gray-200">{provider}</span>
+        <CloudIcon className={`h-3.5 w-3.5 shrink-0 ${c.text}`} />
+        <span className="font-medium text-gray-200 hidden @2xl:inline">{provider}</span>
         {plan && (
-          <span className={`px-1.5 rounded-full text-[10px] font-medium ring-1 ${
+          <span className={`hidden @xl:inline px-1.5 rounded-full text-[10px] font-medium ring-1 whitespace-nowrap ${
             /free/i.test(plan) ? 'bg-gray-900/60 text-gray-300 ring-gray-700' : 'bg-violet-500/15 text-violet-200 ring-violet-500/30'}`}>
             {plan}
           </span>
         )}
-        <span className="h-3 w-px bg-gray-700" aria-hidden />
+        <span className="h-3 w-px bg-gray-700 hidden @2xl:block" aria-hidden />
         <Dot tone={err ? 'bad' : prod.tone} />
         <span className={`${c.text} whitespace-nowrap`}>
-          {err ? 'lỗi đọc trạng thái' : prod.tone === 'live' ? 'PROD live' : prod.label}
+          {err ? 'lỗi' : (
+            <>
+              <span className="@4xl:hidden">{prod.tone === 'live' ? 'live' : prod.short}</span>
+              <span className="hidden @4xl:inline">{prod.tone === 'live' ? 'PROD live' : prod.label}</span>
+            </>
+          )}
         </span>
-        {where && <span className="font-mono text-gray-400 max-w-[180px] truncate hidden xl:inline">{where}</span>}
-        <span className="h-3 w-px bg-gray-700" aria-hidden />
-        <span className="flex items-center gap-1 text-gray-400" title={`DEV: ${dev.label}`}>
+        {where && <span className="font-mono text-gray-400 max-w-[180px] truncate hidden @6xl:inline">{where}</span>}
+        <span className="h-3 w-px bg-gray-700 hidden @3xl:block" aria-hidden />
+        <span className="hidden @3xl:flex items-center gap-1 text-gray-400" title={`DEV: ${dev.label}`}>
           <Dot tone={dev.tone} size="h-1.5 w-1.5" />DEV
         </span>
       </button>
@@ -173,7 +181,7 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
           className="invisible opacity-0 translate-y-1 group-hover:visible group-hover:opacity-100 group-hover:translate-y-0
             group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0
             transition-all duration-150 motion-reduce:transition-none
-            absolute right-0 top-full mt-2 z-40 w-96 rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl p-3 space-y-2.5 text-xs"
+            absolute left-0 top-full mt-2 z-40 w-96 max-w-[calc(100vw-2rem)] rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl p-3 space-y-2.5 text-xs"
         >
           <div className="flex items-center gap-2">
             <Dot tone={prod.tone} />
