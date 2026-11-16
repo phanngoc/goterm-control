@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePersisted } from '../lib/persisted'
 import ChatInput from '../components/ChatInput'
 import MessageMarkdown from '../components/MessageMarkdown'
-import type { Channel, ChannelMessage } from './types'
+import ProgressCard, { isProgressLine, parseProgress } from './ProgressCard'
+import { LogView } from './TaskSession'
+import type { Channel, ChannelMessage, TaskLogEntry } from './types'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -34,12 +37,14 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
   onClose: () => void
 }) {
   const [agents, setAgents] = useState<string[]>([])
-  const [agent, setAgent] = useState('')
+  // Who you were talking to and in which session, per project; and whether
+  // the open file goes along — kept across reloads like the rest of the layout.
+  const [agent, setAgent] = usePersisted(`agentPick.${channelID}`, '')
   const [sessions, setSessions] = useState<ChannelMessage[]>([])
-  const [session, setSession] = useState<string>('') // thread root; '' = a new session
+  const [session, setSession] = usePersisted<string>(`agentSession.${channelID}`, '') // thread root; '' = a new session
   const [thread, setThread] = useState<ChannelMessage[]>([])
   const [draft, setDraft] = useState('')
-  const [attach, setAttach] = useState(true)
+  const [attach, setAttach] = usePersisted('agentAttach', true)
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -52,7 +57,7 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
         const ch = (cs || []).find(c => c.id === channelID)
         const ids = (ch?.members ?? []).filter(m => m.kind === 'agent').map(m => m.id)
         setAgents(ids)
-        setAgent(a => a || ids[0] || '')
+        setAgent(a => (a && ids.includes(a) ? a : ids[0] || ''))
       })
       .catch(e => setErr(errText(e)))
   }, [call, channelID])
@@ -93,6 +98,34 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
     return () => clearInterval(t)
   }, [session, working, loadThread])
 
+  // The session's steps, as the agent ran them (threads.log): every thinking
+  // block, tool call and result — what Claude Code prints in its own panel.
+  // Read incrementally; fast while a turn is running.
+  const [log, setLog] = useState<TaskLogEntry[]>([])
+  const [logRunning, setLogRunning] = useState(false)
+  const lastLogID = useRef(0)
+  useEffect(() => { setLog([]); lastLogID.current = 0; setLogRunning(false) }, [session])
+  const loadLog = useCallback(async () => {
+    if (!session) return
+    try {
+      const after = lastLogID.current
+      const r: { entries: TaskLogEntry[]; running?: string } = await call('threads.log', { root_id: session, after })
+      const fresh = r.entries ?? []
+      if (after === 0) setLog(fresh)
+      else if (fresh.length) setLog(prev => [...prev, ...fresh])
+      for (const e of fresh) if (e.id > lastLogID.current) lastLogID.current = e.id
+      setLogRunning(!!r.running)
+    } catch { /* the messages still tell the story */ }
+  }, [call, session])
+  useEffect(() => {
+    void loadLog()
+    if (!session) return
+    const t = setInterval(loadLog, working || logRunning ? 1500 : 5000)
+    return () => clearInterval(t)
+  }, [session, working, logRunning, loadLog])
+  const [showThinking, setShowThinking] = usePersisted('agentThinking', true)
+  const timeline = useMemo(() => turns(thread, log), [thread, log])
+
   // A session's agent is the one that answered it; switching to it shows that.
   useEffect(() => {
     const replier = thread.find(m => m.author_kind === 'agent')?.author_id
@@ -100,10 +133,14 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, thread.length > 1])
 
+  // Follow the bottom as steps arrive — unless you scrolled up to read, the
+  // way Claude Code's panel does. Back at the bottom, it follows again.
+  const stick = useRef(true)
+  useEffect(() => { stick.current = true }, [session])
   useEffect(() => {
     const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [thread.length, last?.body])
+    if (el && stick.current) el.scrollTop = el.scrollHeight
+  }, [thread.length, last?.body, log.length])
 
   // Refresh the context chip whenever the panel is looked at or typed in.
   const refreshCtx = () => setCtx(getContext())
@@ -129,6 +166,7 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
         ...(session ? { thread_root: session } : {}),
       })
       setDraft('')
+      stick.current = true
       if (!session) setSession(msg.id)
       else loadThread(session)
       loadSessions()
@@ -162,6 +200,9 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
           ))}
         </select>
         <button onClick={() => setSession('')} title="Phiên mới" className="text-gray-400 hover:text-white">＋</button>
+        <button onClick={() => setShowThinking(v => !v)} aria-pressed={showThinking}
+          title={showThinking ? 'Ẩn các đoạn suy nghĩ' : 'Hiện các đoạn suy nghĩ'}
+          className={showThinking ? 'text-violet-300' : 'text-gray-500 hover:text-white'}>✻</button>
         <a
           href={`/admin/messages/${encodeURIComponent(channelID)}`} target="_blank" rel="noopener noreferrer"
           title="Mở phòng chat của dự án" className="text-gray-400 hover:text-sky-300"
@@ -171,28 +212,51 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
 
       {err && <div className="px-3 py-1.5 text-xs bg-red-950/70 text-red-200 shrink-0 break-words">{err}</div>}
 
-      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
+      <div ref={listRef}
+        onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}
+        className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
         {!session ? (
           <div className="text-sm text-gray-500 space-y-2 pt-6 px-2">
             <p className="text-gray-300">Hỏi agent về dự án này.</p>
             <p>Mỗi phiên là một thread trong phòng của dự án: agent nhớ ngữ cảnh trong phiên, và cả phòng đọc được.</p>
             <p>Bật 📎 để gửi kèm file đang mở, dòng con trỏ và đoạn code đang chọn.</p>
           </div>
-        ) : thread.map(m => {
-          const mine = m.author_kind === 'user'
-          const progress = m.body.startsWith(PROGRESS)
-          return (
-            <div key={m.id} className={mine ? 'pl-6' : 'pr-2'}>
-              <div className="flex items-baseline gap-2 text-[11px] text-gray-500 mb-0.5">
-                <span className={mine ? 'text-sky-300' : 'text-emerald-300'}>{mine ? 'bạn' : m.author_id}</span>
-                <span>{clock(m.created_at)}</span>
+        ) : timeline.map((t, i) => (
+          <div key={t.key} className="space-y-2">
+            {t.user && (
+              <div className="pl-6">
+                <div className="flex items-baseline justify-end gap-2 text-[11px] text-gray-500 mb-0.5">
+                  <span>{clock(t.user.created_at)}</span><span className="text-sky-300">bạn</span>
+                </div>
+                <div className="rounded-lg rounded-br-sm px-3 py-2 text-[13px] bg-sky-950/50 ring-1 ring-sky-500/20">
+                  <MineBody body={t.user.body} />
+                </div>
               </div>
-              <div className={`rounded-lg px-3 py-2 text-[13px] ${mine ? 'bg-sky-950/50' : progress ? 'bg-amber-950/30 text-gray-300' : 'bg-[#252526]'}`}>
-                {mine ? <MineBody body={m.body} /> : <MessageMarkdown>{m.body}</MessageMarkdown>}
+            )}
+            {t.steps.length > 0 ? (
+              // The turn as the agent ran it, Claude Code style: ⏺ steps,
+              // ⎿ results, ✻ thinking, then its words.
+              <div className="space-y-1.5 pr-1">
+                <LogView entries={t.steps} running={i === timeline.length - 1 && (logRunning || working)} showThinking={showThinking} />
               </div>
-            </div>
-          )
-        })}
+            ) : t.replies.map(m => {
+              const card = isProgressLine(m.body) ? parseProgress(m.body) : null
+              if (card) return <ProgressCard key={m.id} p={card} author={m.author_id} fallbackSince={m.created_at} />
+              return (
+                <div key={m.id} className="pr-2">
+                  <div className="flex items-baseline gap-2 text-[11px] text-gray-500 mb-0.5">
+                    <span className="text-emerald-300">{m.author_id}</span>
+                    <span>{clock(m.created_at)}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="w-3 shrink-0 text-center text-gray-300 leading-6">⏺</span>
+                    <div className="min-w-0 flex-1 text-[13px] text-gray-200"><MessageMarkdown>{stripMarker(m.body)}</MessageMarkdown></div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ))}
         {session && working && !last?.body.startsWith(PROGRESS) && (
           <div className="text-[12px] text-gray-500 animate-pulse">{agent} đang đọc…</div>
         )}
@@ -239,4 +303,39 @@ function MineBody({ body }: { body: string }) {
       {at >= 0 && <div className="mt-1 opacity-80"><MessageMarkdown>{body.slice(at + 6)}</MessageMarkdown></div>}
     </>
   )
+}
+
+// stripMarker drops the progress marker a working line carries, for the rare
+// line whose marker does not parse: its words still show, the JSON does not.
+function stripMarker(body: string): string {
+  const i = body.indexOf('<!--bomclaw:progress ')
+  return i < 0 ? body : body.slice(0, i).trimEnd()
+}
+
+// A turn of the session: your line, then what the agent did about it. When
+// the turn left a log, its steps are the answer's whole story — the reply
+// message is the same words again, so it is not shown twice; a quick answer
+// with no log shows as its message.
+interface Turn { key: string; user?: ChannelMessage; replies: ChannelMessage[]; steps: TaskLogEntry[] }
+
+function turns(thread: ChannelMessage[], log: TaskLogEntry[]): Turn[] {
+  const out: Turn[] = []
+  for (const m of thread) {
+    if (m.author_kind === 'user' || out.length === 0) {
+      out.push({ key: m.id, user: m.author_kind === 'user' ? m : undefined, replies: m.author_kind === 'user' ? [] : [m], steps: [] })
+    } else {
+      out[out.length - 1].replies.push(m)
+    }
+  }
+  // Each step joins the last turn that began before it. Your own lines are
+  // already shown from the thread, with their attachments.
+  const starts = out.map(t => Date.parse(t.user?.created_at ?? t.replies[0]?.created_at ?? ''))
+  for (const e of log) {
+    if (e.kind === 'user') continue
+    const at = Date.parse(e.created_at)
+    let k = 0
+    for (let i = 0; i < starts.length; i++) if (starts[i] <= at + 1000) k = i
+    if (out[k]) out[k].steps.push(e)
+  }
+  return out
 }

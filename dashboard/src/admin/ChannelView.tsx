@@ -475,7 +475,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               // — "Preview ▸" and "AGENTS.md" — that both meant "let me look
               // at this project the way a developer does".
               <a
-                href={`/files/${encodeURIComponent(current.id)}/AGENTS.md?preview=1&agent=1`}
+                href={`/files/${encodeURIComponent(current.id)}/AGENTS.md?code=1`}
                 aria-label="Mở code: AGENTS.md, Preview và Agent"
                 target="_blank"
                 rel="noopener noreferrer"
