@@ -421,3 +421,35 @@ func TestWranglerNamesReadsTheProjectsConfigs(t *testing.T) {
 		t.Errorf("names = %v", got)
 	}
 }
+
+// A lookup that missed the zones (a blip, a rate limit) is not cached: the
+// next one asks again, instead of showing no plan for ten minutes.
+func TestAHalfAccountLookupIsNotCached(t *testing.T) {
+	zoneCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/accounts/acct":
+			io.WriteString(w, `{"success":true,"result":{"name":"Acct"}}`)
+		case "/zones":
+			zoneCalls++
+			if zoneCalls == 1 {
+				w.WriteHeader(429)
+				io.WriteString(w, `{"success":false,"errors":[{"code":971,"message":"rate limited"}]}`)
+				return
+			}
+			io.WriteString(w, `{"success":true,"result":[{"name":"x.org","plan":{"name":"Free Website"}}]}`)
+		default:
+			w.WriteHeader(403)
+			io.WriteString(w, `{"success":false,"errors":[{"code":10000,"message":"no"}]}`)
+		}
+	}))
+	defer srv.Close()
+	c := NewClient(Creds{Token: "tok", AccountID: "acct"})
+	c.Base = srv.URL
+	if acc := c.AccountInfo(context.Background()); len(acc.Zones) != 0 {
+		t.Fatalf("first = %+v", acc)
+	}
+	if acc := c.AccountInfo(context.Background()); len(acc.Zones) != 1 || acc.Zones[0].Plan != "Free Website" {
+		t.Errorf("second lookup used the half answer: %+v", acc)
+	}
+}

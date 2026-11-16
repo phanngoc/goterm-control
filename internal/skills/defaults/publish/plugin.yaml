@@ -1,0 +1,14 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: publish
+version: 1.0.0
+description: Publish a project to PROD with MCP tools — the dashboard's Publish button, as tools.
+provides: [publish]
+inject:
+  optional: [preview]
+# bomclaw's own MCP server: publish_status, publish_setup, publish. `bomclaw`
+# is on the gateway's PATH (~/.local/bin); the CLI starts the server for the
+# turn and passes it the turn's BOMCLAW_* environment.
+mcp:
+  bomclaw:
+    command: bomclaw
+    args: [mcp]

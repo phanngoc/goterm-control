@@ -1,4 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import PublishButton from './PublishButton'
+import EnvPanel from './EnvPanel'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { monaco } from './monacoSetup'
 import MessageMarkdown from '../components/MessageMarkdown'
@@ -128,6 +130,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   const [previewOpen, setPreviewOpen] = usePersisted('preview', !!initialPreview)
   const [previewWidth, setPreviewWidth] = usePersisted('previewWidth', Math.round(window.innerWidth * 0.4))
   const [agentOpen, setAgentOpen] = usePersisted('agent', false)
+  const [envOpen, setEnvOpen] = useState(false)
   const [agentWidth, setAgentWidth] = usePersisted('agentWidth', 380)
   // On a phone one column fits: the agent, else the preview, else the code.
   const phone = narrow()
@@ -591,7 +594,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
   }, [standalone, active, project])
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#1e1e1e] text-gray-200">
+    <div className="dark-island fixed inset-0 z-50 flex flex-col bg-[#1e1e1e] text-gray-200">
       {quickOpen && (
         <QuickOpen
           call={call} channelID={channelID} recent={tabs.map(t => t.path)}
@@ -599,38 +602,49 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           onClose={() => { setQuickOpen(false); editorRef.current?.focus() }}
         />
       )}
-      {/* Title bar */}
-      <header className="flex items-center gap-3 h-10 px-3 border-b border-black/40 bg-[#181818] text-sm shrink-0">
-        <span className="font-medium text-gray-100 shrink-0">{project}</span>
-        <span className="flex-1 min-w-0 text-[11px] text-gray-500 font-mono truncate hidden md:block">{root}</span>
-        <span className="flex-1 md:hidden" />
-        {standalone ? (
-          <button
-            onClick={() => navigator.clipboard?.writeText(location.origin + here)}
-            title="Chép link tới file và dòng đang mở"
-            className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-sky-300"
-          >chép link</button>
-        ) : (
-          <a href={here} target="_blank" rel="noopener noreferrer" title="Mở editor ở tab riêng, tại file và dòng đang mở" className="text-xs text-gray-400 hover:text-sky-300">Tab riêng ↗</a>
-        )}
-        {/* Panels, shown and hidden independently — VS Code's layout controls. */}
-        <span className="shrink-0 flex items-center gap-0.5 rounded bg-black/20 p-0.5">
+      {/* Title bar — Lovable's shape: the project on the left, the views in
+          the middle as one segmented control, Publish on the right as the one
+          primary action. The views stay independent toggles (VS Code's
+          layout), so code, the running app and the agent can sit side by side. */}
+      <header className="relative flex items-center gap-3 h-12 px-3 border-b border-black/40 bg-[#181818] text-sm shrink-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <span className="font-semibold text-gray-100 truncate">{project}</span>
+          <span className="text-[11px] text-gray-500 font-mono truncate hidden xl:block">{root}</span>
+        </div>
+        {/* Views. */}
+        <nav aria-label="Chế độ xem" className="shrink-0 flex items-center gap-0.5 rounded-full bg-black/30 ring-1 ring-white/5 p-0.5">
           {([
-            ['sidebar', sidebar, layoutRef.current.sidebar, 'Explorer / Search (⌘B)', 'Files'],
-            ['panel', termOpen, toggleTerm, 'Terminal (⌘J · Ctrl+`)', 'Terminal'],
             ['preview', previewOpen, layoutRef.current.preview, 'Preview — chạy dự án (⌘⇧V)', 'Preview'],
+            ['sidebar', sidebar, layoutRef.current.sidebar, 'Code — cây thư mục / tìm kiếm (⌘B)', 'Code'],
+            ['panel', termOpen, toggleTerm, 'Terminal (⌘J · Ctrl+`)', 'Terminal'],
             ['agent', agentOpen, layoutRef.current.agent, 'Agent — hỏi agent theo phiên (⌘⇧I)', 'Agent'],
           ] as const).map(([icon, on, toggle, title, label]) => (
             <button
-              key={icon} onClick={() => toggle()} title={title} aria-pressed={on}
-              className={`flex items-center gap-1 px-1.5 h-6 rounded text-xs ${on ? 'bg-[#2d2d2d] text-sky-300' : 'text-gray-400 hover:text-white'}`}
+              key={icon} onClick={() => toggle()} title={title} aria-pressed={on} aria-label={label}
+              className={`flex items-center gap-1.5 h-7 px-2.5 rounded-full text-xs cursor-pointer transition-colors duration-150
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400
+                ${on ? 'bg-[#2f3540] text-sky-200 shadow-sm' : 'text-gray-400 hover:text-gray-100'}`}
             >
               {Icon[icon]}<span className="hidden lg:inline">{label}</span>
             </button>
           ))}
-        </span>
-        <button onClick={close} className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-white">{standalone ? 'về phòng chat' : 'đóng'}</button>
+        </nav>
+        <div className="flex items-center justify-end gap-2 min-w-0 flex-1">
+          {standalone ? (
+            <button
+              onClick={() => navigator.clipboard?.writeText(location.origin + here)}
+              title="Chép link tới file và dòng đang mở"
+              className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-sky-300 cursor-pointer hidden md:inline"
+            >chép link</button>
+          ) : (
+            <a href={here} target="_blank" rel="noopener noreferrer" title="Mở editor ở tab riêng, tại file và dòng đang mở" className="text-xs text-gray-400 hover:text-sky-300 hidden md:inline">Tab riêng ↗</a>
+          )}
+          <button onClick={close} title={standalone ? 'Về phòng chat của dự án' : 'Đóng editor'}
+            className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-white cursor-pointer">{standalone ? 'về phòng chat' : 'đóng'}</button>
+          <PublishButton call={call} channelID={channelID} onDetails={() => setEnvOpen(true)} />
+        </div>
       </header>
+      {envOpen && <EnvPanel call={call} channelID={channelID} channelName={project} onClose={() => setEnvOpen(false)} />}
 
       {err && (
         <div className="flex items-center gap-3 px-3 py-1.5 text-xs bg-red-950/70 text-red-200 shrink-0">

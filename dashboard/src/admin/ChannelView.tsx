@@ -8,6 +8,7 @@ import WikiPanel, { saveArtifactToWiki } from './WikiPanel'
 import GatewayEditor from './GatewayEditor'
 import EnvPanel from './EnvPanel'
 import { BookIcon, CodeIcon, InfraBadge, SignalIcon, useEnvStatus } from './InfraBadge'
+import PublishButton from './PublishButton'
 import RepoEditor, { GitHubMark, type ChannelRepo } from './RepoEditor'
 import ProgressCard, { ProgressSummary, isProgressLine, parseProgress } from './ProgressCard'
 
@@ -463,6 +464,10 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
           )}
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Publish — the primary action of a project, as in Lovable. */}
+            {current?.workspace && (
+              <PublishButton call={call} channelID={current.id} onDetails={() => setEnvFor(current.id)} compact />
+            )}
             {current?.workspace && (
               // One door into the code, for the developer reviewing it: the
               // editor opens on AGENTS.md (what the agents are told), with the
