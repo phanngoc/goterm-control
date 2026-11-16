@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePersisted } from '../lib/persisted'
 import ChatInput from '../components/ChatInput'
+import { AttachmentChips, PATH_MIME, PostedFiles, attachmentBlock, splitAttachments, useAttachments } from '../components/attachments'
 import MessageMarkdown from '../components/MessageMarkdown'
 import ProgressCard, { isProgressLine, parseProgress } from './ProgressCard'
 import { LogView } from './TaskSession'
@@ -146,11 +147,30 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
   const refreshCtx = () => setCtx(getContext())
   useEffect(() => { refreshCtx() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Files from this computer, dropped or pasted: uploaded at once, sent as
+  // paths the agent reads — the room's composer does the same.
+  const att = useAttachments()
+  // Anything dragged over the panel: a project file from the tree or a tab
+  // becomes @path in the draft, as Claude Code does; a file from the desktop
+  // is attached.
+  const [dropping, setDropping] = useState(false)
+  const dragDepth = useRef(0)
+  const takes = (dt: DataTransfer) => { const t = Array.from(dt.types); return t.includes(PATH_MIME) || t.includes('Files') }
+  const mention = (path: string) => setDraft(d => (d && !/\s$/.test(d) ? d + ' ' : d) + '@' + path + ' ')
+  const onDrop = (e: React.DragEvent) => {
+    dragDepth.current = 0; setDropping(false)
+    if (e.defaultPrevented) return // the input box took the files itself
+    const path = e.dataTransfer.getData(PATH_MIME)
+    if (path) { e.preventDefault(); mention(path); return }
+    const files = Array.from(e.dataTransfer.files ?? [])
+    if (files.length) { e.preventDefault(); att.add(files) }
+  }
+
   const send = async () => {
     const text = draft.trim()
-    if (!text || !agent || sending) return
+    if ((!text && !att.paths.length) || !agent || sending || att.uploading) return
     const c = attach ? getContext() : null
-    let body = text
+    let body = [text, attachmentBlock(att.paths)].filter(Boolean).join('\n\n')
     if (c) {
       body += `\n\n---\n📎 \`${c.path}:${c.line}\``
       if (c.selection) {
@@ -166,6 +186,7 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
         ...(session ? { thread_root: session } : {}),
       })
       setDraft('')
+      att.clear()
       stick.current = true
       if (!session) setSession(msg.id)
       else loadThread(session)
@@ -183,7 +204,18 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
   }, [sessions, session])
 
   return (
-    <div className="h-full flex flex-col bg-[#1e1e1e] border-l border-black/60 min-w-0">
+    <div
+      className="relative h-full flex flex-col bg-[#1e1e1e] border-l border-black/60 min-w-0"
+      onDragEnter={e => { if (!takes(e.dataTransfer)) return; e.preventDefault(); dragDepth.current++; setDropping(true) }}
+      onDragOver={e => { if (!takes(e.dataTransfer)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+      onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDropping(false) }}
+      onDrop={onDrop}
+    >
+      {dropping && (
+        <div className="pointer-events-none absolute inset-1 z-20 grid place-items-center rounded-xl border-2 border-dashed border-sky-400/70 bg-sky-500/10 text-sm text-sky-200">
+          Thả vào đây — file dự án thành @đường-dẫn, file từ máy được đính kèm
+        </div>
+      )}
       <div className="flex items-center gap-2 h-9 px-2 bg-[#181818] shrink-0 text-[12px]">
         <span className="text-[11px] uppercase tracking-wide text-gray-500">Agent</span>
         <select
@@ -265,7 +297,9 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
       <div className="shrink-0 border-t border-black/60 p-2">
         <ChatInput
           value={draft} onChange={setDraft} onSend={send} onFocus={refreshCtx}
-          canSend={!!agent && !sending} busy={sending}
+          canSend={!!agent && !sending && !att.uploading} busy={sending}
+          onFiles={att.add} hasFiles={att.paths.length > 0}
+          attachments={<AttachmentChips items={att.items} onRemove={att.remove} />}
           maxHeight={260}
           placeholder={session ? 'Nhắn tiếp trong phiên này…' : 'Bắt đầu phiên mới…'}
           tools={<>
@@ -296,10 +330,11 @@ export default function AgentPanel({ call, channelID, getContext, onClose }: {
 // context the panel appended as the markdown it is (a path and a code block).
 function MineBody({ body }: { body: string }) {
   const at = body.indexOf('\n\n---\n📎')
-  const text = at < 0 ? body : body.slice(0, at)
+  const { text, files } = splitAttachments(at < 0 ? body : body.slice(0, at))
   return (
     <>
       <div className="whitespace-pre-wrap break-words">{text}</div>
+      <PostedFiles files={files} />
       {at >= 0 && <div className="mt-1 opacity-80"><MessageMarkdown>{body.slice(at + 6)}</MessageMarkdown></div>}
     </>
   )

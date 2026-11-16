@@ -193,3 +193,14 @@ export function filesFrom(dt: DataTransfer | null): File[] {
   }
   return out
 }
+
+/** The drag type a project file carries out of the editor's tree or tabs:
+ *  its path inside the project. Dropped on the agent it becomes @path. */
+export const PATH_MIME = 'application/x-bomclaw-path'
+
+/** startPathDrag puts a project path on a drag, for the agent panel to take. */
+export function startPathDrag(e: React.DragEvent, path: string) {
+  e.dataTransfer.setData(PATH_MIME, path)
+  e.dataTransfer.setData('text/plain', '@' + path)
+  e.dataTransfer.effectAllowed = 'copy'
+}
