@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -111,7 +112,7 @@ func (m *EnvManager) Status(ctx context.Context, channelID string) EnvStatus {
 		// Not declared yet — but whether the infrastructure is connected is
 		// a fact about the account, not the project, and it is the first
 		// thing the room header shows.
-		st.Prod = m.accountOnly(ctx, deploy.DefaultTarget)
+		st.Prod = m.accountOnly(ctx, deploy.DefaultTarget, c)
 		return st
 	}
 	st.Declared, st.Spec = true, spec
@@ -131,7 +132,7 @@ func (m *EnvManager) Status(ctx context.Context, channelID string) EnvStatus {
 
 // accountOnly is PROD before a project declares it: which provider it would
 // go to, whether that provider is connected, and the account it reaches.
-func (m *EnvManager) accountOnly(ctx context.Context, target string) deploy.ProdStatus {
+func (m *EnvManager) accountOnly(ctx context.Context, target string, c *coord.Channel) deploy.ProdStatus {
 	prov, err := m.Provider(target)
 	if err != nil {
 		return deploy.ProdStatus{}
@@ -142,12 +143,39 @@ func (m *EnvManager) accountOnly(ctx context.Context, target string) deploy.Prod
 		st.Error = hint
 		return st
 	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	// A project published by hand (wrangler, from its own folder) is live
+	// without a word in bomclaw.json; say so rather than "no PROD".
+	if dv, ok := prov.(deploy.Discoverer); ok && c != nil {
+		if found, from := dv.Discover(ctx, m.candidates(c)); found != nil {
+			st = *found
+			st.DiscoveredFrom = from
+		}
+	}
 	if ar, isReader := prov.(deploy.AccountReader); isReader {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
 		st.Account = ar.Account(ctx)
 	}
 	return st
+}
+
+// candidates are the Worker names a project may be live under, most specific
+// first: what its own wrangler configs say, the name `bomclaw env` would give
+// it, its folder, then the repos the room keeps.
+func (m *EnvManager) candidates(c *coord.Channel) []deploy.Candidate {
+	out := deploy.WranglerNames(c.Workspace)
+	out = append(out, deploy.Candidate{Name: deploy.DefaultName(c.ID), Source: "tên phòng"})
+	if c.Workspace != "" {
+		out = append(out, deploy.Candidate{Name: filepath.Base(c.Workspace), Source: "thư mục dự án"})
+	}
+	if repos, err := m.coord.ListRepos(c.ID); err == nil {
+		for _, r := range repos {
+			if i := strings.LastIndex(r.Repo, "/"); i >= 0 {
+				out = append(out, deploy.Candidate{Name: r.Repo[i+1:], Source: "repo " + r.Repo})
+			}
+		}
+	}
+	return out
 }
 
 // Deploy starts a deploy in the background; Status and Logs follow it.

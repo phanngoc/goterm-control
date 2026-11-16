@@ -68,7 +68,10 @@ export default function EnvPanel({ call, channelID, channelName, onClose }: {
     }
   }
 
-  const initCmd = `bomclaw env init ${channelID} --static dist --build "npm run build" --domain ten.bomclaw.org`
+  const found = !st?.declared && st?.prod.deployed ? st.prod : null
+  const initCmd = found
+    ? `bomclaw env init ${channelID} --name ${found.name} --static dist --build "npm run build"${found.domains?.[0] ? ` --domain ${found.domains[0]}` : ''}`
+    : `bomclaw env init ${channelID} --static dist --build "npm run build" --domain ten.bomclaw.org`
   const copyInit = async () => {
     try { await navigator.clipboard.writeText(initCmd); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* no clipboard */ }
   }
@@ -163,7 +166,16 @@ export default function EnvPanel({ call, channelID, channelName, onClose }: {
             </div>
             {!st?.declared && p?.connected && (
               <div className="relative border-t border-gray-800/80 px-4 py-3 text-xs text-gray-400 space-y-2">
-                <div>Dự án chưa khai báo PROD. Nhờ agent chạy (sửa domain cho đúng):</div>
+                {found ? (
+                  <div>
+                    Đang live ở Worker <span className="font-mono text-gray-200">{found.name}</span>
+                    {found.discovered_from && <> (khớp theo <span className="font-mono">{found.discovered_from}</span>)</>},
+                    nhưng <span className="font-mono">bomclaw.json</span> chưa khai báo nên chưa deploy được từ đây.
+                    Nhờ agent chạy (sửa thư mục build cho đúng):
+                  </div>
+                ) : (
+                  <div>Dự án chưa khai báo PROD. Nhờ agent chạy (sửa domain cho đúng):</div>
+                )}
                 <div className="flex items-stretch gap-2">
                   <code className="flex-1 min-w-0 font-mono text-[11px] text-gray-200 bg-gray-900 rounded-lg px-3 py-2 overflow-x-auto whitespace-nowrap">{initCmd}</code>
                   <button onClick={copyInit} className={`${btn} ring-gray-700 text-gray-300 hover:bg-gray-800 shrink-0`}>
@@ -199,7 +211,7 @@ export default function EnvPanel({ call, channelID, channelName, onClose }: {
             {/* PROD */}
             <section className="rounded-xl ring-1 ring-gray-800 bg-gray-900/40 p-4 space-y-2.5">
               <EnvHead tag="PROD" tagCls="bg-orange-500/15 text-orange-300" title={provider} tone={prod.tone} state={prod.label} />
-              {!st?.declared ? (
+              {!st?.declared && !found ? (
                 <div className="text-xs text-gray-500">Chưa khai báo — xem lệnh ở trên.</div>
               ) : !p?.connected ? (
                 <div className="text-xs text-amber-300">{p?.error}</div>

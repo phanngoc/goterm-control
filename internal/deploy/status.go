@@ -35,6 +35,9 @@ type ProdStatus struct {
 	// provider's products the project is built on (see account.go).
 	Account  *Account `json:"account,omitempty"`
 	Services []string `json:"services,omitempty"`
+	// DiscoveredFrom is set when PROD is not declared in bomclaw.json but a
+	// live Worker was matched to the project (see discover.go): what matched.
+	DiscoveredFrom string `json:"discovered_from,omitempty"`
 }
 
 // DBStatus is one environment's database.

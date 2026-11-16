@@ -446,10 +446,14 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
       {/* Main line — kept mounted under a tool, so coming back finds the room
           scrolled where you left it. */}
       <div className={tool ? 'hidden' : 'flex-1 min-w-0 flex flex-col'}>
-        <header className="h-12 px-4 border-b border-gray-800 flex items-center gap-2.5 min-w-0">
-          <div className="flex items-baseline gap-2 min-w-0 mr-1">
-            <span className="text-sm text-gray-100 font-semibold whitespace-nowrap shrink-0">{current?.name ?? '—'}</span>
-            {current?.purpose && <span className="text-xs text-gray-500 truncate min-w-0">{current.purpose}</span>}
+        {/* A container, so the header answers to its own width: opening a
+            thread halves the column, and the window size says nothing about
+            that. Narrow, the actions drop their words and keep their icons;
+            the room's name truncates instead of running under them. */}
+        <header className="@container h-12 px-3 @lg:px-4 border-b border-gray-800 flex items-center gap-2 @3xl:gap-2.5 min-w-0">
+          <div className="flex-1 flex items-baseline gap-2 min-w-16">
+            <span className="text-sm text-gray-100 font-semibold truncate shrink-0 max-w-full" title={current?.name}>{current?.name ?? '—'}</span>
+            {current?.purpose && <span className="text-xs text-gray-500 truncate min-w-0 hidden @4xl:block">{current.purpose}</span>}
           </div>
 
           {/* What the project runs on — the one thing a glance at a project
@@ -458,7 +462,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
             <InfraBadge st={infra.st} err={infra.err} onOpen={() => setEnvFor(current.id)} />
           )}
 
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             {current?.workspace && (
               // One door into the code, for the developer reviewing it: the
               // editor opens on AGENTS.md (what the agents are told), with the
@@ -467,24 +471,29 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               // at this project the way a developer does".
               <a
                 href={`/files/${encodeURIComponent(current.id)}/AGENTS.md?preview=1&agent=1`}
+                aria-label="Mở code: AGENTS.md, Preview và Agent"
                 target="_blank"
                 rel="noopener noreferrer"
                 title={`Mở editor: AGENTS.md, Preview đang chạy và Agent bên cạnh — ${current.workspace}`}
                 className={`${pill} ring-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}
               >
                 <CodeIcon className="h-3.5 w-3.5" />
-                Code
-                <span className="text-[10px] px-1 rounded bg-sky-500/20 text-sky-300">Agent</span>
+                <span className="hidden @xl:inline">Code</span>
+                <span className="hidden @3xl:inline text-[10px] px-1 rounded bg-sky-500/20 text-sky-300">Agent</span>
               </a>
             )}
+            {/* Wiki, repos and gateways: in the row when it has room, in a
+                menu when a thread has left the column too narrow for them. */}
+            <div className="hidden @lg:flex items-center gap-1.5">
             {current && (
               <button
                 onClick={() => setWikiFor(current.id)}
                 title="Wiki của dự án (lưu trong database): tài liệu .md / .html — xem, sửa, lưu, mở link"
+                aria-label="Wiki"
                 className={`${pill} ring-gray-700 text-gray-300 hover:text-violet-200 hover:ring-violet-500/40`}
               >
                 <BookIcon className="h-3.5 w-3.5" />
-                Wiki
+                <span className="hidden @4xl:inline">Wiki</span>
               </button>
             )}
             {current && (() => {
@@ -494,7 +503,7 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
                   {primary && (
                     <a href={primary.url} target="_blank" rel="noopener noreferrer" title={`Mở ${primary.repo} trên GitHub`}
                       className="h-full flex items-center gap-1.5 pl-2.5 pr-2 rounded-l-full font-mono cursor-pointer transition-colors duration-200 hover:text-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
-                      <GitHubMark className="h-3.5 w-3.5" />{primary.repo.split('/')[1]}
+                      <GitHubMark className="h-3.5 w-3.5" /><span className="hidden @4xl:inline">{primary.repo.split('/')[1]}</span>
                     </a>
                   )}
                   <button
@@ -513,10 +522,11 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
               <button
                 onClick={() => setGatewaysFor(current.id)}
                 title="Nơi phòng này nói ra ngoài dashboard"
+                aria-label="Gateways"
                 className={`${pill} ring-gray-700 text-gray-300 hover:text-sky-200 hover:ring-sky-500/40`}
               >
                 <SignalIcon className="h-3.5 w-3.5" />
-                Gateways
+                <span className="hidden @4xl:inline">Gateways</span>
                 {roomGateways.length > 0 && (
                   // Amber when one is paused: a destination that has quietly
                   // stopped carrying is worth seeing without opening the panel.
@@ -526,8 +536,19 @@ export default function ChannelView({ call, agents, selfID, bots, channelID, onC
                 )}
               </button>
             )}
+            </div>
+            {current && (
+              <MoreMenu items={[
+                { label: 'Wiki', icon: <BookIcon className="h-3.5 w-3.5" />, onPick: () => setWikiFor(current.id) },
+                ...(repos.find(r => r.role === 'primary')
+                  ? [{ label: repos.find(r => r.role === 'primary')!.repo, icon: <GitHubMark className="h-3.5 w-3.5" />, href: repos.find(r => r.role === 'primary')!.url }]
+                  : []),
+                { label: 'Repo GitHub của phòng', icon: <GitHubMark className="h-3.5 w-3.5" />, onPick: () => setReposFor(current.id) },
+                { label: `Gateways${roomGateways.length ? ` · ${roomGateways.length}` : ''}`, icon: <SignalIcon className="h-3.5 w-3.5" />, onPick: () => setGatewaysFor(current.id) },
+              ]} />
+            )}
             {!!current?.members?.length && (
-              <span className="hidden 2xl:flex items-center -space-x-1.5 pl-1" title={current.members.map(m => m.id).join(' · ')}>
+              <span className="hidden @6xl:flex items-center -space-x-1.5 pl-1" title={current.members.map(m => m.id).join(' · ')}>
                 {current.members.slice(0, 5).map(m => (
                   <span key={m.kind + m.id} className="rounded-full ring-2 ring-gray-950">
                     <AgentAvatar id={m.id} person={m.kind === 'user'} />
@@ -1198,3 +1219,40 @@ function NewProject({ call, onCreated }: { call: Call; onCreated: () => void }) 
 }
 
 
+
+// MoreMenu is the header's overflow: the actions a narrow column has no room
+// to show in the row. Escape or a click outside closes it.
+function MoreMenu({ items }: { items: { label: string; icon: ReactNode; onPick?: () => void; href?: string }[] }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open])
+  const row = 'w-full flex items-center gap-2 px-3 h-9 text-xs text-gray-300 text-left cursor-pointer transition-colors duration-150 hover:bg-gray-800 focus-visible:outline-none focus-visible:bg-gray-800'
+  return (
+    <div ref={box} className="relative @lg:hidden">
+      <button onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open} aria-label="Thêm"
+        className={`${pill} ring-gray-700 text-gray-300 hover:text-sky-200`}>
+        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="currentColor" aria-hidden><circle cx="4" cy="10" r="1.6" /><circle cx="10" cy="10" r="1.6" /><circle cx="16" cy="10" r="1.6" /></svg>
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-full mt-2 z-40 w-56 py-1 rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl">
+          {items.map(it => it.href ? (
+            <a key={it.label} role="menuitem" href={it.href} target="_blank" rel="noopener noreferrer" className={row} onClick={() => setOpen(false)}>
+              {it.icon}<span className="truncate font-mono">{it.label}</span>
+            </a>
+          ) : (
+            <button key={it.label} role="menuitem" className={row} onClick={() => { setOpen(false); it.onPick?.() }}>
+              {it.icon}<span className="truncate">{it.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
