@@ -76,6 +76,13 @@ type PreviewStatus struct {
 	StartedAt string `json:"started_at,omitempty"`
 	ExitCode  *int   `json:"exit_code,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// ChangedAt is when the project's own files last changed, and
+	// CodeChangedAt when its server code did (previewwatch.go): the panel
+	// reloads after the first and restarts the server after the second,
+	// unless HotReload says the server follows its files itself.
+	ChangedAt     string `json:"changed_at,omitempty"`
+	CodeChangedAt string `json:"code_changed_at,omitempty"`
+	HotReload     bool   `json:"hot_reload,omitempty"`
 }
 
 const (
@@ -178,6 +185,16 @@ func (m *PreviewManager) Status(channelID string) PreviewStatus {
 		return st
 	}
 	st.Declared = true
+	if path, err := m.coord.ProjectFilePath(channelID, PreviewManifest); err == nil {
+		anyAt, serverAt := projectChanged(filepath.Dir(path))
+		if !anyAt.IsZero() {
+			st.ChangedAt = anyAt.UTC().Format(time.RFC3339Nano)
+		}
+		if !serverAt.IsZero() {
+			st.CodeChangedAt = serverAt.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	st.HotReload = hotReloading.MatchString(spec.Command)
 	if spec.Command == "" {
 		st.Kind, st.State = "static", "running"
 		st.URL = ProjectPrefix + url.PathEscape(channelID) + "/"
@@ -199,7 +216,7 @@ func (m *PreviewManager) Status(channelID string) PreviewStatus {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	st.State, st.Port, st.ExitCode, st.Error = run.state, run.port, run.exit, run.err
-	st.StartedAt = run.started.UTC().Format(time.RFC3339)
+	st.StartedAt = run.started.UTC().Format(time.RFC3339Nano)
 	return st
 }
 

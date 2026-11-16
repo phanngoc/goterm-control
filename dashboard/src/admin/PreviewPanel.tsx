@@ -14,6 +14,9 @@ interface Status {
   started_at?: string
   exit_code?: number
   error?: string
+  changed_at?: string
+  code_changed_at?: string
+  hot_reload?: boolean
 }
 
 const errText = (e: any) => String(e?.message ?? e)
@@ -83,7 +86,7 @@ export default function PreviewPanel({ call, channelID, onClose }: {
   // moment the server first answers.
   const prevState = useRef<string>('')
   useEffect(() => {
-    const t = setInterval(refresh, st?.state === 'starting' ? 1000 : 5000)
+    const t = setInterval(refresh, st?.state === 'starting' ? 1000 : 2500)
     return () => clearInterval(t)
   }, [refresh, st?.state])
   // An agent asked from the empty panel writes bomclaw.json while it is open:
@@ -116,6 +119,60 @@ export default function PreviewPanel({ call, channelID, onClose }: {
     const el = logRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [logs])
+
+  // Follow the code. When the project's files change (an agent's edit, a
+  // save in the editor) the page reloads where it is — same route, same
+  // hash — and when the server's own code changed, the server restarts first,
+  // since it read that code once at start. Waits for the changes to settle,
+  // so an agent writing ten files is one reload, not ten.
+  const [auto, setAuto] = usePersisted('previewAuto', true)
+  const frame = useRef<HTMLIFrameElement>(null)
+  const loadedAt = useRef(Date.now())
+  const pendingHref = useRef<string | null>(null)
+  const restartedFor = useRef('')
+  const lastSeen = useRef('')
+  const [note, setNote] = useState('')
+  const flash = (t: string) => { setNote(t); setTimeout(() => setNote(n => (n === t ? '' : n)), 3500) }
+  const reloadInPlace = () => {
+    try { frame.current?.contentWindow?.location.reload() } catch { setFrameKey(k => k + 1) }
+    loadedAt.current = Date.now()
+  }
+  useEffect(() => {
+    if (!auto || !st?.changed_at || !st.url) return
+    if (!(st.kind === 'static' || st.state === 'running')) return
+    const changed = Date.parse(st.changed_at)
+    // Settled: the same newest change on two polls in a row.
+    const settled = lastSeen.current === st.changed_at
+    lastSeen.current = st.changed_at
+    if (!settled) return
+    // A server older than its own code is stale whatever the page did — it
+    // read that code at start. Restart once per code version, so a server
+    // that fails to come up is not restarted in a loop.
+    const started = Date.parse(st.started_at ?? '') || 0
+    const code = Date.parse(st.code_changed_at ?? '') || 0
+    if (st.kind === 'server' && !st.hot_reload && code > started && restartedFor.current !== st.code_changed_at) {
+      restartedFor.current = st.code_changed_at ?? ''
+      try { pendingHref.current = frame.current?.contentWindow?.location.href ?? null } catch { pendingHref.current = null }
+      loadedAt.current = Date.now() // the restart reloads the page itself
+      flash('Code server đổi — đang chạy lại…')
+      void start()
+      return
+    }
+    if (!(changed > loadedAt.current)) return
+    reloadInPlace()
+    flash('Code đổi — đã tải lại')
+    // Every poll, not only a new value: "settled" is the same value seen twice.
+  }, [st, auto]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Back from a restart: return to the page you were on, not the start page.
+  const onFrameLoad = () => {
+    loadedAt.current = Date.now()
+    const href = pendingHref.current
+    if (!href) return
+    pendingHref.current = null
+    try {
+      if (frame.current?.contentWindow && frame.current.contentWindow.location.href !== href) frame.current.contentWindow.location.replace(href)
+    } catch { /* another origin: the start page will do */ }
+  }
 
   const src = st?.url ? st.url + sub.replace(/^\/+/, '') : ''
   const dot = st?.state === 'running' ? 'bg-emerald-400' : st?.state === 'starting' ? 'bg-amber-400 animate-pulse' : st?.state === 'exited' ? 'bg-red-400' : 'bg-gray-500'
@@ -151,7 +208,12 @@ export default function PreviewPanel({ call, channelID, onClose }: {
                 <button onClick={stop} disabled={busy} title="Dừng dev server" className="text-gray-400 hover:text-red-300 disabled:opacity-40">dừng</button>
               </>
             : <button onClick={start} disabled={busy} className="text-sky-300 hover:underline disabled:opacity-40">chạy</button>)}
-          {st?.url && <button onClick={() => setFrameKey(k => k + 1)} title="Tải lại trang" className="text-gray-400 hover:text-white">⟳</button>}
+          {st?.url && <button onClick={reloadInPlace} title="Tải lại trang (giữ trang đang xem)" className="text-gray-400 hover:text-white">⟳</button>}
+          {st?.url && (
+            <button onClick={() => setAuto(a => !a)} aria-pressed={auto}
+              title={auto ? 'Tự cập nhật khi code đổi: BẬT (server code đổi thì chạy lại server)' : 'Tự cập nhật khi code đổi: TẮT'}
+              className={auto ? 'text-emerald-300' : 'text-gray-500 hover:text-white'}>auto</button>
+          )}
           {st?.url && (
             <button onClick={() => setMobile(m => !m)} title="Xem cỡ điện thoại / máy tính" className={mobile ? 'text-sky-300' : 'text-gray-400 hover:text-white'}>
               {mobile ? '📱' : '🖥'}
@@ -173,8 +235,12 @@ export default function PreviewPanel({ call, channelID, onClose }: {
         {st && !st.declared ? (
           <NotDeclared call={call} channelID={channelID} />
         ) : src && (st?.kind === 'static' || st?.state === 'running') ? (
-          <div className={`flex-1 min-h-0 flex justify-center ${mobile ? 'bg-[#111] py-3' : ''}`}>
+          <div className={`relative flex-1 min-h-0 flex justify-center ${mobile ? 'bg-[#111] py-3' : ''}`}>
+            {note && (
+              <div role="status" className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full text-[11px] bg-emerald-500/90 text-white shadow-lg">↻ {note}</div>
+            )}
             <iframe
+              ref={frame} onLoad={onFrameLoad}
               key={frameKey} src={src} title="preview"
               className={`h-full bg-white ${mobile ? 'w-[390px] max-w-full rounded-xl ring-1 ring-gray-700' : 'w-full'}`}
             />
