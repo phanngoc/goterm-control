@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import PublishButton from './PublishButton'
 import { usePersisted } from '../lib/persisted'
+import { startPathDrag } from '../components/attachments'
 import EnvPanel from './EnvPanel'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { monaco } from './monacoSetup'
@@ -601,7 +602,8 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
         <div key={e.path}>
           <div
             onClick={() => (e.dir ? toggleDir(e.path) : openFile(e.path))}
-            title={e.path}
+            draggable onDragStart={ev => startPathDrag(ev, e.dir ? e.path + '/' : e.path)}
+            title={`${e.path} — kéo vào khung Agent để nhắc tới`}
             className={`group flex items-center gap-1 pr-1 py-[3px] text-[13px] cursor-pointer select-none ${
               isActive ? 'bg-sky-900/40 text-white' : isFolder ? 'bg-gray-800/60 text-gray-200' : 'text-gray-300 hover:bg-gray-800/50'}`}
             style={{ paddingLeft: 8 + depth * 12 }}
@@ -802,6 +804,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
               <div
                 key={t.path}
                 onClick={() => setActive(t.path)}
+                draggable onDragStart={ev => startPathDrag(ev, t.path)}
                 title={t.path}
                 className={`group flex items-center gap-2 pl-3 pr-2 text-[13px] cursor-pointer border-r border-black/40 whitespace-nowrap ${
                   t.path === active ? 'bg-[#1e1e1e] text-white' : 'text-gray-400 hover:text-gray-200'}`}
