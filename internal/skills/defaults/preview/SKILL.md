@@ -1,6 +1,6 @@
 ---
 name: preview
-description: 'Make a project runnable from the Preview button (bomclaw.json). Use when a project has anything to show, or you create/change how it runs. NOT for: a library.'
+description: 'Make a project runnable from the Preview button (bomclaw.json). Use when a project has something to show or changes how it runs. NOT for: a library.'
 ---
 
 # preview

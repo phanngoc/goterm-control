@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: 'Extend your toolkit: commands, MCP servers, settings. Use when a tool beats repeating a job, you get an API/token, or a plugin is "Not loaded". NOT for: knowledge (write a skill).'
+description: 'Extend your toolkit: commands, MCP servers, settings. Use when a tool beats repeating a job, you get an API token, or a plugin is "Not loaded". NOT for: knowledge.'
 ---
 
 # plugins

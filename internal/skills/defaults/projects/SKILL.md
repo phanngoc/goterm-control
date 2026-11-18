@@ -1,6 +1,6 @@
 ---
 name: projects
-description: 'Open rooms and tasks so work shows in Messages and on the Tasks board. Use when asked to "make a room/project", "track this", "open a task/goal", or given a multi-step goal (incl. `/goal ...`). NOT for: a quick question.'
+description: 'Open rooms and tasks so work shows in Messages and Tasks. Use when asked to make a room/project, track work, or given a multi-step goal (`/goal`). NOT for: a quick question.'
 ---
 
 # projects

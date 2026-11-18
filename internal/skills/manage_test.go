@@ -239,6 +239,14 @@ func TestTheBundledSetFitsWithRoomLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Measure with the path an agent actually sees, not the test's temp dir:
+	// macOS's TMPDIR is ~50 runes longer than Linux's /tmp, and that,
+	// repeated on every line, made the same set pass on CI and fail on a Mac.
+	// The stand-in is on the long side of real workspaces.
+	const agentWS = "/Users/someone-long/goterm-workspace-3"
+	for i := range list {
+		list[i].Path = strings.Replace(list[i].Path, ws, agentWS, 1)
+	}
 	idx := []rune(Index(list))
 	if len(idx) > MaxIndexRunes {
 		t.Fatalf("the bundled skills alone are %d runes, past the %d cap — an agent\n"+
@@ -268,4 +276,49 @@ func TestTheBundledSetFitsWithRoomLeft(t *testing.T) {
 // finding skills inside plugins is the plugins package's finder's job.
 func seeded(ws string) ([]Skill, error) {
 	return LoadDir(filepath.Join(ws, PluginsDir))
+}
+
+// A bundled plugin can carry files beyond its SKILL.md: game-studio's
+// stages/ are read on demand and must arrive with it — every stage the skill
+// names — without each becoming an index line of its own.
+func TestBundledPluginFilesArriveButAreNotSkills(t *testing.T) {
+	ws := t.TempDir()
+	if _, err := EnsureDefaults(ws); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(ws, PluginsDir, "game-studio")
+	body, err := os.ReadFile(filepath.Join(dir, File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"spec", "build", "playtest", "iterate", "ship"} {
+		rel := "stages/" + stage + ".md"
+		if !strings.Contains(string(body), rel) {
+			t.Errorf("SKILL.md does not point at %s", rel)
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err != nil || len(b) < 200 {
+			t.Errorf("%s did not arrive: %v", rel, err)
+		}
+	}
+	list, err := seeded(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, s := range list {
+		if strings.HasPrefix(s.Dir, dir) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("game-studio shows as %d skills, want 1", n)
+	}
+	// A reset puts the stages back too.
+	os.RemoveAll(filepath.Join(dir, "stages"))
+	if err := InstallDefault(ws, "game-studio"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stages", "ship.md")); err != nil {
+		t.Errorf("reset did not restore stages: %v", err)
+	}
 }

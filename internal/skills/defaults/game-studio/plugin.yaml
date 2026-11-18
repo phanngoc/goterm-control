@@ -1,0 +1,7 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: game-studio
+version: 1.0.0
+description: Make a browser game from a prompt — spec, build, playtest, iterate, ship — with the lessons of the arcade games.
+provides: [game-studio]
+inject:
+  optional: [preview, publish, browser]

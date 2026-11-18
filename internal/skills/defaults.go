@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // The toolkit every agent starts with.
@@ -24,7 +25,11 @@ import (
 // its own from experience, and a default read straight out of the binary
 // could never be revised.
 
-//go:embed defaults/*/SKILL.md defaults/*/plugin.yaml
+// The whole tree: a plugin may carry more than its SKILL.md and manifest —
+// game-studio keeps one file per stage under stages/, read on demand, so the
+// skill index pays for one description instead of five.
+//
+//go:embed defaults
 var defaultFS embed.FS
 
 // PluginsDir is where an agent's plugins live, inside its workspace. It is
@@ -80,7 +85,37 @@ func InstallDefault(workspace, name string) error {
 	if err := os.WriteFile(filepath.Join(dir, ManifestFile), manifest, 0o644); err != nil {
 		return fmt.Errorf("skills: write %s: %w", name, err)
 	}
-	return os.WriteFile(filepath.Join(dir, File), body, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, File), body, 0o644); err != nil {
+		return fmt.Errorf("skills: write %s: %w", name, err)
+	}
+	return installExtras(dir, name)
+}
+
+// installExtras writes the plugin's other files (stages/*.md…), creating
+// their folders. Same rule as the two above: a reset replaces them.
+func installExtras(dir, name string) error {
+	root := "defaults/" + name
+	return fs.WalkDir(defaultFS, root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel := strings.TrimPrefix(p, root+"/")
+		if rel == File || rel == ManifestFile {
+			return nil
+		}
+		b, err := defaultFS.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fmt.Errorf("skills: mkdir %s: %w", filepath.Dir(dest), err)
+		}
+		if err := os.WriteFile(dest, b, 0o644); err != nil {
+			return fmt.Errorf("skills: write %s: %w", dest, err)
+		}
+		return nil
+	})
 }
 
 // DefaultNames lists what EnsureDefaults would seed, for the hub's "install

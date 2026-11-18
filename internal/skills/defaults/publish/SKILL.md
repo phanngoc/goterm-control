@@ -1,6 +1,6 @@
 ---
 name: publish
-description: 'Publish a project to PROD with MCP tools publish_status / publish_setup / publish. Use when asked to publish, deploy or where it is live. NOT for: running it locally.'
+description: 'Publish a project to PROD (publish_status / publish_setup / publish). Use when asked to publish, deploy or where it is live. NOT for: running it locally.'
 ---
 
 # publish

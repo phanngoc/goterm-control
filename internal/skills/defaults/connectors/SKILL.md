@@ -1,6 +1,6 @@
 ---
 name: connectors
-description: 'Plug a project into Stripe, Resend, Gmail, OpenAI… (connector_* tools). Use when an app needs payments, email, AI or maps. NOT for: deploy keys.'
+description: 'Plug a project into Stripe, Resend, Gmail, OpenAI… Use when an app needs payments, email, AI or maps. NOT for: deploy keys.'
 ---
 
 # connectors
