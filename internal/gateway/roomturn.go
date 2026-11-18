@@ -53,6 +53,10 @@ type RoomTurn struct {
 	unwatch       chan struct{}
 	stopOnce      sync.Once
 
+	// tracking is the card this turn opened in its project's room when it was
+	// asked privately (Direct room, Telegram) — see announceInProject.
+	tracking *coord.ChannelMessage
+
 	// resume names the CLI session the turn ran in, once it has run. Set by a
 	// caller that owns the session; without it a turn that runs out of time
 	// cannot be continued and is closed as before.
@@ -198,6 +202,64 @@ func (t *RoomTurn) fileUnderProject() {
 	t.mu.Unlock()
 	t.log.Status("project", "xếp vào dự án "+id)
 	log.Printf("room turn: %s filed under %s", task.ID, id)
+	t.announceInProject(id, task)
+}
+
+// Work asked for privately still happens in a project, and the team follows a
+// project in its room. Filing the task under the project put it on the board,
+// but the room itself stayed silent: an agent could rebuild and publish the
+// film site from a DM and ch_phim-ngan-25d showed only "Đã publish bản mới",
+// with no thread saying who asked for what (2026-11-18).
+//
+// So the turn opens a thread in the project's room — the same "nhận việc"
+// card a queued task opens, marked as coming from a private message — and
+// says how it ended there. The conversation itself stays in the Direct room:
+// the room gets the work, not the owner's private words beyond the request.
+func (t *RoomTurn) announceInProject(channelID string, task *coord.Task) {
+	body := fmt.Sprintf("📋 %s nhận việc `%s`\n%s\n_giao bởi %s_",
+		t.deps.AgentID, task.ID, coord.Quiet(oneLineOf(task.Title)), orOwner(t.root.AuthorID))
+	msg, _, err := t.deps.Coord.PostMessage(coord.NewChannelMessage{
+		ChannelID: channelID, AuthorKind: coord.MemberAgent, AuthorID: t.deps.AgentID,
+		Body: body, TaskID: task.ID,
+	})
+	if err != nil {
+		log.Printf("room turn: could not open %s's thread in %s: %v", task.ID, channelID, err)
+		return
+	}
+	t.post(channelID, msg.ID, fmt.Sprintf("_việc này được giao qua %s — %s đang làm, kết quả sẽ báo ở đây_",
+		roomLabel(t.root.ChannelID), t.deps.AgentID))
+	t.mu.Lock()
+	t.tracking = msg
+	t.mu.Unlock()
+}
+
+// reportInProject says how the turn ended in the project thread, when there
+// is one. The full answer stays where it was asked; the room gets enough to
+// know the state of the work.
+func (t *RoomTurn) reportInProject(body string) {
+	t.mu.Lock()
+	m := t.tracking
+	t.mu.Unlock()
+	if m == nil || strings.TrimSpace(body) == "" {
+		return
+	}
+	t.post(m.ChannelID, m.ID, body)
+}
+
+func (t *RoomTurn) post(channelID, root, body string) {
+	if _, _, err := t.deps.Coord.PostMessage(coord.NewChannelMessage{
+		ChannelID: channelID, ThreadRoot: root, AuthorKind: coord.MemberAgent, AuthorID: t.deps.AgentID, Body: body,
+	}); err != nil {
+		log.Printf("room turn: post to %s: %v", channelID, err)
+	}
+}
+
+func oneLineOf(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // WatchInterrupts cancels the turn when the owner interrupts it from the
@@ -306,6 +368,7 @@ func (t *RoomTurn) Finish(reply string, turnErr error) string {
 			if moved := t.handOff(reply); moved != "" {
 				t.log.Status("end:handed_off", "")
 				t.finishProgress(moved)
+				t.reportInProject("↻ việc dài hơn một lượt trả lời — đã chuyển sang hàng đợi, chạy tiếp")
 				return moved
 			}
 			// Say what to do about it: the shape of the fix is a task, which
@@ -320,6 +383,11 @@ func (t *RoomTurn) Finish(reply string, turnErr error) string {
 		t.closeTask(errors.Is(turnErr, ErrRoomSteered), note)
 		t.log.Status(label, "")
 		t.finishProgress(note)
+		if errors.Is(turnErr, ErrRoomSteered) {
+			t.reportInProject("■ dừng giữa chừng — người giao đổi hướng")
+		} else {
+			t.reportInProject("⚠️ không xong: " + truncateLine(note, 300))
+		}
 		return note
 	}
 	if reply == "" {
@@ -331,6 +399,7 @@ func (t *RoomTurn) Finish(reply string, turnErr error) string {
 	}
 	t.closeTask(true, reply)
 	t.log.Status("end:completed", "")
+	t.reportInProject("✅ xong — " + truncateLine(reply, projectReportLimit))
 	final := reply
 	if task := t.Task(); task != nil {
 		final += fmt.Sprintf("\n\n_📋 task `%s` trên board_", task.ID)
@@ -354,6 +423,11 @@ func (t *RoomTurn) Finish(reply string, turnErr error) string {
 	}
 	return final
 }
+
+// projectReportLimit is how much of the answer the project room gets: enough
+// to know what was done; the whole of it is in the Direct thread and the
+// task's log.
+const projectReportLimit = 600
 
 func (t *RoomTurn) closeTask(ok bool, result string) {
 	task := t.Task()

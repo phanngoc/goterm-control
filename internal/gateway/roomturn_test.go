@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
 )
@@ -140,5 +141,99 @@ func TestRoomTurnInAProjectRoomStaysThere(t *testing.T) {
 	rt.Finish("ok", nil)
 	if got, _ := cdb.GetTask(rt.Task().ID); got.ChannelID != arcade.ID {
 		t.Fatalf("moved to %q", got.ChannelID)
+	}
+}
+
+// Work done from a private message shows in its project's room as a thread —
+// the "nhận việc" card a queued task opens — and says there how it ended. The
+// conversation itself, and every later reply to the owner, stays in Direct.
+func TestRoomTurnDirectWorkOpensAThreadInTheProjectRoom(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{})
+	shop, err := cdb.CreateProject("shopee-deals", "", "owner", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dm, _ := cdb.EnsureOwnerDM("bomclaw2")
+	line, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: dm.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "publish lại trang chi tiết",
+	})
+	rt := OpenRoomTurn(deps, *line, line.ID, nil)
+	rt.Sink().NoteTool("Bash(npm run build)")
+	rt.Sink().NoteToolInput("Bash", `{"command":"cd `+shop.Workspace+` && npm run build"}`)
+
+	// Mid-turn: the card is already in the room, so the team sees work in progress.
+	top, err := cdb.ChannelMessages(shop.ID, 50, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var card *coord.ChannelMessage
+	for i := range top {
+		if top[i].ThreadRoot == "" && top[i].TaskID != "" {
+			card = &top[i]
+		}
+	}
+	task := rt.Task()
+	if card == nil || task == nil || card.TaskID != task.ID || card.AuthorID != deps.AgentID {
+		t.Fatalf("no task card in the project room: %+v", top)
+	}
+	// The dashboard turns a claim line into a card; keep its shape.
+	for _, want := range []string{"nhận việc `" + task.ID + "`", "publish lại trang chi tiết", "giao bởi owner"} {
+		if !strings.Contains(card.Body, want) {
+			t.Errorf("card body %q lacks %q", card.Body, want)
+		}
+	}
+
+	rt.Sink().Write("Đã build và publish, link: https://shop.example")
+	rt.Finish(rt.Sink().Text(), nil)
+
+	thread, _ := cdb.ThreadMessages(card.ID)
+	var bodies []string
+	for _, m := range thread {
+		bodies = append(bodies, m.Body)
+	}
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "tin nhắn riêng") || !strings.Contains(joined, "✅ xong — Đã build và publish") {
+		t.Fatalf("project thread = %q", joined)
+	}
+	// Replies to the owner still go to Direct, not to the tracking card.
+	if root, ch, _ := cdb.ConversationThread(task); ch != dm.ID || root != line.ID {
+		t.Fatalf("conversation thread moved to %s/%s", ch, root)
+	}
+	dmThread, _ := cdb.ThreadMessages(line.ID)
+	if last := dmThread[len(dmThread)-1]; !strings.Contains(last.Body, "Đã build và publish") {
+		t.Fatalf("answer not in Direct: %+v", last)
+	}
+}
+
+// A quick private answer is not work and leaves project rooms alone; a failed
+// turn says so in the project thread.
+func TestRoomTurnDirectQuickAnswerStaysPrivateAndFailureIsReported(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{})
+	shop, _ := cdb.CreateProject("shopee-deals", "", "owner", t.TempDir(), nil)
+	dm, _ := cdb.EnsureOwnerDM("bomclaw2")
+
+	q, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: dm.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "shopee-deals đang chạy port nào?",
+	})
+	rt := OpenRoomTurn(deps, *q, q.ID, nil)
+	rt.Finish("3000", nil)
+	if top, _ := cdb.ChannelMessages(shop.ID, 50, time.Time{}); len(top) != 0 {
+		t.Fatalf("a quick answer posted to the project room: %+v", top)
+	}
+
+	w, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: dm.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "deploy shopee-deals",
+	})
+	rt = OpenRoomTurn(deps, *w, w.ID, nil)
+	rt.Sink().NoteTool("Bash(./deploy.sh)")
+	rt.Sink().NoteToolInput("Bash", `{"command":"cd `+shop.Workspace+` && ./deploy.sh"}`)
+	rt.Finish("", errors.New("deploy.sh: exit 1"))
+	top, _ := cdb.ChannelMessages(shop.ID, 50, time.Time{})
+	if len(top) != 1 {
+		t.Fatalf("project room = %+v", top)
+	}
+	thread, _ := cdb.ThreadMessages(top[0].ID)
+	if last := thread[len(thread)-1]; !strings.Contains(last.Body, "⚠️ không xong") || !strings.Contains(last.Body, "exit 1") {
+		t.Fatalf("failure not reported: %+v", last)
 	}
 }

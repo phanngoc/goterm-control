@@ -1030,6 +1030,13 @@ func (db *DB) nextMessageTime(channelID string) time.Time {
 // 2026-11-05, when 58 of 68 tasks in ch_phim-ngan-25d ran without a word in
 // the room.
 func (db *DB) ConversationThread(t *Task) (rootID, channelID string, err error) {
+	// A turn answered from a message replies where the person who asked is
+	// reading — the Direct thread — even when the work was since filed under a
+	// project and opened a tracking card there (a top-level message carrying
+	// the task id, which TaskThread would otherwise pick).
+	if r, c := db.MentionThread(t); r != "" {
+		return r, c, nil
+	}
 	for i, cur := 0, t; cur != nil && i < MaxDepth+2; i++ {
 		root, ch, err := db.TaskThread(cur.ID)
 		if err != nil {
