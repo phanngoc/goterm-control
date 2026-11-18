@@ -363,3 +363,27 @@ func TestStateRoundTrip(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A project can link a plugin that lives in a repo it checks out, instead of
+// copying it: the link is followed and the plugin's own skill comes with it.
+func TestSymlinkedProjectPluginIsLoaded(t *testing.T) {
+	ws, proj := t.TempDir(), t.TempDir()
+	repo := filepath.Join(proj, "platform", ProjectDir)
+	dir := plugin(t, repo, "game-studio", "name: game-studio\nversion: 1.0.0\n")
+	writeFile(t, filepath.Join(dir, "SKILL.md"),
+		"---\nname: game-studio\ndescription: Use when making a game. NOT for: apps.\n---\n\nbody\n", 0o644)
+	if err := os.MkdirAll(filepath.Join(proj, ProjectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(proj, ProjectDir, "game-studio")
+	if err := os.Symlink(filepath.Join("..", "..", "platform", ProjectDir, "game-studio"), link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	// A dangling link is skipped, not an error.
+	os.Symlink(filepath.Join(proj, "gone"), filepath.Join(proj, ProjectDir, "gone"))
+
+	p := mustFind(t, Load(ws, proj), "game-studio")
+	if p.Scope != ScopeProject || len(p.SkillList) != 1 {
+		t.Errorf("scope %v, skills %+v", p.Scope, p.SkillList)
+	}
+}
