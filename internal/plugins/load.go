@@ -153,7 +153,7 @@ func Load(agentWorkspace, turnWorkspace string) *Kit {
 			continue
 		}
 		for _, e := range entries {
-			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			if !isPluginDir(r.dir, e) {
 				continue
 			}
 			dir := filepath.Join(r.dir, e.Name())
@@ -416,6 +416,20 @@ func expandServer(s MCPServer, expand func(string) string) MCPServer {
 		}
 	}
 	return out
+}
+
+// isPluginDir is a folder entry worth opening — a symlink to one counts:
+// a project links a plugin that lives in a repo it vendors (ch_arcade's
+// game-studio is a link into its arcade-platform checkout) instead of keeping
+// a copy that drifts.
+func isPluginDir(parent string, e os.DirEntry) bool {
+	if strings.HasPrefix(e.Name(), ".") {
+		return false
+	}
+	if e.IsDir() {
+		return true
+	}
+	return e.Type()&os.ModeSymlink != 0 && isDir(filepath.Join(parent, e.Name()))
 }
 
 func isDir(path string) bool {
