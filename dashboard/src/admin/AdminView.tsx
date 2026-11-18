@@ -12,6 +12,7 @@ import AccountsPane from './AccountsPane'
 import EconomicsPane from './EconomicsPane'
 import InfraPane from './InfraPane'
 import ConnectionsPane from './ConnectionsPane'
+import { ConnectorsModal, useConnectors } from './Connectors'
 import StatusBar from '../components/StatusBar'
 import { type AdminPane as Pane } from '../lib/route'
 import type { ReactNode } from 'react'
@@ -31,13 +32,14 @@ const LABELS: Record<Pane, string> = {
   plugins: 'Plugins',
   accounts: 'Accounts',
   connections: 'Kết nối',
+  connectors: 'Connectors',
   infra: 'Infra',
   settings: 'Settings',
 }
 
 // The sidebar's System section, in the order work reaches for them: what is
 // being done, what will run, how the machine is, then configuration.
-const TOOL_ORDER: Pane[] = ['tasks', 'schedules', 'overview', 'traces', 'economics', 'notes', 'plugins', 'accounts', 'connections', 'infra', 'settings']
+const TOOL_ORDER: Pane[] = ['tasks', 'schedules', 'overview', 'traces', 'economics', 'notes', 'plugins', 'accounts', 'connections', 'connectors', 'infra', 'settings']
 
 // The whole dashboard is one screen: rooms, threads and messages, with every
 // other page a tool in the same sidebar. It used to be four apps in a top bar
@@ -134,6 +136,7 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
       {pane === 'plugins' && <PluginsPane call={call} />}
       {pane === 'accounts' && <AccountsPane call={call} />}
       {pane === 'connections' && <ConnectionsPane call={call} />}
+      {pane === 'connectors' && <ConnectorsPage call={call} />}
       {pane === 'infra' && <InfraPane call={call} />}
       {pane === 'settings' && <SettingsPane call={call} />}
     </div>
@@ -152,4 +155,11 @@ export default function AdminView({ call, pane, onPane, taskId, onTaskId, channe
       brand={brand} footer={footer}
     />
   )
+}
+
+// Connectors for the machine: connect a service once; each project enables
+// the ones it uses from its own Connectors button.
+function ConnectorsPage({ call }: { call: Call }) {
+  const { data, err, reload } = useConnectors(call)
+  return <ConnectorsModal call={call} data={data} err={err} reload={reload} inline />
 }

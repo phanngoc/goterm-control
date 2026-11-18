@@ -13,9 +13,9 @@
 // until the dashboard became channel > thread > message with every other page
 // in the same sidebar; their addresses still resolve, to where that went.
 export type Tab = 'admin' | 'files'
-export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'plugins' | 'accounts' | 'connections' | 'infra' | 'settings'
+export type AdminPane = 'overview' | 'economics' | 'traces' | 'tasks' | 'schedules' | 'notes' | 'messages' | 'plugins' | 'accounts' | 'connections' | 'connectors' | 'infra' | 'settings'
 
-export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'plugins', 'accounts', 'connections', 'infra', 'settings']
+export const ADMIN_PANES: AdminPane[] = ['overview', 'economics', 'traces', 'tasks', 'schedules', 'notes', 'messages', 'plugins', 'accounts', 'connections', 'connectors', 'infra', 'settings']
 
 export interface Route {
   tab: Tab

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/connectors"
 	"io"
 	"os"
 	"os/exec"
@@ -130,9 +131,10 @@ func (d *Cloudflare) Deploy(ctx context.Context, r Resolved, opt Options, log io
 	res := &Result{DryRun: opt.DryRun}
 	step := func(format string, a ...any) { fmt.Fprintf(log, "▸ "+format+"\n", a...) }
 
+	vars := projectConnectors(r, step)
 	if r.Build != "" {
 		step("build: %s", r.Build)
-		if err := run(ctx, r.WorkDir, nil, log, "sh", "-c", r.Build); err != nil {
+		if err := run(ctx, r.WorkDir, connectors.BuildEnv(vars), log, "sh", "-c", r.Build); err != nil {
 			return nil, fmt.Errorf("build failed: %w", err)
 		}
 	}
@@ -143,6 +145,9 @@ func (d *Cloudflare) Deploy(ctx context.Context, r Resolved, opt Options, log io
 			return nil, fmt.Errorf("%s is empty or missing — nothing to publish (run the build, or fix deploy.static)", r.StaticDir)
 		}
 		step("static: %d files from %s", n, r.StaticDir)
+	}
+	if len(vars) > 0 && r.MainPath == "" && hasSecret(vars) {
+		step("connectors: this is a static site, so only public values were built in; secret keys are not sent — add a Worker script (deploy.main) to use them")
 	}
 
 	dbID := ""
@@ -209,10 +214,60 @@ func (d *Cloudflare) Deploy(ctx context.Context, r Resolved, opt Options, log io
 		return nil, fmt.Errorf("wrangler deploy failed: %w", err)
 	}
 	res.URL = deployedURL(out.String(), r.Domain)
+	// The Worker exists now; its secrets are the connectors' values. A
+	// value already there is replaced, so a key changed on the Connectors
+	// page reaches PROD on the next publish.
+	if r.MainPath != "" && len(vars) > 0 {
+		m := map[string]string{}
+		for _, v := range vars {
+			m[v.Name] = v.Value
+		}
+		b, _ := json.Marshal(m)
+		secPath := filepath.Join(tmp, "secrets.json")
+		if err := os.WriteFile(secPath, b, 0o600); err != nil {
+			return nil, err
+		}
+		step("secrets: %d value(s) from the project's connectors → Worker %s", len(m), r.Name)
+		args := append(append([]string{}, Wrangler[1:]...), "secret", "bulk", secPath, "--config", cfgPath)
+		if err := run(ctx, r.ProjectDir, env, log, Wrangler[0], args...); err != nil {
+			return nil, fmt.Errorf("published, but the connectors' secrets were not set: %w", err)
+		}
+	}
 	if res.URL != "" {
 		step("live: %s", res.URL)
 	}
 	return res, nil
+}
+
+// projectConnectors are the values a project's enabled connectors give it
+// (internal/connectors), logged by name. A connector that is enabled but not
+// connected is said, not fatal: the site still publishes.
+func projectConnectors(r Resolved, step func(string, ...any)) []connectors.Var {
+	vars, missing, err := connectors.ProjectEnv(r.ProjectDir, Lookup)
+	if err != nil {
+		step("connectors: %v", err)
+		return nil
+	}
+	if len(vars) > 0 {
+		names := make([]string, 0, len(vars))
+		for _, v := range vars {
+			names = append(names, v.Name)
+		}
+		step("connectors: %s", strings.Join(names, " "))
+	}
+	for id, why := range missing {
+		step("connectors: %s is enabled but not connected (%s) — the app runs without it", id, why)
+	}
+	return vars
+}
+
+func hasSecret(vars []connectors.Var) bool {
+	for _, v := range vars {
+		if !v.Public {
+			return true
+		}
+	}
+	return false
 }
 
 // WranglerConfig is the wrangler.json for a deploy. Generated rather than kept

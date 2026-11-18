@@ -1,0 +1,13 @@
+# Bundled with bomclaw. Seeded once; this agent's copy is its own to revise.
+name: connectors
+version: 1.0.0
+description: Connect a project to Stripe, Resend, Gmail, OpenAI… — the dashboard's Connectors panel, as MCP tools.
+provides: [connectors]
+inject:
+  optional: [preview, publish]
+# `bomclaw mcp connectors`: connectors_list, connector_guide, connector_connect,
+# connector_verify, connector_enable, connector_disable, connector_disconnect.
+mcp:
+  bomclaw-connectors:
+    command: bomclaw
+    args: [mcp, connectors]

@@ -1,6 +1,6 @@
 ---
 name: artifacts
-description: 'File what a task produced so it can be found later. Use when: a run makes a report, a patch, a page, a file, or a running URL. NOT for: a one-line answer that is already the task result.'
+description: 'File what a task produced so it can be found later. Use when a run makes a report, patch, page, file or URL. NOT for: a one-line answer.'
 ---
 
 # artifacts

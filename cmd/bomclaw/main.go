@@ -135,6 +135,8 @@ func main() {
 		runMCP(os.Args[2:])
 	case "secrets", "secret":
 		runSecrets(os.Args[2:])
+	case "connectors", "connector":
+		runConnectors(os.Args[2:])
 	case "skills", "skill":
 		runSkills(os.Args[2:])
 	case "plugins", "plugin":

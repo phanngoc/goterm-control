@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/connectors"
 	"io"
 	"net/http"
 	"net/url"
@@ -243,9 +244,10 @@ func (f *Fly) Deploy(ctx context.Context, r Resolved, opt Options, log io.Writer
 	step := func(format string, a ...any) { fmt.Fprintf(log, "▸ "+format+"\n", a...) }
 	res := &Result{DryRun: opt.DryRun}
 
+	vars := projectConnectors(r, step)
 	if r.Build != "" {
 		step("build: %s", r.Build)
-		if err := run(ctx, r.WorkDir, nil, log, "sh", "-c", r.Build); err != nil {
+		if err := run(ctx, r.WorkDir, connectors.BuildEnv(vars), log, "sh", "-c", r.Build); err != nil {
 			return nil, fmt.Errorf("build failed: %w", err)
 		}
 	}
@@ -314,6 +316,25 @@ func (f *Fly) Deploy(ctx context.Context, r Resolved, opt Options, log io.Writer
 		step("create app %s in %s", r.Name, f.Org)
 		if _, err := f.api(ctx, http.MethodPost, "/apps", map[string]string{"app_name": r.Name, "org_slug": f.Org}, nil); err != nil {
 			return nil, fmt.Errorf("create app %s: %w", r.Name, err)
+		}
+	}
+	// The connectors' values as app secrets, staged so the deploy below
+	// releases them with the new image instead of restarting the old one.
+	if len(vars) > 0 {
+		var lines strings.Builder
+		for _, v := range vars {
+			if strings.ContainsAny(v.Value, "\r\n") {
+				return nil, fmt.Errorf("connector value %s spans lines; flyctl secrets import cannot take it", v.Name)
+			}
+			fmt.Fprintf(&lines, "%s=%s\n", v.Name, v.Value)
+		}
+		secPath := filepath.Join(tmp, "secrets.env")
+		if err := os.WriteFile(secPath, []byte(lines.String()), 0o600); err != nil {
+			return nil, err
+		}
+		step("secrets: %d value(s) from the project's connectors → app %s", len(vars), r.Name)
+		if err := run(ctx, r.WorkDir, env, log, "sh", "-c", `exec "$0" secrets import --stage -a "$1" < "$2"`, bin, r.Name, secPath); err != nil {
+			return nil, fmt.Errorf("connectors' secrets: %w", err)
 		}
 	}
 	step("flyctl deploy %s (remote builder)", r.Name)

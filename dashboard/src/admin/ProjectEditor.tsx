@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import PublishButton from './PublishButton'
+import ConnectorsButton from './Connectors'
 import { usePersisted } from '../lib/persisted'
 import { startPathDrag } from '../components/attachments'
 import EnvPanel from './EnvPanel'
@@ -715,6 +716,7 @@ export default function ProjectEditor({ call, channelID, root, onClose, standalo
           )}
           <button onClick={close} title={standalone ? 'Về phòng chat của dự án' : 'Đóng editor'}
             className="shrink-0 whitespace-nowrap text-xs text-gray-400 hover:text-white cursor-pointer">{standalone ? 'về phòng chat' : 'đóng'}</button>
+          <ConnectorsButton call={call} channelID={channelID} projectName={project} />
           <PublishButton call={call} channelID={channelID} onDetails={() => setEnvOpen(true)} />
         </div>
       </header>

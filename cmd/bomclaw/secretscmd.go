@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/connectors"
 	"os"
 	"strings"
 
@@ -41,6 +42,9 @@ func runSecrets(args []string) {
 			sfail("secrets: %v", err)
 		}
 		for _, v := range views {
+			if v.Category != "" && !v.Connected {
+				continue // an app connector nobody connected: `bomclaw connectors list`
+			}
 			state := "not connected"
 			if v.Connected {
 				state = "connected"
@@ -124,7 +128,13 @@ func runSecrets(args []string) {
 }
 
 func verifyAndPrint(service string) bool {
-	detail, err := deploy.Verify(context.Background(), service)
+	var detail string
+	var err error
+	if svc, ok := secrets.ServiceByID(service); ok && svc.Category != "" {
+		detail, err = connectors.Verify(context.Background(), service, deploy.Lookup)
+	} else {
+		detail, err = deploy.Verify(context.Background(), service)
+	}
 	if err != nil {
 		fmt.Printf("check %s: FAIL — %v\n", service, err)
 		return false
@@ -183,6 +193,9 @@ Services and keys:
   cloudflare  CLOUDFLARE_API_TOKEN*  CLOUDFLARE_ACCOUNT_ID*
   fly         FLY_API_TOKEN*  FLY_ORG  FLY_REGION
   supabase    SUPABASE_ACCESS_TOKEN  SUPABASE_URL  SUPABASE_SERVICE_ROLE_KEY  (stored for later)
+
+App connectors (Stripe, Resend, Gmail…) live in the same store: see
+bomclaw connectors.
 
 A value stored here wins over the same variable in .env.`)
 }

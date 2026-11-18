@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/connectors"
 	"io"
 	"net"
 	"net/http"
@@ -175,7 +176,8 @@ func CheckPreview(ctx context.Context, projectDir, channelID string, spec *Previ
 		res.fail("no free port: %v", err)
 		return res
 	}
-	cmd, script := PreviewCommand(spec, dir, channelID, port)
+	vars, _ := projectConnectorEnv(projectDir)
+	cmd, script := PreviewCommand(spec, dir, channelID, port, connectors.ServerEnv(vars)...)
 	logs := &ringLog{max: 16 << 10}
 	cmd.Stdout, cmd.Stderr = logs, logs
 	res.Notes = append(res.Notes, fmt.Sprintf("ran: %s (cwd %s, PORT=%d, BASE_PATH=%s)", script, dir, port, PreviewBasePath(channelID)))

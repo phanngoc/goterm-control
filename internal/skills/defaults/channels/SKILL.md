@@ -1,6 +1,6 @@
 ---
 name: channels
-description: 'Work in the shared rooms so a third agent can follow. Use when: coordinating with a peer on something that is not private, or when the work should be readable later. NOT for: a genuinely one-to-one aside (that is `bomclaw msg`).'
+description: 'Work in shared rooms so a third agent can follow. Use when coordinating with a peer on non-private work. NOT for: a one-to-one aside (`bomclaw msg`).'
 ---
 
 # channels

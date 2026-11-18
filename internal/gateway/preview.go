@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/auth"
+	"github.com/ngocp/goterm-control/internal/connectors"
 	"github.com/ngocp/goterm-control/internal/coord"
+	"github.com/ngocp/goterm-control/internal/deploy"
 )
 
 // Previewing a project: press a button, get the running thing.
@@ -68,10 +70,10 @@ type PreviewSpec struct {
 type PreviewStatus struct {
 	ChannelID string `json:"channel_id"`
 	Declared  bool   `json:"declared"`
-	Kind      string `json:"kind,omitempty"`  // "server" | "static"
-	State     string `json:"state"`           // "none" | "stopped" | "starting" | "running" | "exited"
-	URL       string `json:"url,omitempty"`   // where to point the iframe
-	Port      int    `json:"port,omitempty"`  // the dev server's own port, for the curious
+	Kind      string `json:"kind,omitempty"` // "server" | "static"
+	State     string `json:"state"`          // "none" | "stopped" | "starting" | "running" | "exited"
+	URL       string `json:"url,omitempty"`  // where to point the iframe
+	Port      int    `json:"port,omitempty"` // the dev server's own port, for the curious
 	Command   string `json:"command,omitempty"`
 	StartedAt string `json:"started_at,omitempty"`
 	ExitCode  *int   `json:"exit_code,omitempty"`
@@ -83,6 +85,9 @@ type PreviewStatus struct {
 	ChangedAt     string `json:"changed_at,omitempty"`
 	CodeChangedAt string `json:"code_changed_at,omitempty"`
 	HotReload     bool   `json:"hot_reload,omitempty"`
+	// EnvStale: the project's connectors changed since this server started
+	// (one enabled, a key replaced) — it needs a restart to get them.
+	EnvStale bool `json:"env_stale,omitempty"`
 }
 
 const (
@@ -104,6 +109,9 @@ type previewRun struct {
 	started time.Time
 	logs    *ringLog
 	done    chan struct{}
+	// envPrint is the connectors' values it was started with
+	// (connectors.Fingerprint): when they change, it is running stale keys.
+	envPrint string
 
 	mu    sync.Mutex
 	state string
@@ -217,6 +225,10 @@ func (m *PreviewManager) Status(channelID string) PreviewStatus {
 	defer run.mu.Unlock()
 	st.State, st.Port, st.ExitCode, st.Error = run.state, run.port, run.exit, run.err
 	st.StartedAt = run.started.UTC().Format(time.RFC3339Nano)
+	if root, err := m.root(channelID); err == nil {
+		vars, _ := projectConnectorEnv(root)
+		st.EnvStale = run.state != "exited" && connectors.Fingerprint(vars) != run.envPrint
+	}
 	return st
 }
 
@@ -243,14 +255,23 @@ func (m *PreviewManager) Start(channelID string) (PreviewStatus, error) {
 	if err != nil {
 		return PreviewStatus{}, err
 	}
-	cmd, script := PreviewCommand(spec, dir, channelID, port)
+	root, err := m.root(channelID)
+	if err != nil {
+		return PreviewStatus{}, err
+	}
+	vars, note := projectConnectorEnv(root)
+	cmd, script := PreviewCommand(spec, dir, channelID, port, connectors.ServerEnv(vars)...)
 	logs := &ringLog{max: previewLogBytes}
 	cmd.Stdout, cmd.Stderr = logs, logs
 	fmt.Fprintf(logs, "$ %s\n  (cwd %s, PORT=%d, BASE_PATH=%s)\n", script, dir, port, basePath(channelID))
+	if note != "" {
+		fmt.Fprintf(logs, "  %s\n", note)
+	}
 	if err := cmd.Start(); err != nil {
 		return PreviewStatus{}, err
 	}
-	run := &previewRun{spec: *spec, port: port, proc: cmd.Process, started: time.Now(), logs: logs, done: make(chan struct{}), state: "starting"}
+	run := &previewRun{spec: *spec, port: port, proc: cmd.Process, started: time.Now(), logs: logs, done: make(chan struct{}), state: "starting",
+		envPrint: connectors.Fingerprint(vars)}
 	m.mu.Lock()
 	m.runs[channelID] = run
 	m.mu.Unlock()
@@ -300,7 +321,10 @@ func (m *PreviewManager) Start(channelID string) (PreviewStatus, error) {
 // shell in dir, with the variables the preview skill promises. The dashboard
 // and `bomclaw preview check` both build it here, so a check runs exactly what
 // the button will.
-func PreviewCommand(spec *PreviewSpec, dir, channelID string, port int) (*exec.Cmd, string) {
+//
+// extra comes before the project's own preview.env, which wins on a clash:
+// the project's connectors (connectors.ServerEnv).
+func PreviewCommand(spec *PreviewSpec, dir, channelID string, port int, extra ...string) (*exec.Cmd, string) {
 	script := spec.Command
 	if spec.Setup != "" {
 		script = spec.Setup + " && " + spec.Command
@@ -321,6 +345,7 @@ func PreviewCommand(spec *PreviewSpec, dir, channelID string, port int) (*exec.C
 		"BOMCLAW_PREVIEW=1",
 		"BOMCLAW_PROJECT="+channelID,
 	)
+	cmd.Env = append(cmd.Env, extra...)
 	for k, v := range spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -521,4 +546,34 @@ func handlePreview(deps Deps, method string, params json.RawMessage) (json.RawMe
 		return json.Marshal(map[string]string{"logs": deps.Preview.Logs(p.ChannelID)})
 	}
 	return nil, fmt.Errorf("unknown method: %s", method)
+}
+
+// root is a channel's project folder.
+func (m *PreviewManager) root(channelID string) (string, error) {
+	path, err := m.coord.ProjectFilePath(channelID, PreviewManifest)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(path), nil
+}
+
+// projectConnectorEnv is what a project's enabled connectors give a process
+// that runs it, and a line for its log naming them — never their values.
+func projectConnectorEnv(root string) ([]connectors.Var, string) {
+	vars, missing, err := connectors.ProjectEnv(root, deploy.Lookup)
+	if err != nil {
+		return nil, "connectors: " + err.Error()
+	}
+	if len(vars) == 0 && len(missing) == 0 {
+		return nil, ""
+	}
+	names := make([]string, 0, len(vars))
+	for _, v := range vars {
+		names = append(names, v.Name)
+	}
+	note := "connectors: " + strings.Join(names, " ")
+	for id, why := range missing {
+		note += fmt.Sprintf(" · %s not connected (%s)", id, why)
+	}
+	return vars, note
 }

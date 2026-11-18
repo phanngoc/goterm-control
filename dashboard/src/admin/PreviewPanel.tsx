@@ -17,6 +17,8 @@ interface Status {
   changed_at?: string
   code_changed_at?: string
   hot_reload?: boolean
+  /** The project's connectors changed since the server started. */
+  env_stale?: boolean
 }
 
 const errText = (e: any) => String(e?.message ?? e)
@@ -162,6 +164,19 @@ export default function PreviewPanel({ call, channelID, onClose }: {
     reloadInPlace()
     flash('Code đổi — đã tải lại')
     // Every poll, not only a new value: "settled" is the same value seen twice.
+  }, [st, auto]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A connector enabled, or a key replaced: the server has the old values in
+  // its environment, and only a restart gives it the new ones — hot reload or
+  // not. Once per server start, so one that fails to come up is not looped.
+  const envRestartFor = useRef('')
+  useEffect(() => {
+    if (!auto || !st?.env_stale || st.state !== 'running' || st.kind !== 'server') return
+    if (envRestartFor.current === st.started_at) return
+    envRestartFor.current = st.started_at ?? ''
+    try { pendingHref.current = frame.current?.contentWindow?.location.href ?? null } catch { pendingHref.current = null }
+    loadedAt.current = Date.now()
+    flash('Connectors đổi — đang chạy lại với khóa mới…')
+    void start()
   }, [st, auto]) // eslint-disable-line react-hooks/exhaustive-deps
   // Back from a restart: return to the page you were on, not the start page.
   const onFrameLoad = () => {

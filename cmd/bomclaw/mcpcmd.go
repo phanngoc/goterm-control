@@ -27,12 +27,16 @@ import (
 
 func runMCP(args []string) {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-		fmt.Fprintln(os.Stderr, `Usage: bomclaw mcp
+		fmt.Fprintln(os.Stderr, `Usage: bomclaw mcp [connectors]
 
 Serves bomclaw's tools over MCP (stdio), for an agent's CLI:
   publish_status   where a project's PROD is: provider, account, plan, live URL
   publish_setup    declare how a project publishes (bomclaw.json "deploy")
   publish          build and publish a project to PROD, and say so in its room
+
+bomclaw mcp connectors serves the Connectors panel instead:
+  connectors_list, connector_guide, connector_connect, connector_verify,
+  connector_enable, connector_disable, connector_disconnect
 
 The project is the "project" argument, else $BOMCLAW_PROJECT,
 $BOMCLAW_TASK_CHANNEL, or the project whose folder the agent is in.`)
@@ -49,6 +53,9 @@ $BOMCLAW_TASK_CHANNEL, or the project whose folder the agent is in.`)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv := &mcpserver.Server{Name: "bomclaw", Version: "1", Tools: publishTools(db, gateway.NewEnvManager(db, nil))}
+	if len(args) > 0 && args[0] == "connectors" {
+		srv = &mcpserver.Server{Name: "bomclaw-connectors", Version: "1", Tools: connectorTools(db)}
+	}
 	if err := srv.Serve(ctx, os.Stdin, os.Stdout); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
 	}
@@ -216,7 +223,7 @@ func mcpProject(db *coord.DB, raw json.RawMessage) (*coord.Channel, error) {
 			return nil, fmt.Errorf("no project room %q", id)
 		}
 		if c.Workspace == "" {
-			return nil, fmt.Errorf("%s is a room with no project folder, so it has nothing to publish", c.ID)
+			return nil, fmt.Errorf("%s is a room with no project folder", c.ID)
 		}
 		return c, nil
 	}
