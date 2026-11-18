@@ -43,6 +43,14 @@ type Field struct {
 	Required    bool   `json:"required"`
 	Placeholder string `json:"placeholder,omitempty"`
 	Help        string `json:"help,omitempty"`
+	// Public values may be shipped to a browser (a Stripe publishable key, a
+	// Maps browser key, a GA measurement id). Everything else stays on a
+	// server: a project's connectors are handed to its code by name, and only
+	// a public one is also given to the frontend build.
+	Public bool `json:"public,omitempty"`
+	// Managed values are written by a flow, not typed in (an OAuth refresh
+	// token): the form shows them, it does not ask for them.
+	Managed bool `json:"managed,omitempty"`
 }
 
 // Service is one thing the agents can connect to.
@@ -53,7 +61,28 @@ type Service struct {
 	Docs    string  `json:"docs,omitempty"` // where to create the credential
 	Fields  []Field `json:"fields"`
 	Planned bool    `json:"planned,omitempty"` // storable now, not used by a provider yet
+	// Category is "" for the infrastructure agents deploy to (the Connections
+	// page), and a catalog section for an app connector a project can enable
+	// (internal/connectors): grow, sell, communicate, work, ai.
+	Category string `json:"category,omitempty"`
 }
+
+// Register adds a service to the store's catalog. The connectors package
+// registers the app connectors at init, so one file holds every key on the
+// machine and `bomclaw secrets` reads and writes all of them.
+func Register(svc Service) {
+	regMu.Lock()
+	defer regMu.Unlock()
+	for i := range Services {
+		if Services[i].ID == svc.ID {
+			Services[i] = svc
+			return
+		}
+	}
+	Services = append(Services, svc)
+}
+
+var regMu sync.Mutex
 
 // Services is every service the page offers, in display order.
 var Services = []Service{

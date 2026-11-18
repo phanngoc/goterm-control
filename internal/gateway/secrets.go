@@ -50,7 +50,15 @@ func handleSecrets(ctx context.Context, deps Deps, method string, params json.Ra
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(v)
+		// This page is the infrastructure; app connectors have their own
+		// (connectors.list), from the same store.
+		infra := v[:0]
+		for _, s := range v {
+			if s.Category == "" {
+				infra = append(infra, s)
+			}
+		}
+		return json.Marshal(infra)
 	case "secrets.set":
 		if err := store.Set(p.Service, p.Values, "dashboard"); err != nil {
 			return nil, err

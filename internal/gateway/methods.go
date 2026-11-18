@@ -339,6 +339,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handleEnv(ctx, deps, method, params)
 		case "secrets.list", "secrets.set", "secrets.unset", "secrets.verify":
 			return handleSecrets(ctx, deps, method, params)
+		case "connectors.list", "connectors.set", "connectors.unset", "connectors.verify", "connectors.enable":
+			return handleConnectors(ctx, deps, method, params)
 		case "tasks.poke":
 			if deps.PokeTasks != nil {
 				deps.PokeTasks()

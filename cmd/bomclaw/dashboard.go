@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/ngocp/goterm-control/internal/connectors"
 	"github.com/ngocp/goterm-control/internal/deploy"
 	"github.com/ngocp/goterm-control/internal/secrets"
 	"log"
@@ -153,6 +154,13 @@ func runDashboard(args []string) {
 	srv.Handle(gateway.TerminalPath, gateway.TerminalHandler(coordDB, authMgr))
 	// Project dev servers, proxied — see internal/gateway/preview.go.
 	srv.Handle(gateway.PreviewPrefix, previews.Handler(authMgr))
+	// Google sign-in for the Google connectors (Gmail, Drive, Sheets…).
+	oauth := gateway.ConnectorsOAuthHandler(deps, authMgr)
+	srv.Handle(connectors.StartPath, oauth)
+	srv.Handle(connectors.CallbackPath, oauth)
+	if h := cfg.Gateway.Auth.PublicHost; h != "" {
+		gateway.SaveOrigin(coordDB.Path(), "https://"+h)
+	}
 
 	if err := daemon.KillStaleListeners(*port); err != nil {
 		log.Printf("warning: stale PID cleanup: %v", err)

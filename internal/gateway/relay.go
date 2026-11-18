@@ -138,6 +138,12 @@ var DetachedMethods = map[string]bool{
 	"secrets.unset":  true,
 	"secrets.verify": true,
 
+	"connectors.list":   true,
+	"connectors.set":    true,
+	"connectors.unset":  true,
+	"connectors.verify": true,
+	"connectors.enable": true,
+
 	// The machine itself, answered here so it keeps working while the agents
 	// it restarts are down.
 	"infra.snapshot": true,

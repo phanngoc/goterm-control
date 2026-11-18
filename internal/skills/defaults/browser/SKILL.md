@@ -1,6 +1,6 @@
 ---
 name: browser
-description: 'Drive the user''s OWN logged-in browser. Use when: a page needs a login, a site blocks scripted fetches, you must click/fill/submit, or you need to see what the user sees. NOT for: fetching a public page you can just curl.'
+description: 'Drive the user''s OWN logged-in browser. Use when a page needs a login, blocks scripts, or you must click/fill/submit. NOT for: a public page you can curl.'
 ---
 
 # browser
