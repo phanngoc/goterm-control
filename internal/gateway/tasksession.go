@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ngocp/goterm-control/internal/coord"
@@ -264,7 +265,16 @@ type ThreadSession struct {
 	Entries []coord.TaskLogEntry `json:"entries"`
 	Tasks   []*coord.Task        `json:"tasks"`
 	Running string               `json:"running,omitempty"` // the task of the turn in flight
+	// Live is true while a turn is streaming in the thread, task or not yet:
+	// a turn logs from its first line, and becomes a task only on its first
+	// tool call — Running alone left the panel idle until then.
+	Live bool `json:"live,omitempty"`
 }
+
+// turnQuietLimit is how long a turn that is not (yet) a task may go without
+// logging before the thread stops calling it live: such a turn has made no
+// tool call, so silence that long means it ended without saying so (a crash).
+const turnQuietLimit = 2 * time.Minute
 
 func handleThreadLog(deps Deps, params json.RawMessage) (json.RawMessage, error) {
 	if deps.Coord == nil {
@@ -281,6 +291,10 @@ func handleThreadLog(deps Deps, params json.RawMessage) (json.RawMessage, error)
 	if err != nil {
 		return nil, err
 	}
+	keys, err := deps.Coord.ThreadLogKeys(p.RootID)
+	if err != nil {
+		return nil, err
+	}
 	out := ThreadSession{Tasks: []*coord.Task{}}
 	for _, id := range ids {
 		t, err := deps.Coord.GetTask(id)
@@ -292,8 +306,16 @@ func handleThreadLog(deps Deps, params json.RawMessage) (json.RawMessage, error)
 			out.Running = t.ID
 		}
 	}
-	if out.Entries, err = deps.Coord.TaskLogOf(ids, p.After, 1000); err != nil {
+	if out.Entries, err = deps.Coord.TaskLogOf(keys, p.After, 1000); err != nil {
 		return nil, err
+	}
+	out.Live = out.Running != ""
+	if !out.Live {
+		// The newest line of the thread's log says whether a turn is open.
+		if e, err := deps.Coord.LastTaskLogOf(keys); err == nil && e != nil {
+			ended := e.Kind == coord.LogStatus && strings.HasPrefix(e.Label, "end:")
+			out.Live = !ended && time.Since(e.CreatedAt) < turnQuietLimit
+		}
 	}
 	return json.Marshal(out)
 }

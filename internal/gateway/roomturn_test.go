@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -235,5 +237,75 @@ func TestRoomTurnDirectQuickAnswerStaysPrivateAndFailureIsReported(t *testing.T)
 	thread, _ := cdb.ThreadMessages(top[0].ID)
 	if last := thread[len(thread)-1]; !strings.Contains(last.Body, "⚠️ không xong") || !strings.Contains(last.Body, "exit 1") {
 		t.Fatalf("failure not reported: %+v", last)
+	}
+}
+
+// The thread's session panel shows a turn while it streams — before it is a
+// task, and when it never becomes one — and says it is live until it ends.
+// It used to be blank until the first tool call: the log was held in memory
+// until then, and dropped for an answer that called none.
+func TestThreadLogShowsATurnBeforeItIsATask(t *testing.T) {
+	deps, cdb := mentionTestDeps(t, &recordingTurn{})
+	dm, _ := cdb.EnsureOwnerDM("bomclaw2")
+	line, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: dm.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "gửi link đăng nhập lại",
+	})
+	read := func(after int64) ThreadSession {
+		t.Helper()
+		raw, err := handleThreadLog(deps, []byte(`{"root_id":"`+line.ID+`","after":`+strconv.FormatInt(after, 10)+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s ThreadSession
+		if err := json.Unmarshal(raw, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	rt := OpenRoomTurn(deps, *line, line.ID, nil)
+	s := read(0)
+	if !s.Live || s.Running != "" || len(s.Entries) < 2 || s.Entries[0].Kind != coord.LogUser {
+		t.Fatalf("turn just opened: live=%v running=%q entries=%+v", s.Live, s.Running, s.Entries)
+	}
+	cursor := s.Entries[len(s.Entries)-1].ID
+
+	rt.Sink().NoteTool("Bash(curl /dev/null)") // now it is a task
+	task := rt.Task()
+	if task == nil {
+		t.Fatal("no task after a tool call")
+	}
+	s = read(cursor)
+	if !s.Live || s.Running != task.ID || len(s.Entries) == 0 {
+		t.Fatalf("after the tool call: live=%v running=%q entries=%+v", s.Live, s.Running, s.Entries)
+	}
+	// What was logged before the task now belongs to it, in order, once.
+	all, _ := cdb.TaskLog(task.ID, 0, 0)
+	if len(all) < 3 || all[0].Kind != coord.LogUser || all[0].ID != read(0).Entries[0].ID {
+		t.Fatalf("task log after bind: %+v", all)
+	}
+	rt.Sink().Write("Link: https://example.test")
+	rt.Finish(rt.Sink().Text(), nil)
+	if s = read(0); s.Live || s.Running != "" {
+		t.Fatalf("finished turn still live: %+v", s)
+	}
+	if n := len(s.Entries); n != len(all)+2 { // + the reply text and the end line
+		t.Fatalf("entries after finish = %d, task log before = %d", n, len(all))
+	}
+
+	// A quick answer never becomes a task and is still in the thread.
+	line2, _, _ := cdb.PostMessage(coord.NewChannelMessage{
+		ChannelID: dm.ID, ThreadRoot: line.ID, AuthorKind: coord.MemberUser, AuthorID: coord.OwnerUserID, Body: "cảm ơn",
+	})
+	rt2 := OpenRoomTurn(deps, *line2, line.ID, nil)
+	rt2.Sink().Write("Không có gì.")
+	rt2.Finish(rt2.Sink().Text(), nil)
+	if rt2.Task() != nil {
+		t.Fatal("a quick answer became a task")
+	}
+	s = read(0)
+	last := s.Entries[len(s.Entries)-1]
+	if s.Live || last.Label != "end:completed" || last.TaskID != coord.TurnLogKey(line2.ID) {
+		t.Fatalf("quick answer in the thread: live=%v last=%+v", s.Live, last)
 	}
 }
