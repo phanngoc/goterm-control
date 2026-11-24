@@ -20,10 +20,19 @@ import (
 // A room turn does not know yet whether it is work worth a task — it becomes
 // one on its first tool call. Until Bind names the task, entries are kept in
 // memory and written the moment it does, so the log starts at the beginning.
+//
+// A writer made with NewTurnLogWriter does not wait: it writes under the
+// turn's own key (TurnLogKey) from the first line, so a thread shows the turn
+// while it streams, and Bind moves those rows onto the task. Holding them in
+// memory instead left the thread's session panel blank until the first tool
+// call, and forever for an answer that never called one (2026-11-24).
 type TaskLogWriter struct {
 	db      *DB
 	runID   string
 	agentID string
+
+	putMu       sync.Mutex // orders inserts against Bind's rebind
+	provisional string     // TurnLogKey of the turn, for a NewTurnLogWriter
 
 	mu       sync.Mutex
 	taskID   string
@@ -40,8 +49,24 @@ const taskLogFlushEvery = 2 * time.Second
 // becomes a task should not hold its whole transcript in memory.
 const maxPendingLog = 400
 
+// TurnLogKey is where a turn answering the channel message messageID logs
+// before it is a task — and for good, when it never becomes one.
+func TurnLogKey(messageID string) string { return "turn_" + messageID }
+
+// NewTurnLogWriter starts a writer for the turn answering messageID, logging
+// under TurnLogKey(messageID) until Bind.
+func NewTurnLogWriter(db *DB, messageID, agentID string) *TaskLogWriter {
+	l := newTaskLogWriter(db, "", "", agentID)
+	l.provisional = TurnLogKey(messageID)
+	return l
+}
+
 // NewTaskLogWriter starts a writer. taskID may be empty; see Bind.
 func NewTaskLogWriter(db *DB, taskID, runID, agentID string) *TaskLogWriter {
+	return newTaskLogWriter(db, taskID, runID, agentID)
+}
+
+func newTaskLogWriter(db *DB, taskID, runID, agentID string) *TaskLogWriter {
 	l := &TaskLogWriter{db: db, taskID: taskID, runID: runID, agentID: agentID, stop: make(chan struct{})}
 	if db == nil {
 		return l
@@ -79,6 +104,13 @@ func (l *TaskLogWriter) Bind(taskID, runID string) {
 	pending := l.pending
 	l.pending = nil
 	l.mu.Unlock()
+	if l.provisional != "" {
+		l.putMu.Lock()
+		if err := l.db.RebindTaskLog(l.provisional, taskID, l.runID); err != nil {
+			log.Printf("task log: %v", err)
+		}
+		l.putMu.Unlock()
+	}
 	for _, e := range pending {
 		e.TaskID = taskID
 		if e.RunID == "" {
@@ -89,6 +121,16 @@ func (l *TaskLogWriter) Bind(taskID, runID string) {
 }
 
 func (l *TaskLogWriter) put(e TaskLogEntry) {
+	l.putMu.Lock()
+	defer l.putMu.Unlock()
+	if e.TaskID == l.provisional && e.TaskID != "" {
+		// Written before Bind but landing after its rebind: follow the rows.
+		l.mu.Lock()
+		if l.taskID != "" {
+			e.TaskID, e.RunID = l.taskID, l.runID
+		}
+		l.mu.Unlock()
+	}
 	if err := l.db.AppendTaskLog(e); err != nil {
 		// The log is for watching; losing a line of it must never stop work.
 		log.Printf("task log: %v", err)
@@ -102,7 +144,9 @@ func (l *TaskLogWriter) write(kind, label, content string) {
 	l.mu.Lock()
 	e := TaskLogEntry{TaskID: l.taskID, RunID: l.runID, AgentID: l.agentID,
 		Kind: kind, Label: label, Content: content, CreatedAt: time.Now()}
-	if l.taskID == "" {
+	if l.taskID == "" && l.provisional != "" {
+		e.TaskID = l.provisional
+	} else if l.taskID == "" {
 		if len(l.pending) < maxPendingLog {
 			l.pending = append(l.pending, e)
 		}

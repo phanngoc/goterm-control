@@ -71,7 +71,7 @@ var ErrRoomSteered = errors.New("gateway: the owner interrupted the turn")
 // gives the trace id once the turn has one; nil is fine.
 func OpenRoomTurn(deps Deps, root coord.ChannelMessage, threadRoot string, trace func() string) *RoomTurn {
 	t := &RoomTurn{deps: deps, root: root, threadRoot: threadRoot, trace: trace, unwatch: make(chan struct{})}
-	t.log = coord.NewTaskLogWriter(deps.Coord, "", "", deps.AgentID)
+	t.log = coord.NewTurnLogWriter(deps.Coord, root.ID, deps.AgentID)
 	t.log.User(orOwner(root.AuthorID), strings.TrimSpace(root.Body))
 	t.log.Status("start", fmt.Sprintf("trả lời · %s · %s", deps.AgentID, roomLabel(root.ChannelID)))
 
@@ -345,6 +345,7 @@ func (t *RoomTurn) handOff(partial string) string {
 // line goes, and an open task stays open for the next gateway to answer.
 func (t *RoomTurn) Abandon() {
 	t.stop()
+	t.log.Status("end:abandoned", "") // the thread must not show it running
 	t.finishProgress("")
 }
 

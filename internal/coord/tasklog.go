@@ -382,6 +382,63 @@ func (db *DB) ThreadTaskIDs(rootID string) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// RebindTaskLog moves the rows a turn logged under its TurnLogKey onto the
+// task it became.
+func (db *DB) RebindTaskLog(from, taskID, runID string) error {
+	if _, err := db.conn.Exec(`UPDATE task_log SET task_id = ?, run_id = CASE WHEN run_id = '' THEN ? ELSE run_id END
+		WHERE task_id = ?`, taskID, runID, from); err != nil {
+		return fmt.Errorf("task log rebind %s → %s: %w", from, taskID, err)
+	}
+	return nil
+}
+
+// ThreadLogKeys is every key a turn in this thread logs under: the tasks
+// (ThreadTaskIDs) and the turn keys of its messages (TurnLogKey), for turns
+// still streaming toward a task and answers that never became one.
+func (db *DB) ThreadLogKeys(rootID string) ([]string, error) {
+	ids, err := db.ThreadTaskIDs(rootID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.conn.Query(`SELECT id FROM channel_messages WHERE id = ? OR thread_root = ?`, rootID, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("thread messages %s: %w", rootID, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, TurnLogKey(id))
+	}
+	return ids, rows.Err()
+}
+
+// LastTaskLogOf is the newest entry logged under any of keys, or nil.
+func (db *DB) LastTaskLogOf(keys []string) (*TaskLogEntry, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(keys))
+	for _, k := range keys {
+		args = append(args, k)
+	}
+	var e TaskLogEntry
+	var created string
+	err := db.conn.QueryRow(`SELECT id, task_id, run_id, agent_id, kind, label, content, created_at
+		FROM task_log WHERE task_id IN (`+placeholders(len(keys))+`) ORDER BY id DESC LIMIT 1`, args...).
+		Scan(&e.ID, &e.TaskID, &e.RunID, &e.AgentID, &e.Kind, &e.Label, &e.Content, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("thread log tail: %w", err)
+	}
+	e.CreatedAt = parseTS(created)
+	return &e, nil
+}
+
 // TaskLogOf is the session log of several tasks interleaved, after the entry
 // afterID. Entry ids are global, so their order is the order things happened.
 func (db *DB) TaskLogOf(taskIDs []string, afterID int64, limit int) ([]TaskLogEntry, error) {

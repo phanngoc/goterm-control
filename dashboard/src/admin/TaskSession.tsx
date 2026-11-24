@@ -562,7 +562,11 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
 }) {
   const [entries, setEntries] = useState<TaskLogEntry[]>([])
   const [running, setRunning] = useState('')
+  const [live, setLive] = useState(false) // a turn is streaming, task or not yet
   const [turns, setTurns] = useState(0)
+  // Right after a send, poll fast until the turn shows: the agent picks the
+  // line up within a second or two and the reader is watching for it.
+  const [burst, setBurst] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -579,13 +583,15 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
   const load = useCallback(async () => {
     try {
       const after = lastID.current
-      const s: { entries: TaskLogEntry[]; tasks: Task[]; running?: string } =
+      const s: { entries: TaskLogEntry[]; tasks: Task[]; running?: string; live?: boolean } =
         await call('threads.log', { root_id: rootID, after })
       const fresh = s.entries ?? []
       if (after === 0) setEntries(fresh)
       else if (fresh.length) setEntries(prev => [...prev, ...fresh])
       for (const e of fresh) if (e.id > lastID.current) lastID.current = e.id
       setRunning(s.running ?? '')
+      setLive(!!s.live || !!s.running)
+      if (s.live || s.running) setBurst(false)
       setTurns((s.tasks ?? []).length)
       setLoaded(true)
     } catch (e: any) {
@@ -595,9 +601,14 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
 
   useEffect(() => { void load() }, [load])
   useEffect(() => {
-    const t = setInterval(() => { void load() }, running ? 1500 : 4000)
+    const t = setInterval(() => { void load() }, burst ? 700 : live ? 1000 : 4000)
     return () => clearInterval(t)
-  }, [running, load])
+  }, [burst, live, load])
+  useEffect(() => {
+    if (!burst) return
+    const t = setTimeout(() => setBurst(false), 20000)
+    return () => clearTimeout(t)
+  }, [burst])
   useEffect(() => {
     const el = scroller.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
@@ -616,6 +627,7 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
       }
       setDraft('')
       stick.current = true
+      setBurst(true)
       onPosted?.()
       await load()
     } catch (e: any) {
@@ -629,7 +641,7 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
     <div className="flex flex-col h-full min-h-0">
       <div className="px-4 py-2 border-b border-gray-800 flex items-center gap-2 text-xs">
         <span className="font-medium text-gray-200">Phiên của agent</span>
-        {running
+        {live
           ? <span className="flex items-center gap-1 text-amber-300"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />đang chạy</span>
           : <span className="text-gray-600">{turns ? `${turns} lượt làm việc` : 'chưa có lượt làm việc'}</span>}
         <label className="ml-auto flex items-center gap-1 text-gray-500 cursor-pointer select-none">
@@ -648,11 +660,11 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
         {!loaded && !err && <div className="text-sm text-gray-500">Đang tải phiên…</div>}
         {loaded && entries.length === 0 && (
           <div className="text-sm text-gray-500 py-8 text-center leading-relaxed">
-            Chưa có lượt nào thành việc dài trong thread này.<br />
-            Câu trả lời ngắn nằm ở tab <b>Thảo luận</b>; khi agent bắt đầu gọi tool, từng bước hiện ở đây.
+            Chưa có lượt trả lời nào được ghi trong thread này.<br />
+            Nhắn agent ở ô dưới — nó trả lời ở đây, từng bước khi đang làm.
           </div>
         )}
-        <LogView entries={entries} running={!!running} showThinking={showThinking} />
+        <LogView entries={entries} running={live} showThinking={showThinking} />
       </div>
       <div className="border-t border-gray-800 p-3">
         {err && <div className="mb-2 text-xs text-red-300 bg-red-500/10 ring-1 ring-red-500/30 rounded p-2">{err}</div>}
@@ -673,7 +685,7 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
           />
           <div className="flex items-center gap-2 px-2 pb-2">
             <span className="text-[11px] text-gray-500 leading-snug flex-1">
-              {running
+              {live
                 ? 'Enter: xếp hàng — agent trả lời ngay khi lượt này xong · ■ Dừng & chỉ hướng: cắt lượt này, trả lời tin của bạn ngay.'
                 : 'Tin vào thread, gửi cho agent — lượt sau tiếp tục cùng phiên.'}
             </span>
@@ -691,7 +703,7 @@ export function ThreadSession({ call, rootID, channelID, agent, onPosted }: {
               disabled={sending || !draft.trim()}
               className="shrink-0 px-3 py-1.5 text-xs rounded-md bg-sky-500 text-white font-medium hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {sending ? 'Đang gửi…' : running ? 'Xếp hàng' : 'Gửi'}
+              {sending ? 'Đang gửi…' : live ? 'Xếp hàng' : 'Gửi'}
             </button>
           </div>
         </div>
