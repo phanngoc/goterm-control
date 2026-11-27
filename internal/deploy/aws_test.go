@@ -3,6 +3,9 @@ package deploy
 import (
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 )
 
 // Bucket names are global: the account id makes a project's unique, and
@@ -54,5 +57,53 @@ func TestAWSStaticCaching(t *testing.T) {
 	}
 	if contentType("a/app.css") != "text/css; charset=utf-8" || contentType("x.unknownext") != "application/octet-stream" {
 		t.Errorf("types %q %q", contentType("a/app.css"), contentType("x.unknownext"))
+	}
+}
+
+// The app's address comes from the newest active configuration's public
+// ingress path, with or without a scheme.
+func TestAWSExpressEndpointAndImage(t *testing.T) {
+	x := &ecstypes.ECSExpressGatewayService{ActiveConfigurations: []ecstypes.ExpressGatewayServiceConfiguration{
+		{IngressPaths: []ecstypes.IngressPathSummary{{AccessType: ecstypes.AccessTypePublic, Endpoint: aws.String("old.ecs.ap-southeast-1.on.aws")}},
+			PrimaryContainer: &ecstypes.ExpressGatewayContainer{Image: aws.String("r/app:git-aaaaaaa")}},
+		{IngressPaths: []ecstypes.IngressPathSummary{{AccessType: ecstypes.AccessTypePublic, Endpoint: aws.String("new.ecs.ap-southeast-1.on.aws/")}},
+			PrimaryContainer: &ecstypes.ExpressGatewayContainer{Image: aws.String("r/app:git-bbbbbbb")}},
+	}}
+	if got := endpoint(x); got != "https://new.ecs.ap-southeast-1.on.aws" {
+		t.Errorf("endpoint %q", got)
+	}
+	if got := expressImage(x); got != "r/app:git-bbbbbbb" {
+		t.Errorf("image %q", got)
+	}
+	if endpoint(nil) != "" || expressImage(nil) != "" {
+		t.Error("nil service")
+	}
+}
+
+// CloudWatch names ALB metrics by ARN suffixes.
+func TestAWSALBDimensions(t *testing.T) {
+	tg := "arn:aws:elasticloadbalancing:ap-southeast-1:1:targetgroup/ecs-x/abc"
+	lb := "arn:aws:elasticloadbalancing:ap-southeast-1:1:loadbalancer/app/ecs-express/def"
+	if got := arnSuffix(tg, "targetgroup/"); got != "targetgroup/ecs-x/abc" {
+		t.Errorf("tg %q", got)
+	}
+	if got := arnSuffix(lb, "loadbalancer/"); got != "app/ecs-express/def" {
+		t.Errorf("lb %q", got)
+	}
+}
+
+// A domain in front of an app must not cache, must pass every method, and
+// must keep the origin's Host.
+func TestAWSAppDistributionPassesThrough(t *testing.T) {
+	c := appDistConfig("shop", "x.ecs.ap-southeast-1.on.aws")
+	b := c.DefaultCacheBehavior
+	if aws.ToString(b.CachePolicyId) != cachingDisabled || aws.ToString(b.OriginRequestPolicyId) != allViewerExceptHostHeader {
+		t.Error("policies")
+	}
+	if aws.ToInt32(b.AllowedMethods.Quantity) != 7 || aws.ToString(c.Comment) != distComment("shop") {
+		t.Errorf("methods %d comment %q", aws.ToInt32(b.AllowedMethods.Quantity), aws.ToString(c.Comment))
+	}
+	if c.Origins.Items[0].CustomOriginConfig.OriginProtocolPolicy != "https-only" {
+		t.Error("origin must be reached over HTTPS")
 	}
 }
