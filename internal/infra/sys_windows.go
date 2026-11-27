@@ -13,3 +13,10 @@ func killTERM(pid int) error {
 	}
 	return p.Kill()
 }
+
+func killKILL(pid int) error { return killTERM(pid) }
+
+func alive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	return err == nil && p != nil
+}

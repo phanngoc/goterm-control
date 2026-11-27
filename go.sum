@@ -20,8 +20,6 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.13 h1:a6vUTTG7Vsf0LTCuy/GPJsLhz3L
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.13/go.mod h1:vlylLTRubgSLfSBOy7blRhV2CC1nVY1VDIgV5nlKi5Y=
 github.com/aws/aws-sdk-go-v2/service/acm v1.52.1 h1:Y556BU/bykpmLohFiXGqTKkY0Q3RXMZOs1jw6isZVOk=
 github.com/aws/aws-sdk-go-v2/service/acm v1.52.1/go.mod h1:z0F8Qmoy2c6oB0vRxUlZvNjRzOV2y2Q80AHuQ3n2VQY=
-github.com/aws/aws-sdk-go-v2/service/apprunner v1.48.13 h1:FX4hvky5RmoBpiXcdDvFZbASO2XwLBxglEdvE5YYehw=
-github.com/aws/aws-sdk-go-v2/service/apprunner v1.48.13/go.mod h1:Vl3XshV0aXG8TReJVElb4s9BQ/Z6ysKQtQq4R/VVptU=
 github.com/aws/aws-sdk-go-v2/service/cloudfront v1.78.1 h1:I4rvHac41uQs9sCxKVENsoIfgtwKH6zv+0VYewb2Gqw=
 github.com/aws/aws-sdk-go-v2/service/cloudfront v1.78.1/go.mod h1:pgmegExW65PjsI5JmX6gNtoF7IDcW+GBXz9kJo0vsok=
 github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.76.1 h1:CG+va9LHbJxYsGNTqsZWPlLworDJ54dvTRMJXeziRdg=

@@ -41,6 +41,9 @@ type infraParams struct {
 	Target string `json:"target"`
 	Verb   string `json:"verb"`
 	Lines  int    `json:"lines,omitempty"`
+	// adopt: the pm2 app name and project; empty takes them from the folder.
+	Name    string `json:"name,omitempty"`
+	Project string `json:"project,omitempty"`
 }
 
 func handleInfraAction(deps Deps, params json.RawMessage) (json.RawMessage, error) {
@@ -53,7 +56,7 @@ func handleInfraAction(deps Deps, params json.RawMessage) (json.RawMessage, erro
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	r, err := newInfra(deps).Do(ctx, infra.Action{Kind: p.Kind, Target: p.Target, Verb: p.Verb})
+	r, err := newInfra(deps).Do(ctx, infra.Action{Kind: p.Kind, Target: p.Target, Verb: p.Verb, Name: p.Name, Project: p.Project})
 	if err != nil {
 		return nil, err
 	}

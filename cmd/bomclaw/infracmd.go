@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -22,10 +24,20 @@ const infraUsage = `Usage: bomclaw infra <command> [flags]
   kill <pid>                  SIGTERM a stray server: listening, and managed by nothing
   logs <name> [--lines N]     the tail of its stdout/stderr logs
 
+  run --name N [--project P] [--cwd DIR] [--env K=V]... [--max-memory 1G] [--no-sandbox] -- <command> [args...]
+                              run a project's server under pm2, sandboxed; re-running replaces it
+  adopt <pid|:port> [--name N] [--project P]
+                              move a stray server into pm2 as it was started (same command,
+                              folder, PORT/HOST/BASE_PATH), sandboxed; the stray is stopped first
+  remove <label>              unload a LaunchAgent whose program or folder is gone, and move its
+                              plist to ~/.goterm-shared/pm2/backup/launchd/
+
 Flags: --json (ls), --all (ls: include macOS/app listeners), --db <coord.db>
 
-Project services run under pm2, one ecosystem file per project in
-~/.goterm-shared/pm2/<project>.config.cjs, namespace = the project's name.
+Project services run under pm2. run/adopt write ~/.goterm-shared/pm2/managed/<project>.json
+(namespace = project) with a sandbox-exec profile per app: writes only inside the project
+folder, temp and package caches; no reading ~/.ssh, ~/.aws, the bomclaw secret stores or pm2's
+dump; a clean environment with HOST=127.0.0.1. Hand-written <project>.config.cjs files still work.
 The dashboard's Admin → Infra shows and does the same.`
 
 func runInfra(args []string) {
@@ -34,11 +46,25 @@ func runInfra(args []string) {
 	all := fs.Bool("all", false, "Include macOS and app listeners")
 	lines := fs.Int("lines", 80, "logs: how many lines")
 	dbPath := fs.String("db", coord.DefaultPath(), "Shared coordination database (project names)")
+	name := fs.String("name", "", "run/adopt: pm2 app name")
+	project := fs.String("project", "", "run/adopt: project (pm2 namespace)")
+	cwd := fs.String("cwd", "", "run: the project folder (default: current folder)")
+	maxMem := fs.String("max-memory", "", "run: restart above this memory (default 1G)")
+	noSandbox := fs.Bool("no-sandbox", false, "run: do not confine it")
+	var envs multiFlag
+	fs.Var(&envs, "env", "run: K=V, repeatable")
 	fs.Usage = func() { fmt.Fprintln(os.Stderr, infraUsage) }
 
 	sub, rest := "ls", args
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		sub, rest = args[0], args[1:]
+	}
+	var command []string
+	for i, a := range rest {
+		if a == "--" {
+			rest, command = rest[:i], rest[i+1:]
+			break
+		}
 	}
 	var pos []string
 	for len(rest) > 0 {
@@ -80,7 +106,56 @@ func runInfra(args []string) {
 		}
 		kind := infraKind(ctx, in, sub, pos[0])
 		r, err := in.Do(ctx, infra.Action{Kind: kind, Target: pos[0], Verb: sub})
-		exitIf(err)
+		infraExit(err)
+		fmt.Println(r.Ran)
+		if r.Output != "" {
+			fmt.Println(r.Output)
+		}
+	case "run":
+		if *name == "" || len(command) == 0 {
+			fs.Usage()
+			os.Exit(1)
+		}
+		dir := *cwd
+		if dir == "" {
+			dir, _ = os.Getwd()
+		}
+		dir, _ = filepath.Abs(dir)
+		env := map[string]string{}
+		for _, kv := range envs {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				infraExit(fmt.Errorf("--env %q: want K=V", kv))
+			}
+			env[k] = v
+		}
+		r, err := in.RunApp(ctx, infra.App{Name: *name, Project: *project, Cwd: dir, Command: command,
+			Env: env, MaxMemory: *maxMem, NoSandbox: *noSandbox})
+		infraExit(err)
+		fmt.Println(r.Ran)
+		if r.Output != "" {
+			fmt.Println(r.Output)
+		}
+	case "adopt":
+		if len(pos) != 1 {
+			fs.Usage()
+			os.Exit(1)
+		}
+		pid, err := strayPID(ctx, in, pos[0])
+		infraExit(err)
+		r, err := in.Do(ctx, infra.Action{Kind: infra.KindPID, Target: strconv.Itoa(pid), Verb: "adopt", Name: *name, Project: *project})
+		infraExit(err)
+		fmt.Println(r.Ran)
+		if r.Output != "" {
+			fmt.Println(r.Output)
+		}
+	case "remove":
+		if len(pos) != 1 {
+			fs.Usage()
+			os.Exit(1)
+		}
+		r, err := in.Do(ctx, infra.Action{Kind: infra.KindLaunchd, Target: pos[0], Verb: "remove"})
+		infraExit(err)
 		fmt.Println(r.Ran)
 		if r.Output != "" {
 			fmt.Println(r.Output)
@@ -91,7 +166,7 @@ func runInfra(args []string) {
 			os.Exit(1)
 		}
 		logs, err := in.Logs(ctx, infraKind(ctx, in, sub, pos[0]), pos[0], *lines)
-		exitIf(err)
+		infraExit(err)
 		for _, k := range []string{"out", "err"} {
 			if v, ok := logs[k]; ok {
 				fmt.Printf("==> %s <==\n%s\n", logs[k+"_path"], v)
@@ -102,6 +177,39 @@ func runInfra(args []string) {
 		os.Exit(1)
 	}
 }
+
+// strayPID reads "1234" as a pid and ":5173" (or "5173" when no such pid
+// listens) as the port a stray listens on.
+func strayPID(ctx context.Context, in *infra.Infra, s string) (int, error) {
+	port := strings.HasPrefix(s, ":")
+	n, err := strconv.Atoi(strings.TrimPrefix(s, ":"))
+	if err != nil {
+		return 0, fmt.Errorf("%q: want a pid or :port", s)
+	}
+	var byPort []infra.Listener
+	for _, l := range in.Snapshot(ctx).Listeners {
+		if !port && l.PID == n {
+			return n, nil
+		}
+		if l.Port == n {
+			byPort = append(byPort, l)
+		}
+	}
+	for _, l := range byPort {
+		if l.ManagedBy == "" && !l.System && !l.Tool {
+			return l.PID, nil
+		}
+	}
+	if len(byPort) > 0 {
+		return 0, fmt.Errorf(":%d is %s's, not a stray", n, orNone(byPort[0].ManagedBy, byPort[0].Command))
+	}
+	return 0, fmt.Errorf("nothing listens as %s", s)
+}
+
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 // infraKind decides what a bare name means: a pid for kill, else a pm2 app if
 // one has that name, else a LaunchAgent label.
@@ -129,6 +237,9 @@ func printInfra(s infra.Snapshot, all bool) {
 		if a.Crashloop {
 			st += " ⚠ crashloop"
 		}
+		if a.Sandboxed {
+			st += " ⛨"
+		}
 		fmt.Fprintf(w, "  %s\t%s\t%s\t%d\t%s\t%.0f%%\t%s\t%d\n", a.Name, orNone(a.Project, a.Namespace), st, a.PID,
 			ports(a.Ports), a.CPU, mib(a.Mem), a.Restarts)
 	}
@@ -142,6 +253,8 @@ func printInfra(s infra.Snapshot, all bool) {
 	for _, sv := range s.Services {
 		state := "not loaded"
 		switch {
+		case sv.Missing != "":
+			state = "broken: " + sv.Missing + " is gone (bomclaw infra remove " + sv.Label + ")"
 		case sv.Loaded && sv.PID > 0:
 			state = "running"
 		case sv.Loaded && sv.Scheduled:
@@ -160,8 +273,14 @@ func printInfra(s infra.Snapshot, all bool) {
 			continue
 		}
 		by := l.ManagedBy
+		if by == "" && l.Tool {
+			by = "(tool daemon)"
+		}
 		if by == "" {
-			by = "— (stray)"
+			by = "— (stray: bomclaw infra adopt " + strconv.Itoa(l.PID) + ")"
+		}
+		if l.Exposed {
+			by += " · all interfaces"
 		}
 		fmt.Fprintf(w, "  %d\t%s\t%s\t%d\t%s\t%s\n", l.Port, orNone(l.Project), by, l.PID, l.Command, l.Cwd)
 	}
@@ -200,3 +319,10 @@ func ports(ps []int) string {
 
 func gib(b int64) string { return fmt.Sprintf("%.1fG", float64(b)/(1<<30)) }
 func mib(b int64) string { return fmt.Sprintf("%.0fM", float64(b)/(1<<20)) }
+
+func infraExit(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "infra: %v\n", err)
+		os.Exit(1)
+	}
+}
