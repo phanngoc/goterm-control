@@ -164,6 +164,16 @@ It writes `bomclaw.json` → `"deploy": {…}`; edit that file directly to chang
   server (Node, Python, Go…), which Cloudflare cannot. Answers on
   `<name>.fly.dev`; machines sleep when idle. No database in this provider
   yet (Managed Postgres planned) — `--with-db` is refused.
+- `aws` — `--static dist`: private S3 bucket behind CloudFront (HTTPS);
+  `--dockerfile Dockerfile --port 3000`: image built here with docker, pushed
+  to ECR, run by App Runner. No database — `--with-db` is refused. A new
+  CloudFront distribution needs a few minutes before its URL answers.
+- `vercel` — `--static dist` uploads the built folder; `--framework nextjs`
+  (or vite, astro…) uploads the source and Vercel builds it — the way to ship
+  Next.js server routes. No database, no Dockerfile.
+
+A `--domain` on a Cloudflare zone is pointed at AWS or Vercel through
+Cloudflare DNS automatically; otherwise the deploy log lists the records to add.
 
 Check `bomclaw env status` rather than assuming which one a project uses.
 
@@ -188,7 +198,8 @@ Rules:
 
 ### When it fails
 
-- `Cloudflare is not connected` / `Fly.io is not connected` — no credentials yet.
+- `Cloudflare is not connected` / `Fly.io is not connected` / `AWS is not
+  connected` / `Vercel is not connected` — no credentials yet.
   Ask the owner for them, or point them at the dashboard (Admin → Kết nối).
 
 ### Credentials handed to you in chat
@@ -204,7 +215,10 @@ END
 
 It checks the token against the service and prints a mask, never the value.
 Without an account id, find it with the token: `GET /client/v4/accounts`.
-Fly is `bomclaw secrets set fly --stdin` with `FLY_API_TOKEN=…`; `bomclaw
+Fly is `bomclaw secrets set fly --stdin` with `FLY_API_TOKEN=…`; AWS is
+`bomclaw secrets set aws --stdin` with `AWS_ACCESS_KEY_ID=…`,
+`AWS_SECRET_ACCESS_KEY=…`, `AWS_REGION=…`; Vercel is `bomclaw secrets set
+vercel --stdin` with `VERCEL_TOKEN=…`; `bomclaw
 secrets list` shows what is connected. Never write a token into a project
 file, a commit, a room message or your reply — say "stored, check OK" and
 what the check found.

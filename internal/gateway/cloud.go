@@ -100,7 +100,7 @@ func (m *EnvManager) Cloud(ctx context.Context, fresh bool) (*CloudStatus, error
 	}
 	for name, title := range deploy.Planned() {
 		byName[name] = &CloudProvider{Name: name, Title: title, Projects: []CloudProject{},
-			Hint: title + " chưa được hỗ trợ làm PROD — dự án deploy lên Cloudflare hoặc Fly.io"}
+			Hint: title + " chưa được hỗ trợ làm PROD"}
 		order = append(order, name)
 	}
 
@@ -144,7 +144,7 @@ func (m *EnvManager) Cloud(ctx context.Context, fresh bool) (*CloudStatus, error
 		cp.Projects = append(cp.Projects, p)
 	}
 
-	// Built first, connected first, then by name; planned ones last.
+	// Built first, connected first, the busiest next, then by name; planned last.
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := byName[order[i]], byName[order[j]]
 		if a.Built != b.Built {
@@ -152,6 +152,9 @@ func (m *EnvManager) Cloud(ctx context.Context, fresh bool) (*CloudStatus, error
 		}
 		if a.Connected != b.Connected {
 			return a.Connected
+		}
+		if len(a.Projects) != len(b.Projects) {
+			return len(a.Projects) > len(b.Projects)
 		}
 		return a.Name < b.Name
 	})

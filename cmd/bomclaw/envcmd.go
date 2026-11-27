@@ -47,9 +47,10 @@ func runEnv(args []string) {
 		dbFile := fs.String("database", "", "Local SQLite file to host as Cloudflare D1, relative to the project")
 		main := fs.String("main", "", "Optional Worker script (an API in front of the files)")
 		target := fs.String("provider", deploy.DefaultTarget, "Where PROD lives: "+strings.Join(deploy.Available(), ", "))
-		dockerfile := fs.String("dockerfile", "", "Fly.io: the project's Dockerfile, for an app that runs a server")
-		port := fs.Int("port", 0, "Fly.io: the port the image listens on (default 8080)")
-		region := fs.String("region", "", "Fly.io: region (default $FLY_REGION or sin)")
+		dockerfile := fs.String("dockerfile", "", "Fly.io / AWS App Runner: the project's Dockerfile, for an app that runs a server")
+		port := fs.Int("port", 0, "Fly.io / AWS App Runner: the port the image listens on (default 8080)")
+		region := fs.String("region", "", "Fly.io region (default $FLY_REGION or sin) or AWS region (default $AWS_REGION or ap-southeast-1)")
+		framework := fs.String("framework", "", "Vercel: have Vercel build the source (nextjs, vite, astro…) instead of uploading --static")
 		force := fs.Bool("force", false, "Replace a deploy that is already declared")
 		id, _ := parseLeading(fs, rest)
 		c := envProject(*dbPath, id)
@@ -59,8 +60,8 @@ func runEnv(args []string) {
 		}
 		s := &deploy.Spec{Target: *target, Static: *static, Build: *build, Cwd: *cwd,
 			Domain: *domain, Name: *name, SPA: *spa, Main: *main,
-			Dockerfile: *dockerfile, Port: *port, Region: *region}
-		if s.Static == "" && s.Main == "" && s.Dockerfile == "" {
+			Dockerfile: *dockerfile, Port: *port, Region: *region, Framework: *framework}
+		if s.Static == "" && s.Main == "" && s.Dockerfile == "" && s.Framework == "" {
 			s.Static = guessStatic(c.Workspace)
 			if s.Static == "" {
 				fmt.Fprintln(os.Stderr, "env init: pass --static <built folder> (no dist/, build/, out/ or public/ with an index.html here)")
@@ -87,7 +88,7 @@ func runEnv(args []string) {
 		fs := flag.NewFlagSet("env deploy", flag.ExitOnError)
 		dbPath := dbFlag(fs)
 		withDB := fs.Bool("with-db", false, "Also upload the local database — REPLACES the PROD tables")
-		dry := fs.Bool("dry-run", false, "Build and print the wrangler config; send nothing to Cloudflare")
+		dry := fs.Bool("dry-run", false, "Build and say what would be published; send nothing to the provider")
 		id, _ := parseLeading(fs, rest)
 		c := envProject(*dbPath, id)
 		spec, err := deploy.Read(c.Workspace)
@@ -282,12 +283,21 @@ SQLite), PROD is a hosting provider, picked by bomclaw.json "deploy.target":
   fly         Fly.io Machines: the built files behind nginx, or the project's
               own Dockerfile for an app that runs a server; <name>.fly.dev
               plus an optional custom domain
+  aws         static: a private S3 bucket behind CloudFront (HTTPS, ACM
+              certificate for a custom domain); dockerfile: the image in ECR,
+              run by App Runner. Month-to-date cost on Admin → Infra
+  vercel      static: the built folder uploaded as is; framework: the source,
+              built by Vercel (Next.js server routes included); <name>.vercel.app
+A custom domain on a Cloudflare zone is pointed at AWS or Vercel through
+Cloudflare DNS when the Cloudflare token can edit it.
 
   status <channel> [--json]   DEV and PROD side by side
   init   <channel>            Declare PROD: --static dist [--build "npm run build"]
                               [--domain x.bomclaw.org] [--spa] [--database data/app.db]
                               [--main worker.js] [--name n] [--force]
                               [--provider fly --dockerfile Dockerfile --port 3000 --region sin]
+                              [--provider aws --static dist | --dockerfile Dockerfile]
+                              [--provider vercel --static dist | --framework nextjs]
   deploy <channel>            Build and publish PROD. --dry-run sends nothing;
                               --with-db also uploads the local database, which
                               REPLACES the PROD tables — never implied.
@@ -295,5 +305,8 @@ SQLite), PROD is a hosting provider, picked by bomclaw.json "deploy.target":
 Credentials, in the gateway's .env:
   cloudflare  CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
   fly         FLY_API_TOKEN (FLY_ORG, FLY_REGION optional), and flyctl installed
+  aws         AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (AWS_REGION optional), or
+              this machine's AWS CLI profile; docker installed for Dockerfile apps
+  vercel      VERCEL_TOKEN (VERCEL_TEAM_ID optional)
 <channel> is ch_<name> or <name>; defaults to $BOMCLAW_PROJECT.`)
 }

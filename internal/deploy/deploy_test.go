@@ -31,11 +31,15 @@ func TestASpecFillsItsDefaultsAndRefusesWhatIsNotBuilt(t *testing.T) {
 		t.Errorf("no deploy should be nil, nil: %v %v", s, err)
 	}
 	for _, bad := range []string{
-		`{"deploy":{"target":"vercel","static":"dist"}}`,
+		`{"deploy":{"target":"vercel","dockerfile":"Dockerfile"}}`,
 		`{"deploy":{}}`,
 		`{"deploy":{"static":"dist","name":"Bad Name"}}`,
 		`{"deploy":{"static":"dist","database":{"engine":"supabase"}}}`,
-		`{"deploy":{"target":"vercel","static":"dist"}}`,
+		`{"deploy":{"target":"vercel","static":"dist","database":{"file":"a.db"}}}`,
+		`{"deploy":{"target":"vercel","static":"dist","framework":"vite"}}`,
+		`{"deploy":{"target":"aws","framework":"nextjs"}}`,
+		`{"deploy":{"target":"aws","static":"dist","database":{"file":"a.db"}}}`,
+		`{"deploy":{"target":"aws","static":"dist","dockerfile":"Dockerfile"}}`,
 		`{"deploy":{"target":"fly","main":"w.js"}}`,
 		`{"deploy":{"target":"fly","static":"dist","database":{"file":"a.db"}}}`,
 		`{"deploy":{"target":"cloudflare","dockerfile":"Dockerfile"}}`,
@@ -314,8 +318,15 @@ func TestProvidersAreChosenByTargetAndPlannedOnesSaySo(t *testing.T) {
 	if p, err := For("fly"); err != nil || p.Title() != "Fly.io" {
 		t.Errorf("fly: %v %v", p, err)
 	}
-	if _, err := For("vercel"); err == nil || !strings.Contains(err.Error(), "planned") || !strings.Contains(err.Error(), "fly") {
-		t.Errorf("vercel: %v", err)
+	for name, title := range map[string]string{"aws": "AWS", "vercel": "Vercel"} {
+		if p, err := For(name); err != nil || p.Title() != title {
+			t.Errorf("%s: %v %v", name, p, err)
+		}
+	}
+	planned["netlify"] = "Netlify"
+	defer delete(planned, "netlify")
+	if _, err := For("netlify"); err == nil || !strings.Contains(err.Error(), "planned") || !strings.Contains(err.Error(), "vercel") {
+		t.Errorf("netlify: %v", err)
 	}
 	if _, err := For("heroku"); err == nil || strings.Contains(err.Error(), "planned") {
 		t.Errorf("heroku: %v", err)

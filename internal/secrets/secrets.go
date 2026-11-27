@@ -109,6 +109,27 @@ var Services = []Service{
 		},
 	},
 	{
+		ID: "aws", Title: "AWS",
+		Purpose: "PROD on AWS: static sites on S3 + CloudFront, apps from a Dockerfile on App Runner (ECR). Month-to-date cost on Infra.",
+		Docs:    "https://console.aws.amazon.com/iam/home#/security_credentials",
+		Fields: []Field{
+			{Env: "AWS_ACCESS_KEY_ID", Label: "Access key ID", Placeholder: "AKIA…",
+				Help: "An IAM user's access key. Leave empty to use this machine's AWS CLI profile (~/.aws)."},
+			{Env: "AWS_SECRET_ACCESS_KEY", Label: "Secret access key", Secret: true},
+			{Env: "AWS_REGION", Label: "Region", Placeholder: "ap-southeast-1"},
+		},
+	},
+	{
+		ID: "vercel", Title: "Vercel",
+		Purpose: "PROD on Vercel: a built folder, or a framework's source Vercel builds (Next.js, Vite, Astro…), <name>.vercel.app.",
+		Docs:    "https://vercel.com/account/tokens",
+		Fields: []Field{
+			{Env: "VERCEL_TOKEN", Label: "Token", Secret: true, Required: true,
+				Help: "Account → Tokens; scope it to the team that should own the projects."},
+			{Env: "VERCEL_TEAM_ID", Label: "Team ID", Placeholder: "team_…", Help: "Optional: deploy into a team instead of your personal account."},
+		},
+	},
+	{
 		ID: "supabase", Title: "Supabase", Planned: true,
 		Purpose: "The next database engine (Postgres, auth, storage). Stored now; deploys do not use it yet.",
 		Docs:    "https://supabase.com/dashboard/account/tokens",

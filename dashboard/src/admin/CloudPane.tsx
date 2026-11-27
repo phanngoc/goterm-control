@@ -4,20 +4,23 @@ import { CloudIcon, Dot, host, shortVer, toneClass, type InfraAccount, type Prod
 
 type Call = (method: string, params?: any) => Promise<any>
 
-// Admin → Infra → Cloud: the providers every project's PROD runs on. Per
+// Admin → Infra → Cloud: the providers every project's PROD runs on —
+// Cloudflare, Fly.io, AWS, Vercel. Per
 // provider: connected or not, whose account, which plan, what the account did
 // in the last day (requests, errors, CPU, databases), and which projects live
 // there. A project room shows its own environments and versions; the account
 // and its traffic are shared by every project on it, so they are here, once.
 
 interface MetricPoint { at: string; requests: number; errors: number }
-interface WorkerMetric { name: string; requests: number; errors: number; subrequests: number; cpu_p50_us: number; cpu_p99_us: number }
+interface WorkerMetric { name: string; kind?: string; project?: string; requests: number; errors: number; subrequests: number; cpu_p50_us: number; cpu_p99_us: number }
+interface Cost { amount: number; currency: string; period: string; by_service?: { name: string; amount: number }[] }
 interface DBMetric { id: string; name: string; bytes: number; read_queries: number; write_queries: number; rows_read: number; rows_written: number }
 interface Metrics {
   since: string; until: string
   requests: number; errors: number; subrequests: number
   hourly?: MetricPoint[]; workers?: WorkerMetric[]; databases?: DBMetric[]
   scripts: number; error?: string
+  unit?: string; deploys?: number; deploy_errors?: number; cost?: Cost; note?: string
 }
 interface CloudProject {
   channel_id: string; name: string; declared: boolean; dev_ahead: number; running: boolean; error?: string
@@ -183,8 +186,8 @@ function ProviderCard({ p }: { p: CloudProvider }) {
             )}
           </dl>
 
-          {m && <MetricsBlock m={m} byWorker={byWorker} />}
-          {!m && p.name !== 'cloudflare' && <div className="text-xs text-gray-500">{p.title} chưa có metric qua API ở đây.</div>}
+          {m && <MetricsBlock m={m} byWorker={byWorker} provider={p.name} />}
+          {!m && <div className="text-xs text-gray-500">{p.title} chưa có metric qua API ở đây.</div>}
 
           <Projects projects={p.projects} />
         </div>
@@ -203,47 +206,70 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub?:
   )
 }
 
-function MetricsBlock({ m, byWorker }: { m: Metrics; byWorker: Map<string, CloudProject> }) {
+const money = (n: number, cur: string) => `${cur === 'USD' ? '$' : ''}${n.toFixed(2)}${cur === 'USD' ? '' : ' ' + cur}`
+
+function MetricsBlock({ m, byWorker, provider }: { m: Metrics; byWorker: Map<string, CloudProject>; provider: string }) {
   const rate = m.requests ? (m.errors / m.requests) * 100 : 0
   const dbBytes = (m.databases ?? []).reduce((s, d) => s + d.bytes, 0)
+  const unit = m.unit || 'Worker'
+  const deploysOnly = provider === 'vercel'
+  const cpu = (m.workers ?? []).some(w => w.cpu_p50_us > 0)
+  const tiles: React.ReactNode[] = deploysOnly ? [
+    <Tile key="d" label="Deploy · 24h" value={num(m.deploys ?? 0)} sub={`${(m.workers ?? []).length} project có deploy`} />,
+    <Tile key="e" label="Deploy lỗi · 24h" value={num(m.deploy_errors ?? 0)} sub={m.deploys ? `${(((m.deploy_errors ?? 0) / m.deploys) * 100).toFixed(0)}% deploy` : 'không có deploy'}
+      tone={(m.deploy_errors ?? 0) > 0 ? 'warn' : undefined} />,
+    <Tile key="p" label="Projects" value={String(m.scripts)} />,
+  ] : [
+    <Tile key="r" label="Requests · 24h" value={num(m.requests)} sub={m.subrequests ? `${num(m.subrequests)} subrequest` : undefined} />,
+    <Tile key="e" label={provider === 'cloudflare' ? 'Lỗi · 24h' : 'Lỗi 5xx · 24h'} value={num(m.errors)} sub={m.requests ? `${rate.toFixed(2)}% request` : 'không có request'}
+      tone={rate > 5 ? 'bad' : rate > 1 ? 'warn' : undefined} />,
+    <Tile key="w" label={provider === 'cloudflare' ? 'Workers' : 'Resource'} value={String(m.scripts)} sub={`${(m.workers ?? []).filter(w => w.requests > 0).length} có traffic`} />,
+  ]
+  if (m.databases) tiles.push(<Tile key="db" label="D1" value={String(m.databases.length)} sub={dbBytes ? `tổng ${kb(dbBytes)}` : 'chưa có database'} />)
+  if (m.cost) tiles.push(<Tile key="c" label="Chi phí tháng này" value={money(m.cost.amount, m.cost.currency)} sub={m.cost.period} />)
   return (
     <div className="space-y-3">
       {m.error && <div className="text-xs text-amber-300 rounded-lg bg-amber-500/10 ring-1 ring-amber-500/30 px-2.5 py-1.5">⚠ {m.error}</div>}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Tile label="Requests · 24h" value={num(m.requests)} sub={`${num(m.subrequests)} subrequest`} />
-        <Tile label="Lỗi · 24h" value={num(m.errors)} sub={m.requests ? `${rate.toFixed(2)}% request` : 'không có request'}
-          tone={rate > 5 ? 'bad' : rate > 1 ? 'warn' : undefined} />
-        <Tile label="Workers" value={String(m.scripts)} sub={`${(m.workers ?? []).filter(w => w.requests > 0).length} có traffic`} />
-        <Tile label="D1" value={String((m.databases ?? []).length)} sub={dbBytes ? `tổng ${kb(dbBytes)}` : 'chưa có database'} />
-      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">{tiles}</div>
+      {m.note && <div className="text-[11px] text-gray-500">ⓘ {m.note}</div>}
+      {!!m.cost?.by_service?.length && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-400">
+          <span className="text-gray-500">Chi phí theo dịch vụ:</span>
+          {m.cost.by_service.slice(0, 8).map(c => (
+            <span key={c.name}>{c.name} <span className="font-mono text-gray-200">{money(c.amount, m.cost!.currency)}</span></span>
+          ))}
+        </div>
+      )}
 
-      {!!m.hourly?.length && <HourlyBars points={m.hourly} />}
+      {!!m.hourly?.length && m.requests > 0 && <HourlyBars points={m.hourly} />}
 
       {!!m.workers?.length && (
         <div className="rounded-lg ring-1 ring-gray-800 overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-gray-500">
               <tr className="border-b border-gray-800">
-                <th className="text-left font-normal px-3 py-1.5">Worker</th>
-                <th className="text-right font-normal px-2 py-1.5">Requests</th>
+                <th className="text-left font-normal px-3 py-1.5">{unit}</th>
+                <th className="text-right font-normal px-2 py-1.5">{deploysOnly ? 'Deploy' : 'Requests'}</th>
                 <th className="text-right font-normal px-2 py-1.5">Lỗi</th>
-                <th className="text-right font-normal px-2 py-1.5">CPU p50</th>
-                <th className="text-right font-normal px-3 py-1.5">CPU p99</th>
+                {cpu && <th className="text-right font-normal px-2 py-1.5">CPU p50</th>}
+                {cpu && <th className="text-right font-normal px-3 py-1.5">CPU p99</th>}
               </tr>
             </thead>
             <tbody>
               {m.workers.map(w => {
-                const proj = byWorker.get(w.name)
+                const proj = byWorker.get(w.project || w.name)
                 return (
-                  <tr key={w.name} className="border-t border-gray-800/50">
+                  <tr key={(w.kind ?? '') + w.name} className="border-t border-gray-800/50">
                     <td className="px-3 py-1.5 font-mono text-gray-200">
+                      {w.kind && w.kind !== 'deployments' && <span className="mr-1.5 font-sans text-[10px] px-1 rounded ring-1 ring-gray-700 text-gray-400">{w.kind}</span>}
                       {w.name}
+                      {w.project && w.project !== w.name && !proj && <span className="ml-2 font-sans text-[11px] text-gray-500">{w.project}</span>}
                       {proj && <a href={`/admin/messages/${proj.channel_id}`} className="ml-2 font-sans text-[11px] text-sky-300 hover:underline">#{proj.name}</a>}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono text-gray-300">{num(w.requests)}</td>
                     <td className={`px-2 py-1.5 text-right font-mono ${w.errors ? 'text-red-300' : 'text-gray-500'}`}>{num(w.errors)}</td>
-                    <td className="px-2 py-1.5 text-right font-mono text-gray-400">{ms(w.cpu_p50_us)}</td>
-                    <td className="px-3 py-1.5 text-right font-mono text-gray-400">{ms(w.cpu_p99_us)}</td>
+                    {cpu && <td className="px-2 py-1.5 text-right font-mono text-gray-400">{ms(w.cpu_p50_us)}</td>}
+                    {cpu && <td className="px-3 py-1.5 text-right font-mono text-gray-400">{ms(w.cpu_p99_us)}</td>}
                   </tr>
                 )
               })}
