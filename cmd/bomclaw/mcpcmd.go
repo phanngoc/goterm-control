@@ -96,7 +96,13 @@ func publishTools(db *coord.DB, envs *gateway.EnvManager) []mcpserver.Tool {
 				"spa":      map[string]any{"type": "boolean", "description": "Serve index.html for unknown paths (client-side router)"},
 				"database": map[string]any{"type": "string", "description": "Local SQLite file to host as D1, relative to the project"},
 				"main":     map[string]any{"type": "string", "description": "Optional Worker script (an API in front of the files)"},
-				"replace":  map[string]any{"type": "boolean", "description": "Replace a declaration that already exists"},
+				"provider": map[string]any{"type": "string", "enum": deploy.Available(),
+					"description": "Where PROD lives: cloudflare (default; sites, Workers, D1), fly (Docker apps), aws (static on S3+CloudFront, or a Dockerfile on ECS Fargate), vercel (built folder, or a framework Vercel builds)"},
+				"dockerfile": map[string]any{"type": "string", "description": "fly / aws: the project's Dockerfile, for an app that runs a server"},
+				"port":       map[string]any{"type": "integer", "description": "fly / aws: the port the image listens on (default 8080)"},
+				"region":     map[string]any{"type": "string", "description": "fly region (sin) or AWS region (ap-southeast-1)"},
+				"framework":  map[string]any{"type": "string", "description": "vercel: Vercel builds the source (nextjs, vite, astro…) instead of uploading static"},
+				"replace":    map[string]any{"type": "boolean", "description": "Replace a declaration that already exists"},
 			}},
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				c, err := mcpProject(db, raw)
@@ -105,6 +111,8 @@ func publishTools(db *coord.DB, envs *gateway.EnvManager) []mcpserver.Tool {
 				}
 				var a struct {
 					Static, Build, Domain, Name, Database, Main string
+					Provider, Dockerfile, Region, Framework     string
+					Port                                        int
 					SPA, Replace                                bool
 				}
 				_ = json.Unmarshal(raw, &a)
@@ -121,9 +129,17 @@ func publishTools(db *coord.DB, envs *gateway.EnvManager) []mcpserver.Tool {
 						a.Domain = st.Prod.Domains[0]
 					}
 				}
-				s := &deploy.Spec{Target: deploy.DefaultTarget, Static: a.Static, Build: a.Build, Domain: a.Domain,
-					Name: a.Name, SPA: a.SPA, Main: a.Main}
-				if s.Static == "" && s.Main == "" {
+				target := a.Provider
+				if target == "" {
+					target = st.Prod.Provider
+				}
+				if target == "" {
+					target = deploy.DefaultTarget
+				}
+				s := &deploy.Spec{Target: target, Static: a.Static, Build: a.Build, Domain: a.Domain,
+					Name: a.Name, SPA: a.SPA, Main: a.Main, Dockerfile: a.Dockerfile, Port: a.Port,
+					Region: a.Region, Framework: a.Framework}
+				if s.Static == "" && s.Main == "" && s.Dockerfile == "" && s.Framework == "" {
 					if s.Static = guessStatic(c.Workspace); s.Static == "" {
 						return "", fmt.Errorf("no built folder found (dist/, build/, out/, public/ with an index.html) — build first, or pass static")
 					}

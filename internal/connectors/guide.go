@@ -17,7 +17,7 @@ func hash(s string) string {
 const Rules = `How a project gets its connectors:
 - The values are environment variables, by the names below. Never write a key into a file of the project, a commit, or a chat answer.
 - Preview: the dev server is started with them (restart Preview after a connector changes). Public values also as VITE_<NAME> and NEXT_PUBLIC_<NAME> for the frontend.
-- Publish: Cloudflare — secrets of the Worker (env.NAME in the "main" script); public values also at build time. Fly.io — app secrets (process.env.NAME).
+- Publish: Cloudflare — secrets of the Worker (env.NAME in the "main" script); public values also at build time. Fly.io — app secrets (process.env.NAME). AWS ECS — the service's environment (process.env.NAME); an AWS static site gets public values at build time only. Vercel — project environment variables (process.env.NAME), at build and at runtime.
 - A static site has no server: only PUBLIC values can be used there. Anything secret needs a server route — add a Worker script (deploy "main", e.g. worker.js answering /api/*) or a Node server — and the browser calls that route.
 - To run code locally with the values (a test, a script): bomclaw connectors exec <project> -- <command>. It never prints them.`
 

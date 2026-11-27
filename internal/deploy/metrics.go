@@ -28,8 +28,22 @@ type Metrics struct {
 	Subrequests int64 `json:"subrequests"`
 	// Hourly is requests and errors per hour, oldest first.
 	Hourly []MetricPoint `json:"hourly,omitempty"`
-	// Workers is per-script usage, busiest first.
+	// Unit names what Workers lists on this provider ("Worker",
+	// "Distribution", "Project"); empty means Worker.
+	Unit string `json:"unit,omitempty"`
+	// Workers is per-resource usage, busiest first: Workers on Cloudflare,
+	// CloudFront distributions and ECS apps on AWS, projects on
+	// Vercel.
 	Workers []WorkerMetric `json:"workers,omitempty"`
+	// Deploys and DeployErrors count deployments in the window, where the
+	// provider reports them (Vercel).
+	Deploys      int `json:"deploys,omitempty"`
+	DeployErrors int `json:"deploy_errors,omitempty"`
+	// Cost is spend so far this month, where the provider reports it (AWS).
+	Cost *Cost `json:"cost,omitempty"`
+	// Note says what this provider does not report, so a missing number is
+	// not read as zero.
+	Note string `json:"note,omitempty"`
 	// Databases are the account's D1 databases.
 	Databases []DBMetric `json:"databases,omitempty"`
 	// Scripts counts the account's Workers, used or not.
@@ -37,6 +51,20 @@ type Metrics struct {
 	// Error is why part of this could not be read, in words the owner can
 	// act on. What could be read is still filled in.
 	Error string `json:"error,omitempty"`
+}
+
+// Cost is month-to-date spend.
+type Cost struct {
+	Amount    float64       `json:"amount"`
+	Currency  string        `json:"currency"`
+	Period    string        `json:"period"` // "2026-11-01 → 2026-11-27"
+	ByService []CostService `json:"by_service,omitempty"`
+}
+
+// CostService is one service's share of Cost.
+type CostService struct {
+	Name   string  `json:"name"`
+	Amount float64 `json:"amount"`
 }
 
 // MetricPoint is one hour.
@@ -48,7 +76,13 @@ type MetricPoint struct {
 
 // WorkerMetric is one Worker's usage.
 type WorkerMetric struct {
-	Name        string  `json:"name"`
+	Name string `json:"name"`
+	// Kind is what the resource is when a provider has several ("CloudFront",
+	// "ECS").
+	Kind string `json:"kind,omitempty"`
+	// Project is the Worker / bucket / service name a project room deploys
+	// as, when it differs from Name (a CloudFront id).
+	Project     string  `json:"project,omitempty"`
 	Requests    int64   `json:"requests"`
 	Errors      int64   `json:"errors"`
 	Subrequests int64   `json:"subrequests"`

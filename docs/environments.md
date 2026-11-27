@@ -12,7 +12,7 @@ Every project room has two environments:
 
 | | DEV | PROD |
 |---|---|---|
-| where | this machine | a hosting provider — **Cloudflare** or **Fly.io** |
+| where | this machine | a hosting provider — **Cloudflare**, **Fly.io**, **AWS** or **Vercel** |
 | site | the dashboard's **Preview** (`/preview/<channel>/`, behind the login) | Cloudflare: a Worker serving the built files on `https://<name>.<account>.workers.dev`. Fly.io: Machines on `https://<name>.fly.dev`, serving the built files through nginx or running the project's own Dockerfile. Both can add a custom domain (`phim.bomclaw.org`). |
 | data | a local SQLite file | Cloudflare **D1** (hosted SQLite); Fly Managed Postgres and Supabase planned |
 | changes | live as you edit | only when someone **deploys** |
@@ -62,7 +62,7 @@ The same shape here:
 
 | field | meaning |
 |---|---|
-| `target` | the provider: `cloudflare` (default) or `fly` |
+| `target` | the provider: `cloudflare` (default), `fly`, `aws` or `vercel` |
 | `name` | the Worker name, which is also its workers.dev subdomain. Default: the channel id without `ch_`. |
 | `build` | the command run in the project before uploading |
 | `cwd` | the folder `build` runs in and `static` is relative to |
@@ -70,9 +70,10 @@ The same shape here:
 | `spa` | serve `index.html` for unknown paths (client-side routers) |
 | `main` | an optional Worker script in front of the files, e.g. an API. Only a script can read the database (`env.DB`). |
 | `domain` | a custom hostname. On Cloudflare it must be on a zone in the account. On Fly.io a certificate is added (`flyctl certs add`), and the hostname needs a CNAME to `<name>.fly.dev`. Optional. |
-| `dockerfile` | Fly.io only: the project's own image, for an app that runs a server |
-| `port` | Fly.io only: the port that image listens on (default 8080) |
-| `region` | Fly.io only: where it runs (default `$FLY_REGION`, else `sin`) |
+| `dockerfile` | Fly.io and AWS (ECS Express on Fargate): the project's own image, for an app that runs a server |
+| `port` | Fly.io and AWS: the port that image listens on (default 8080) |
+| `region` | Fly.io: where it runs (default `$FLY_REGION`, else `sin`). AWS: the region (default `$AWS_REGION`, else `ap-southeast-1`) |
+| `framework` | Vercel only: Vercel builds the source itself (`nextjs`, `vite`, `astro`…) instead of uploading `static` |
 | `database` | `engine: "sqlite"` and `file`: the local file that becomes a D1 database (`name` defaults to `<name>-db`, `binding` to `DB`) |
 
 `bomclaw env init <channel> --static dist --build "npm run build" --domain x.bomclaw.org --database data/app.db`
@@ -137,12 +138,73 @@ Postgres as tools and suits one-off infrastructure work. This provider is what
 the dashboard and `bomclaw env` use: one declared app, deployed the same way
 every time.
 
+## On AWS
+
+`"target": "aws"` has two shapes:
+
+- **`static`** — the built folder is synced to a private S3 bucket
+  (`bomclaw-<name>-<account id>`, only changed files are uploaded, deleted
+  files removed) behind a CloudFront distribution with Origin Access Control,
+  so the bucket is never public. HTML is served `no-cache`, everything else
+  for an hour; each publish invalidates `/*`. `spa` maps 403/404 to
+  `index.html`. Answers on `https://<id>.cloudfront.net`; the first rollout of
+  a new distribution takes a few minutes.
+- **`dockerfile`** — the image is built here for this machine's architecture
+  (`linux/arm64` on Apple Silicon, `linux/amd64` otherwise), pushed to ECR
+  (`bomclaw/<name>`), and run on Fargate by an **ECS Express Mode** service in
+  the cluster `bomclaw` (0.25 vCPU / 512 MB, 1–2 tasks scaled on CPU) with the
+  connectors' values as its environment. Express Mode puts the service behind
+  an Application Load Balancer it manages (shared by up to 25 Express
+  services, roughly $16+/month on its own) in the region's default VPC, and
+  answers on `https://<id>.ecs.<region>.on.aws`. The health check is `/`,
+  which must answer 200. The roles `bomclaw-ecs-task-execution` and
+  `bomclaw-ecs-infrastructure` are created the first time. Docker must be
+  installed. (App Runner was the first choice; AWS no longer lets new
+  accounts create App Runner services.)
+
+With `domain`, a static site gets an ACM certificate in us-east-1 and the
+distribution an alias; an app gets a CloudFront distribution in front of its
+endpoint (no caching, every method passed through) with the same certificate
+and alias. The
+records each asks for (certificate validation, the CNAME) are written through
+Cloudflare DNS when the domain is on a Cloudflare zone, otherwise the deploy
+log lists them. Version: the commit, as bucket tags or the image tag.
+
+Credentials: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` on the
+Kết nối page — or none, and the machine's AWS CLI profile (`~/.aws`,
+`AWS_PROFILE`) is used. Use an IAM user with S3, CloudFront, ACM, ECR, App
+Runner, IAM (role creation), CloudWatch read and Cost Explorer read — not the
+root account's keys. Admin → Infra shows requests and 5xx from CloudWatch and
+the month's cost by service (Cost Explorer, read at most every six hours: each
+call is billed $0.01).
+
+## On Vercel
+
+`"target": "vercel"`, over the REST API (no CLI):
+
+- **`static`** — the folder built here is uploaded as is (an SPA gets a
+  generated `vercel.json` rewrite).
+- **`framework`** — the source is uploaded and Vercel builds it, which is what
+  Next.js server routes need. `node_modules`, `.git`, build output and every
+  `.env*` file stay behind.
+
+The connectors' values become the project's environment variables (encrypted,
+production and preview) before the build. The deployment is followed until
+ready; a failed build ends the publish with the tail of its log. With
+`domain`, the domain is added to the project and its CNAME (`cname.vercel-dns.com`,
+or `A 76.76.21.21` for an apex) and verification record are written through
+Cloudflare DNS when possible. Version: the commit, in the deployment's `meta`.
+
+Credentials: `VERCEL_TOKEN`, and `VERCEL_TEAM_ID` to deploy into a team.
+Admin → Infra shows deployments and failed ones per project; Vercel's request
+counts are not in its public API.
+
 ## Connections: where the keys live
 
 Credentials for the providers are entered once and used by every deploy:
 
 - **Dashboard → Admin → Kết nối.** There is one card per service
-  (Cloudflare, Fly.io, and Supabase stored for later). Each card shows its
+  (Cloudflare, Fly.io, AWS, Vercel, and Supabase stored for later). Each card shows its
   fields, whether each value is stored here or comes from `.env`, who set it
   and when, and a **Lưu & kiểm tra** button that asks the service whether the
   key works (e.g. "token active · account … · workers.dev subdomain …").
@@ -194,7 +256,9 @@ PROD does not use it.
 name. The dashboard panel, `bomclaw env` and the agents' skill only talk to
 the interface.
 
-Built: **Cloudflare** (`cloudflare`) and **Fly.io** (`fly`).
+Built: **Cloudflare** (`cloudflare`), **Fly.io** (`fly`), **AWS** (`aws`) and
+**Vercel** (`vercel`). Only Cloudflare hosts a database (D1); the others refuse
+`database` with that answer.
 
 Planned:
 
@@ -202,8 +266,8 @@ Planned:
   and refused today), for projects that outgrow SQLite or need auth and
   storage with it.
 - **Fly Managed Postgres** as the database for `fly` apps.
-- Further hosts register the same way. `vercel` is listed as planned, so
-  trying it gives that answer.
+- Further hosts register the same way; one named in `planned` answers
+  "planned" instead of "unknown target".
 
 ## Security
 

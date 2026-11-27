@@ -41,7 +41,7 @@ const Manifest = "bomclaw.json"
 // Spec is bomclaw.json's "deploy" object.
 type Spec struct {
 	// Target is the provider PROD lives on (see Provider): "cloudflare"
-	// today, "fly" planned.
+	// (the default), "fly", "aws" or "vercel".
 	Target string `json:"target"`
 	// Name is the Worker's name, which is also its workers.dev subdomain.
 	// Default: the channel's id without "ch_", made DNS-safe.
@@ -60,9 +60,14 @@ type Spec struct {
 	// Dockerfile is the project's own image, for an app that runs a server
 	// process (Fly.io). Relative to Cwd.
 	Dockerfile string `json:"dockerfile,omitempty"`
-	// Port is the port that image listens on (Fly.io). Default 8080.
+	// Framework has Vercel build the project's source itself ("nextjs",
+	// "vite", "astro"…) instead of uploading a folder built here. Vercel only.
+	Framework string `json:"framework,omitempty"`
+	// Port is the port that image listens on (Fly.io, AWS ECS).
+	// Default 8080.
 	Port int `json:"port,omitempty"`
-	// Region is where it runs (Fly.io), e.g. "sin". Default $FLY_REGION or sin.
+	// Region is where it runs: a Fly.io region ("sin", default $FLY_REGION)
+	// or an AWS region ("ap-southeast-1", default $AWS_REGION).
 	Region string `json:"region,omitempty"`
 	// Domain is a hostname on one of your Cloudflare zones. Optional: every
 	// Worker also answers on <name>.<account>.workers.dev.
@@ -131,8 +136,8 @@ func Parse(raw []byte) (*Spec, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", Manifest, err)
 	}
-	if s.Static == "" && s.Main == "" && s.Dockerfile == "" {
-		return nil, fmt.Errorf("%s: deploy needs \"static\" (the built folder), \"main\" (a Cloudflare Worker script) or \"dockerfile\" (an app with a server, on Fly.io)", Manifest)
+	if s.Static == "" && s.Main == "" && s.Dockerfile == "" && s.Framework == "" {
+		return nil, fmt.Errorf("%s: deploy needs \"static\" (the built folder), \"main\" (a Cloudflare Worker script), \"dockerfile\" (an app with a server, on Fly.io or AWS) or \"framework\" (source Vercel builds)", Manifest)
 	}
 	if s.Name != "" && DefaultName(s.Name) != s.Name {
 		return nil, fmt.Errorf("%s: deploy.name %q must be lowercase letters, digits and dashes", Manifest, s.Name)

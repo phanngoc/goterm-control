@@ -246,7 +246,7 @@ export default function EnvPanel({ call, channelID, channelName, onClose }: {
                   {p.deployed_at && <Row label="Publish">{ago(p.deployed_at)}{p.discovered_from ? <span className="text-gray-500"> · ngoài dashboard</span> : null}</Row>}
                   {p.url && <Row label="URL"><a className="text-sky-300 hover:underline break-all font-mono" href={p.url} target="_blank" rel="noreferrer">{host(p.url)}</a></Row>}
                   {p.workers_dev && p.workers_dev !== p.url && (
-                    <Row label={p.provider === 'fly' ? 'fly.dev' : 'workers.dev'}>
+                    <Row label={({ fly: 'fly.dev', vercel: 'vercel.app', aws: 'AWS' } as Record<string, string>)[p.provider ?? ''] ?? 'workers.dev'}>
                       <a className="text-gray-400 hover:underline break-all font-mono" href={p.workers_dev} target="_blank" rel="noreferrer">{host(p.workers_dev)}</a>
                     </Row>
                   )}

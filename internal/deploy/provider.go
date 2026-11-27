@@ -14,9 +14,10 @@ import (
 // an implementation, not a feature.
 //
 // Cloudflare is for sites (a Worker serving built files, D1 for data); Fly.io
-// is for apps that run a server process (Machines from a Docker image), and
-// for a static site where the account is on Fly. Managed Postgres on Fly and
-// Supabase are the database engines to come.
+// is for apps that run a server process (Machines from a Docker image); AWS
+// takes both (S3 + CloudFront, or ECS on Fargate from a Dockerfile); Vercel takes
+// a built folder or a framework's source it builds itself. Only Cloudflare
+// hosts a database (D1); Managed Postgres and Supabase are the engines to come.
 type Provider interface {
 	// Name is the deploy.target value that selects it.
 	Name() string
@@ -42,10 +43,7 @@ var (
 	registry = map[string]Factory{}
 	// planned are targets that are known and not built yet. Naming them gives
 	// an agent that tries one a useful answer instead of "unknown target".
-	planned = map[string]string{
-		"vercel": "Vercel",
-		"aws":    "AWS",
-	}
+	planned = map[string]string{}
 )
 
 // Register adds a provider. Called from each implementation's init.
