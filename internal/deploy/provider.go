@@ -44,6 +44,7 @@ var (
 	// an agent that tries one a useful answer instead of "unknown target".
 	planned = map[string]string{
 		"vercel": "Vercel",
+		"aws":    "AWS",
 	}
 )
 

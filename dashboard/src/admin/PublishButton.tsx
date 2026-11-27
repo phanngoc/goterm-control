@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ago } from './format'
-import { CloudIcon, Dot, host, planLabel, prodState, toneClass, useEnvStatus } from './InfraBadge'
+import { CloudIcon, Dot, host, prodState, prodVersion, toneClass, useEnvStatus } from './InfraBadge'
 
 type Call = (method: string, params?: any) => Promise<any>
 
@@ -32,7 +32,8 @@ export default function PublishButton({ call, channelID, onDetails, compact }: {
   const running = !!st?.deploy?.running
   const p = st?.prod
   const prod = prodState(st)
-  const plan = p?.connected ? planLabel(st) : ''
+  const pv = prodVersion(st)
+  const behind = (st?.dev_ahead ?? 0) > 0
   const live = !!p?.deployed
 
   // Close on a click outside or Escape.
@@ -140,8 +141,7 @@ export default function PublishButton({ call, channelID, onDetails, compact }: {
               <div className="flex items-center gap-2 text-xs">
                 <CloudIcon className="h-4 w-4 text-gray-400" />
                 <span className="text-gray-300">{p?.title || p?.provider || 'Cloudflare'}</span>
-                {plan && <span className="px-1.5 rounded-full text-[10px] ring-1 ring-gray-700 text-gray-300">{plan}</span>}
-                {!!p?.services?.length && <span className="text-gray-500 truncate">{p.services.join(' · ')}</span>}
+                {pv && <span className="ml-auto font-mono text-[11px] px-1.5 rounded ring-1 ring-gray-700 text-gray-300" title="phiên bản đang chạy trên PROD">{pv.text}</span>}
               </div>
               {p?.url ? (
                 <div className="flex items-center gap-2">
@@ -156,6 +156,7 @@ export default function PublishButton({ call, channelID, onDetails, compact }: {
                 <div className="text-xs text-gray-500">{p?.connected ? 'Chưa có địa chỉ public — chưa publish lần nào.' : '—'}</div>
               )}
               {p?.deployed_at && <div className="text-[11px] text-gray-500">Publish gần nhất {ago(p.deployed_at)}{p.discovered_from ? ' · deploy ngoài dashboard' : ''}</div>}
+              {behind && <div className="text-[11px] text-amber-300">DEV mới hơn PROD {st?.dev_ahead} commit — chưa publish</div>}
               {p?.want_domain && !(p.domains ?? []).includes(p.want_domain) && (
                 <div className="text-[11px] text-amber-300">{p.want_domain} sẽ được gắn ở lần publish tới</div>
               )}
@@ -213,7 +214,7 @@ export default function PublishButton({ call, channelID, onDetails, compact }: {
           <div className="flex items-center gap-3 px-4 h-10 border-t border-gray-800 text-[11px] text-gray-500">
             <span>Agent cũng publish được bằng tool <span className="font-mono text-gray-400">publish</span></span>
             {onDetails && (
-              <button onClick={() => { setOpen(false); onDetails() }} className="ml-auto text-sky-300 cursor-pointer hover:underline">Hạ tầng ▸</button>
+              <button onClick={() => { setOpen(false); onDetails() }} className="ml-auto text-sky-300 cursor-pointer hover:underline">Môi trường ▸</button>
             )}
           </div>
         </div>

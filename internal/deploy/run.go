@@ -209,6 +209,11 @@ func (d *Cloudflare) Deploy(ctx context.Context, r Resolved, opt Options, log io
 
 	var out bytes.Buffer
 	args := append(append([]string{}, Wrangler[1:]...), "deploy", "--config", cfgPath)
+	// The commit goes out with the version, so PROD can later say which one
+	// it runs (version.go).
+	if msg := deployMessage(Git(ctx, r.ProjectDir)); msg != "" {
+		args = append(args, "--message", msg)
+	}
 	step("wrangler deploy %s", r.Name)
 	if err := run(ctx, r.ProjectDir, env, io.MultiWriter(log, &out), Wrangler[0], args...); err != nil {
 		return nil, fmt.Errorf("wrangler deploy failed: %w", err)

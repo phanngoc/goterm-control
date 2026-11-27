@@ -142,6 +142,10 @@ type flyMachine struct {
 	State     string `json:"state"`
 	Region    string `json:"region"`
 	UpdatedAt string `json:"updated_at"`
+	ImageRef  struct {
+		Repository string `json:"repository"`
+		Tag        string `json:"tag"`
+	} `json:"image_ref"`
 }
 
 // Status asks Fly what is live: the app, its machines, the domain's certificate.
@@ -175,6 +179,9 @@ func (f *Fly) Status(ctx context.Context, r Resolved) ProdStatus {
 	for _, m := range machines {
 		if t, err := time.Parse(time.RFC3339, m.UpdatedAt); err == nil && t.After(newest) {
 			newest = t
+			if m.ImageRef.Tag != "" {
+				st.Version = &ProdVersion{ID: m.ImageRef.Tag, Commit: commitIn(m.ImageRef.Tag)}
+			}
 		}
 	}
 	if !newest.IsZero() {
@@ -338,8 +345,13 @@ func (f *Fly) Deploy(ctx context.Context, r Resolved, opt Options, log io.Writer
 		}
 	}
 	step("flyctl deploy %s (remote builder)", r.Name)
-	if err := run(ctx, r.WorkDir, env, log, bin, "deploy", r.WorkDir,
-		"--config", cfgPath, "--dockerfile", dockerfile, "--remote-only", "--yes", "--ha=false"); err != nil {
+	flyArgs := []string{"deploy", r.WorkDir, "--config", cfgPath, "--dockerfile", dockerfile, "--remote-only", "--yes", "--ha=false"}
+	// The image is labelled with the commit, so PROD can later say which one
+	// it runs (version.go).
+	if l := imageLabel(Git(ctx, r.ProjectDir)); l != "" {
+		flyArgs = append(flyArgs, "--image-label", l)
+	}
+	if err := run(ctx, r.WorkDir, env, log, bin, flyArgs...); err != nil {
 		return nil, fmt.Errorf("flyctl deploy failed: %w", err)
 	}
 	res.URL = "https://" + r.Name + ".fly.dev"

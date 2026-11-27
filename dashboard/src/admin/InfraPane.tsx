@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CloudPane from './CloudPane'
 
 type Call = (method: string, params?: any) => Promise<any>
 
-// Admin → Infra: what runs on this machine and the few things to do about it.
+// Admin → Infra: the infrastructure, in two tabs. Cloud is the providers every
+// project's PROD runs on — accounts, plans, metrics (CloudPane). This machine
+// is what runs here and the few things to do about it (MachinePane, below).
 //
 // One screen for what used to take four tools: pm2 (project services), launchd
 // (the agents, the tunnel, scheduled jobs), and lsof for whatever nobody
@@ -172,7 +175,7 @@ function LogsModal({ call, kind, target, onClose }: { call: Call; kind: Kind; ta
   )
 }
 
-export default function InfraPane({ call }: { call: Call }) {
+function MachinePane({ call }: { call: Call }) {
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -250,7 +253,6 @@ export default function InfraPane({ call }: { call: Call }) {
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
       <div className="flex items-baseline gap-3 flex-wrap">
-        <h2 className="text-sm text-gray-200 font-medium">Infra</h2>
         <span className="text-xs text-gray-500">mọi thứ đang chạy trên máy này — pm2 theo dự án, launchd, cổng đang mở</span>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-gray-500">
           <label className="flex items-center gap-1"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} /> tự làm mới 5s</label>
@@ -423,6 +425,41 @@ export default function InfraPane({ call }: { call: Call }) {
 
       {snap.errors?.map(e => <p key={e} className="text-[11px] text-amber-300/80">⚠ {e}</p>)}
       {logs && <LogsModal call={call} kind={logs.kind} target={logs.target} onClose={() => setLogs(null)} />}
+    </div>
+  )
+}
+
+type Tab = 'cloud' | 'machine'
+
+export default function InfraPane({ call }: { call: Call }) {
+  const [tab, setTab] = useState<Tab>(() => (window.location.hash === '#machine' ? 'machine' : 'cloud'))
+  const pick = (t: Tab) => {
+    setTab(t)
+    try { history.replaceState(null, '', t === 'machine' ? '#machine' : window.location.pathname + window.location.search) } catch { /* no history */ }
+  }
+  const tabs: { id: Tab; label: string; hint: string }[] = [
+    { id: 'cloud', label: 'Cloud', hint: 'Cloudflare, Fly.io, AWS…' },
+    { id: 'machine', label: 'Máy này', hint: 'pm2, launchd, cổng' },
+  ]
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex items-end gap-4 px-4 pt-3 border-b border-gray-800 shrink-0">
+        <h2 className="text-sm text-gray-200 font-medium pb-2">Infra</h2>
+        <div role="tablist" className="flex gap-1">
+          {tabs.map(t => (
+            <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => pick(t.id)} title={t.hint}
+              className={`px-3 pb-2 pt-1 text-xs border-b-2 -mb-px cursor-pointer transition-colors ${tab === t.id
+                ? 'border-sky-400 text-gray-100' : 'border-transparent text-gray-500 hover:text-gray-300'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 min-h-0">
+        {tab === 'cloud'
+          ? <div className="h-full overflow-y-auto p-4"><CloudPane call={call} /></div>
+          : <MachinePane call={call} />}
+      </div>
     </div>
   )
 }

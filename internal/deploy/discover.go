@@ -118,6 +118,11 @@ func (d *Cloudflare) Discover(ctx context.Context, cands []Candidate) (*ProdStat
 			st.Domains = hosts
 			st.URL = "https://" + hosts[0]
 		}
+		// Which version is live, even when it went out by hand.
+		if dep, err := c.LatestDeployment(ctx, s.ID); err == nil && dep != nil {
+			st.Version = dep.Version()
+			st.DeployedAt = dep.CreatedOn.Format(time.RFC3339)
+		}
 		st.Services = []string{"Workers"}
 		if len(st.Domains) > 0 {
 			st.Services = append(st.Services, "Custom Domain")
