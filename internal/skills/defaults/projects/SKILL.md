@@ -120,8 +120,10 @@ such servers were found listening, one of them since August.
   LANG and what you pass with `--env`. Bind to `$HOST`, not `0.0.0.0`. A secret
   it needs goes in the project's own `.env`, read by the app — not in `--env`,
   which is visible in `ps`.
-- If the sandbox breaks the program (it must write outside its folder), fix
-  where it writes first; `--no-sandbox` is the last resort, and say you used it.
+- If the sandbox breaks the program, fix where it writes first. If it truly
+  needs one denied path (a token file, its own credential folder), grant just
+  that: `--allow-read ~/.bomclaw/.env`, `--allow-write ~/.film-studio`.
+  `--no-sandbox` is the last resort, and say you used it.
 - A stray server already listening (`bomclaw infra ls` marks it `stray`):
   `bomclaw infra adopt :<port> --project <project>` stops it and runs the same
   command, in the same folder, under pm2 in the sandbox. Never start a second

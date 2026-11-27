@@ -24,7 +24,8 @@ const infraUsage = `Usage: bomclaw infra <command> [flags]
   kill <pid>                  SIGTERM a stray server: listening, and managed by nothing
   logs <name> [--lines N]     the tail of its stdout/stderr logs
 
-  run --name N [--project P] [--cwd DIR] [--env K=V]... [--max-memory 1G] [--no-sandbox] -- <command> [args...]
+  run --name N [--project P] [--cwd DIR] [--env K=V]... [--max-memory 1G]
+      [--allow-read PATH]... [--allow-write PATH]... [--no-sandbox] -- <command> [args...]
                               run a project's server under pm2, sandboxed; re-running replaces it
   adopt <pid|:port> [--name N] [--project P]
                               move a stray server into pm2 as it was started (same command,
@@ -51,8 +52,10 @@ func runInfra(args []string) {
 	cwd := fs.String("cwd", "", "run: the project folder (default: current folder)")
 	maxMem := fs.String("max-memory", "", "run: restart above this memory (default 1G)")
 	noSandbox := fs.Bool("no-sandbox", false, "run: do not confine it")
-	var envs multiFlag
+	var envs, allowRead, allowWrite multiFlag
 	fs.Var(&envs, "env", "run: K=V, repeatable")
+	fs.Var(&allowRead, "allow-read", "run: a path the sandbox may read though it is otherwise denied, repeatable")
+	fs.Var(&allowWrite, "allow-write", "run: a path the sandbox may read and write though otherwise denied, repeatable")
 	fs.Usage = func() { fmt.Fprintln(os.Stderr, infraUsage) }
 
 	sub, rest := "ls", args
@@ -130,7 +133,8 @@ func runInfra(args []string) {
 			env[k] = v
 		}
 		r, err := in.RunApp(ctx, infra.App{Name: *name, Project: *project, Cwd: dir, Command: command,
-			Env: env, MaxMemory: *maxMem, NoSandbox: *noSandbox})
+			Env: env, MaxMemory: *maxMem, NoSandbox: *noSandbox,
+			AllowRead: absAll(allowRead), AllowWrite: absAll(allowWrite)})
 		infraExit(err)
 		fmt.Println(r.Ran)
 		if r.Output != "" {
@@ -204,6 +208,19 @@ func strayPID(ctx context.Context, in *infra.Infra, s string) (int, error) {
 		return 0, fmt.Errorf(":%d is %s's, not a stray", n, orNone(byPort[0].ManagedBy, byPort[0].Command))
 	}
 	return 0, fmt.Errorf("nothing listens as %s", s)
+}
+
+func absAll(ps []string) []string {
+	home, _ := os.UserHomeDir()
+	var out []string
+	for _, p := range ps {
+		if strings.HasPrefix(p, "~/") {
+			p = filepath.Join(home, p[2:])
+		}
+		a, _ := filepath.Abs(p)
+		out = append(out, a)
+	}
+	return out
 }
 
 type multiFlag []string
