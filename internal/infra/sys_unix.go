@@ -13,3 +13,8 @@ func diskUsage(path string) (total, free int64) {
 }
 
 func killTERM(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
+
+func killKILL(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
+
+// alive: the pid exists (signal 0 checks without sending anything).
+func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }

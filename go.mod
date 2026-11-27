@@ -9,11 +9,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.22
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.4
 	github.com/aws/aws-sdk-go-v2/service/acm v1.52.1
-	github.com/aws/aws-sdk-go-v2/service/apprunner v1.48.13
 	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.78.1
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.76.1
 	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.75.1
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.69.1
+	github.com/aws/aws-sdk-go-v2/service/ecs v1.106.1
+	github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.65.1
 	github.com/aws/aws-sdk-go-v2/service/iam v1.68.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.1
 	github.com/aws/aws-sdk-go-v2/service/sts v1.53.1
@@ -25,6 +26,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/yuin/goldmark v1.8.7
 	golang.org/x/crypto v0.53.0
+	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.48.2
@@ -36,8 +38,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.13 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.13 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.13 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ecs v1.106.1 // indirect
-	github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.65.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.26 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.14 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.13 // indirect
@@ -62,7 +62,6 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

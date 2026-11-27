@@ -39,6 +39,7 @@ interface PM2App {
   ports?: number[]
   project?: string
   crashloop?: boolean
+  sandboxed?: boolean
 }
 
 interface Service {
@@ -56,6 +57,7 @@ interface Service {
   ports?: number[]
   plist: string
   project?: string
+  missing?: string
 }
 
 interface Listener {
@@ -67,6 +69,8 @@ interface Listener {
   managed_by?: string
   system?: boolean
   project?: string
+  exposed?: boolean
+  tool?: boolean
 }
 
 interface Snapshot {
@@ -138,6 +142,7 @@ function Ports({ ports }: { ports?: number[] }) {
 }
 
 function serviceState(s: Service): { tone: 'ok' | 'warn' | 'bad' | 'dim'; text: string } {
+  if (s.missing) return { tone: 'bad', text: 'hỏng: chương trình không còn' }
   if (!s.loaded) return { tone: 'dim', text: 'chưa nạp' }
   if (s.pid) return { tone: 'ok', text: 'đang chạy' }
   if (s.scheduled) return { tone: s.last_exit ? 'warn' : 'dim', text: s.last_exit ? `theo lịch · lần cuối lỗi ${s.last_exit}` : 'theo lịch' }
@@ -201,15 +206,15 @@ function MachinePane({ call }: { call: Call }) {
     return () => clearInterval(id)
   }, [auto, load])
 
-  const act = useCallback(async (kind: Kind, target: string, verb: string, confirmText?: string) => {
+  const act = useCallback(async (kind: Kind, target: string, verb: string, confirmText?: string, extra?: Record<string, string>) => {
     if (confirmText && !confirm(confirmText)) return
     setBusy(`${kind}:${target}`)
     setNote(null)
     try {
-      const r = await call('infra.action', { kind, target, verb })
+      const r = await call('infra.action', { kind, target, verb, ...extra })
       setNote(r.pending ? `${r.ran} — đang chạy; trang sẽ mất kết nối vài giây rồi tự nối lại` : `✓ ${r.ran}`)
       setErr(null)
-      setTimeout(load, kind === 'launchd' ? 2000 : 600)
+      setTimeout(load, kind === 'launchd' || verb === 'adopt' ? 2000 : 600)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     } finally {
@@ -235,9 +240,10 @@ function MachinePane({ call }: { call: Call }) {
       else if (a.status !== 'online' && a.status !== 'stopped') out.push({ tone: 'warn', text: `pm2 ${a.name}: ${a.status}` })
     }
     for (const s of snap.services) {
-      if (s.loaded && !s.pid && !s.scheduled && s.keep_alive) out.push({ tone: 'bad', text: `${s.label}: KeepAlive nhưng không chạy (exit ${s.last_exit})` })
+      if (s.missing && (s.loaded || s.keep_alive)) out.push({ tone: 'bad', text: `${s.label}: ${s.missing.replace(/^program/, 'chương trình').replace(/^folder/, 'thư mục')} không còn — bấm "gỡ"` })
+      else if (s.loaded && !s.pid && !s.scheduled && s.keep_alive) out.push({ tone: 'bad', text: `${s.label}: KeepAlive nhưng không chạy (exit ${s.last_exit})` })
     }
-    const strays = snap.listeners.filter(l => !l.managed_by && !l.system)
+    const strays = snap.listeners.filter(l => !l.managed_by && !l.system && !l.tool)
     if (strays.length) out.push({ tone: 'warn', text: `${strays.length} server không ai quản lý: ${strays.map(l => `:${l.port}${l.project ? ` (${l.project})` : ''}`).join(', ')}` })
     if (snap.pm2_error) out.push({ tone: 'bad', text: `pm2: ${snap.pm2_error}` })
     return out
@@ -306,7 +312,9 @@ function MachinePane({ call }: { call: Call }) {
         <header className="flex items-baseline gap-2 px-3 py-2 border-b border-gray-800">
           <span className="text-sm text-gray-100">Dịch vụ dự án (pm2)</span>
           <span className="text-[11px] text-gray-500 font-mono truncate">{snap.pm2_bin}</span>
-          <span className="ml-auto text-[11px] text-gray-500">mỗi dự án một file <code>~/.goterm-shared/pm2/&lt;dự án&gt;.config.cjs</code></span>
+          <span className="ml-auto text-[11px] text-gray-500" title="bomclaw infra run / adopt ghi ~/.goterm-shared/pm2/managed/<dự án>.json: chạy trong sandbox — chỉ ghi được trong thư mục dự án, không đọc được ~/.ssh, ~/.aws, kho bí mật bomclaw; môi trường sạch, HOST=127.0.0.1">
+            ⛨ = sandbox · <code>bomclaw infra run|adopt</code>
+          </span>
         </header>
         {groups.length === 0 && <p className="px-3 py-3 text-xs text-gray-600">chưa có app pm2 nào</p>}
         {groups.map(([project, apps]) => (
@@ -319,7 +327,12 @@ function MachinePane({ call }: { call: Call }) {
                   const online = a.status === 'online'
                   return (
                     <tr key={a.name} className="border-t border-gray-800/40 first:border-0">
-                      <td className="py-1 pr-2 font-mono text-gray-100" title={`${a.interpreter ?? ''} ${a.script}\n${a.cwd}`}>{a.name}</td>
+                      <td className="py-1 pr-2 font-mono text-gray-100" title={`${a.interpreter ?? ''} ${a.script}\n${a.cwd}`}>
+                        {a.name}
+                        {a.sandboxed
+                          ? <span className="ml-1 text-emerald-400" title="sandbox: chỉ ghi trong thư mục dự án, không đọc bí mật, môi trường sạch">⛨</span>
+                          : <span className="ml-1 text-gray-600" title="không sandbox — chạy lại bằng bomclaw infra run để cách ly">·</span>}
+                      </td>
                       <td className="py-1 pr-2">
                         <Badge tone={a.crashloop ? 'bad' : online ? 'ok' : a.status === 'stopped' ? 'dim' : 'warn'}>{a.crashloop ? 'crashloop' : a.status}</Badge>
                       </td>
@@ -372,11 +385,17 @@ function MachinePane({ call }: { call: Call }) {
                   <td className="py-1 pr-2"><Ports ports={s.ports} /></td>
                   <td className="py-1 pr-2 text-gray-400 font-mono whitespace-nowrap">pid {s.pid || '—'}</td>
                   <td className="py-1 px-3 text-right whitespace-nowrap space-x-1">
-                    {s.loaded && <Btn disabled={busy === k} onClick={() => act('launchd', s.label, 'restart', isAgent ? `Restart ${s.label}?\n\n${warnText}` : undefined)}>restart</Btn>}
+                    {s.loaded && !s.missing && <Btn disabled={busy === k} onClick={() => act('launchd', s.label, 'restart', isAgent ? `Restart ${s.label}?\n\n${warnText}` : undefined)}>restart</Btn>}
                     {s.loaded
                       ? <Btn disabled={busy === k} onClick={() => act('launchd', s.label, 'stop', `Dừng ${s.label}? (launchctl bootout — nó không tự chạy lại cho tới khi bấm start)${isAgent ? `\n\n${warnText}` : ''}`)}>stop</Btn>
                       : <Btn disabled={busy === k} onClick={() => act('launchd', s.label, 'start')}>start</Btn>}
                     {(s.out_log || s.err_log) && <Btn onClick={() => setLogs({ kind: 'launchd', target: s.label })}>log</Btn>}
+                    {s.missing && !isAgent && (
+                      <Btn danger disabled={busy === k}
+                        onClick={() => act('launchd', s.label, 'remove', `Gỡ ${s.label}?\n\n${s.missing} không còn, nên job này lỗi mỗi lần chạy. Nó sẽ được bootout và plist chuyển sang ~/.goterm-shared/pm2/backup/launchd/ (chuyển lại là có lại).`)}>
+                        gỡ
+                      </Btn>
+                    )}
                   </td>
                 </tr>
               )
@@ -399,18 +418,34 @@ function MachinePane({ call }: { call: Call }) {
             {listeners.map(l => (
               <tr key={`${l.pid}:${l.port}`} className="border-t border-gray-800/40">
                 <td className="py-1 px-3"><Ports ports={[l.port]} /></td>
-                <td className="py-1 pr-2 text-gray-500 font-mono">{l.addr}</td>
+                <td className="py-1 pr-2 text-gray-500 font-mono">
+                  {l.addr}
+                  {l.exposed && !l.system && <span className="ml-1"><Badge tone="warn" title="nghe trên mọi interface — máy khác trong mạng cũng vào được">LAN</Badge></span>}
+                </td>
                 <td className="py-1 pr-2">
                   {l.managed_by
                     ? <Badge tone="ok">{l.managed_by}</Badge>
-                    : l.system ? <Badge tone="dim">hệ thống</Badge> : <Badge tone="warn">không ai quản lý</Badge>}
+                    : l.system ? <Badge tone="dim">hệ thống</Badge>
+                    : l.tool ? <Badge tone="dim" title="daemon của một CLI cài global — CLI tự bật/tắt nó">công cụ</Badge>
+                    : <Badge tone="warn">không ai quản lý</Badge>}
                 </td>
                 <td className="py-1 pr-2 text-gray-300 font-mono">{l.command} <span className="text-gray-600">{l.pid}</span></td>
                 <td className="py-1 pr-2 text-gray-500 font-mono truncate max-w-[28rem]" title={l.cwd}>
                   {l.project && <span className="text-gray-300">#{l.project} </span>}{l.cwd}
                 </td>
-                <td className="py-1 px-3 text-right">
-                  {!l.managed_by && !l.system && (
+                <td className="py-1 px-3 text-right whitespace-nowrap space-x-1">
+                  {!l.managed_by && !l.system && !l.tool && (
+                    <Btn disabled={busy === `pid:${l.pid}`} title="đưa vào pm2 (sandbox): cùng lệnh, cùng thư mục; tự chạy lại khi crash"
+                      onClick={() => {
+                        const def = l.project || (l.cwd ?? '').split('/').filter(Boolean).pop() || ''
+                        const name = prompt(`Đưa ${l.command} (pid ${l.pid}, cổng ${l.port}) vào pm2, chạy trong sandbox.\n${l.cwd ?? ''}\n\nServer hiện tại sẽ dừng rồi chạy lại dưới pm2 với cùng lệnh.\nTên app pm2 (để trống = tự đặt):`, def.toLowerCase().replace(/[^a-z0-9._-]+/g, '-'))
+                        if (name === null) return
+                        act('pid', String(l.pid), 'adopt', undefined, { name: name.trim() })
+                      }}>
+                      quản lý
+                    </Btn>
+                  )}
+                  {!l.managed_by && !l.system && !l.tool && (
                     <Btn danger disabled={busy === `pid:${l.pid}`}
                       onClick={() => act('pid', String(l.pid), 'kill', `Dừng ${l.command} (pid ${l.pid}) trên cổng ${l.port}?\n${l.cwd ?? ''}\n\nGửi SIGTERM. Nếu cần chạy lâu dài, đưa nó vào pm2 của dự án thay vì chạy tay.`)}>
                       dừng

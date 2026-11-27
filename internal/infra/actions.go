@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,8 @@ const (
 // pm2 delete, which forgets the app (its ecosystem file still brings it back).
 var verbs = map[string][]string{
 	KindPM2:     {"restart", "stop", "start", "delete"},
-	KindLaunchd: {"restart", "stop", "start"},
-	KindPID:     {"kill"},
+	KindLaunchd: {"restart", "stop", "start", "remove"},
+	KindPID:     {"kill", "adopt"},
 }
 
 // Action is one request. Target is a pm2 app name, a LaunchAgent label, or a pid.
@@ -31,6 +32,9 @@ type Action struct {
 	Kind   string `json:"kind"`
 	Target string `json:"target"`
 	Verb   string `json:"verb"`
+	// adopt only: the pm2 app name and project (defaults from the folder).
+	Name    string `json:"name,omitempty"`
+	Project string `json:"project,omitempty"`
 }
 
 // Result says what ran.
@@ -79,6 +83,9 @@ func (in *Infra) Do(ctx context.Context, a Action) (Result, error) {
 			return Result{}, fmt.Errorf("no LaunchAgent %q in %s", a.Target, in.agentsDir())
 		}
 		domain := fmt.Sprintf("gui/%d", in.UID)
+		if a.Verb == "remove" {
+			return in.removeAgent(ctx, svc, domain)
+		}
 		var args []string
 		switch a.Verb {
 		case "restart":
@@ -117,6 +124,9 @@ func (in *Infra) Do(ctx context.Context, a Action) (Result, error) {
 		if err != nil || pid <= 1 {
 			return Result{}, fmt.Errorf("bad pid %q", a.Target)
 		}
+		if a.Verb == "adopt" {
+			return in.Adopt(ctx, pid, a.Name, a.Project)
+		}
 		var l *Listener
 		for i := range snap.Listeners {
 			if snap.Listeners[i].PID == pid {
@@ -137,6 +147,39 @@ func (in *Infra) Do(ctx context.Context, a Action) (Result, error) {
 		return Result{OK: true, Ran: fmt.Sprintf("kill -TERM %d (%s :%d)", pid, l.Command, l.Port)}, nil
 	}
 	return Result{}, fmt.Errorf("unknown kind %q", a.Kind)
+}
+
+// removeAgent unloads a LaunchAgent whose program or folder is gone and moves
+// its plist out of LaunchAgents into a backup folder. Only for such jobs: one
+// that can still run is stopped with "stop", which is undone with "start".
+// This is undone by moving the plist back.
+func (in *Infra) removeAgent(ctx context.Context, svc *Service, domain string) (Result, error) {
+	if svc.Kind == "bomclaw" {
+		return Result{}, fmt.Errorf("%s is a bomclaw agent — remove it with its own uninstall", svc.Label)
+	}
+	if svc.Missing == "" {
+		return Result{}, fmt.Errorf("%s can still run — use stop", svc.Label)
+	}
+	ran := []string{}
+	if svc.Loaded {
+		if _, err := in.Run(ctx, "launchctl", "bootout", domain+"/"+svc.Label); err != nil {
+			return Result{}, fmt.Errorf("launchctl bootout %s: %w", svc.Label, err)
+		}
+		ran = append(ran, "launchctl bootout "+domain+"/"+svc.Label)
+	}
+	dir := filepath.Join(in.Home, ".goterm-shared", "pm2", "backup", "launchd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Result{}, err
+	}
+	dst := filepath.Join(dir, filepath.Base(svc.Plist))
+	if _, err := os.Stat(dst); err == nil {
+		dst += "." + in.Now().Format("20060102-150405")
+	}
+	if err := os.Rename(svc.Plist, dst); err != nil {
+		return Result{}, fmt.Errorf("move %s: %w", svc.Plist, err)
+	}
+	ran = append(ran, "mv "+svc.Plist+" "+dst)
+	return Result{OK: true, Ran: strings.Join(ran, " && "), Output: svc.Missing + " no longer exists"}, nil
 }
 
 func allowed(kind, verb string) bool {

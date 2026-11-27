@@ -98,24 +98,37 @@ are already partway through in chat, open the room, write the brief with what
 is already done and where it lives, and open the task for what remains. Do not
 move files that a running site or job depends on without asking.
 
-## A service that keeps running goes in pm2
+## A service that keeps running goes in pm2, sandboxed
 
-A project's long-running process (a site, an API, a bot, a studio) runs under
-pm2, never as `nohup …&` or a one-off terminal: a hand-started server dies with
-the next reboot or crash and nobody restarts it, and nobody can see it either.
+A project's long-running process (a site, an API, a bot, a studio, a dev
+server someone will open again tomorrow) runs under pm2, never as `nohup …&`,
+`npm run dev &` or a one-off terminal: a hand-started server dies with the next
+reboot or crash, nobody restarts it, and nobody can see it. On 2026-11-27 six
+such servers were found listening, one of them since August.
 
-- One ecosystem file per project: `~/.goterm-shared/pm2/<project>.config.cjs`,
-  every app with `namespace: '<project>'`, `cwd` = the project folder and its
-  own `out_file`/`error_file`. Run the program itself: `script` = absolute
-  node/python3, `args` = its arguments, `interpreter: 'none'`. pm2's wrapper
-  require()s the script otherwise, and an ESM/.ts server then never listens
-  while pm2 reports it `online`. Copy a working file there as the template.
-- `pm2 start ~/.goterm-shared/pm2/<project>.config.cjs && pm2 save`; after a
-  code change, `pm2 restart <app>`.
-- `bomclaw infra ls` shows every pm2 app by project, every LaunchAgent and every
-  listening port, and flags servers nothing manages. Check it before starting a
-  port; if a stray server of your project holds it, move it into pm2 rather
-  than starting a second copy.
+- Start it with one command, from the project folder:
+
+      bomclaw infra run --name <app> --project <project> --env PORT=8731 -- node server.mjs
+
+  `--project` is the room's name (the pm2 namespace); `--cwd` defaults to the
+  current folder. Re-running with the same `--name` replaces the app. The
+  command is the program itself (`node`, `python3`, `npx vite`, a binary in
+  `node_modules/.bin`), resolved to an absolute path.
+- It runs **sandboxed**: it can write only inside the project folder, temp and
+  package caches; it cannot read `~/.ssh`, `~/.aws`, the bomclaw secret stores
+  or pm2's dump; its environment is empty except PATH, HOME, HOST=127.0.0.1,
+  LANG and what you pass with `--env`. Bind to `$HOST`, not `0.0.0.0`. A secret
+  it needs goes in the project's own `.env`, read by the app — not in `--env`,
+  which is visible in `ps`.
+- If the sandbox breaks the program (it must write outside its folder), fix
+  where it writes first; `--no-sandbox` is the last resort, and say you used it.
+- A stray server already listening (`bomclaw infra ls` marks it `stray`):
+  `bomclaw infra adopt :<port> --project <project>` stops it and runs the same
+  command, in the same folder, under pm2 in the sandbox. Never start a second
+  copy next to a stray.
+- After a code change, `pm2 restart <app>`; logs: `bomclaw infra logs <app>`.
+- Older hand-written `~/.goterm-shared/pm2/<project>.config.cjs` files still
+  work; `bomclaw infra run` writes `~/.goterm-shared/pm2/managed/<project>.json`.
 - The room's Preview button (`bomclaw preview`) is separate: the gateway starts
   and stops that server itself. Do not also put it in pm2.
 

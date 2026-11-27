@@ -93,6 +93,8 @@ type PM2App struct {
 	// worth seeing first, which is why it is computed rather than left to the
 	// reader of a restart count.
 	Crashloop bool `json:"crashloop,omitempty"`
+	// Sandboxed: runs under sandbox-exec (a managed app, see managed.go).
+	Sandboxed bool `json:"sandboxed,omitempty"`
 }
 
 // Service is one LaunchAgent of this user.
@@ -111,6 +113,10 @@ type Service struct {
 	Ports     []int    `json:"ports,omitempty"`
 	Plist     string   `json:"plist"`
 	Project   string   `json:"project,omitempty"`
+	// Missing names what the job needs and no longer exists (its program,
+	// its folder). Such a job fails on every start with launchd's exit 78 and
+	// nothing will fix that but removing it.
+	Missing string `json:"missing,omitempty"`
 }
 
 // Listener is one listening TCP socket, and who answers for it.
@@ -124,7 +130,13 @@ type Listener struct {
 	// nothing will restart — and nothing will stop.
 	ManagedBy string `json:"managed_by,omitempty"`
 	System    bool   `json:"system,omitempty"` // macOS / app internals, hidden by default
-	Project   string `json:"project,omitempty"`
+	// Tool: the daemon of a globally installed CLI (agent-browser, …), which
+	// that CLI starts on demand and owns. Not a project server, not a stray.
+	Tool    bool   `json:"tool,omitempty"`
+	Project string `json:"project,omitempty"`
+	// Exposed: bound to every interface, so reachable from the network, not
+	// only from this machine.
+	Exposed bool `json:"exposed,omitempty"`
 }
 
 // Snapshot is everything at once, taken together so the cross-references
@@ -152,13 +164,15 @@ type Infra struct {
 	Projects  map[string]string
 	readFile  func(string) ([]byte, error)
 	globFiles func(string) ([]string, error)
+	statFile  func(string) (os.FileInfo, error)
+	procArgs  func(pid int) (exe string, argv []string, env map[string]string, err error)
 }
 
 // New uses the real machine.
 func New() *Infra {
 	home, _ := os.UserHomeDir()
 	return &Infra{Run: execRunner, Home: home, UID: os.Getuid(), Now: time.Now,
-		readFile: os.ReadFile, globFiles: filepath.Glob}
+		readFile: os.ReadFile, globFiles: filepath.Glob, procArgs: procArgsOS}
 }
 
 // pm2 finds the pm2 binary: $PM2_BIN, PATH, then the usual install places.
@@ -247,22 +261,35 @@ type jlistApp struct {
 		CPU    float64 `json:"cpu"`
 	} `json:"monit"`
 	Env struct {
-		Status      string `json:"status"`
-		Namespace   string `json:"namespace"`
-		Uptime      int64  `json:"pm_uptime"`
-		Restarts    int    `json:"restart_time"`
-		Unstable    int    `json:"unstable_restarts"`
-		Cwd         string `json:"pm_cwd"`
-		Script      string `json:"pm_exec_path"`
-		Interpreter string `json:"exec_interpreter"`
-		OutLog      string `json:"pm_out_log_path"`
-		ErrLog      string `json:"pm_err_log_path"`
+		Status      string   `json:"status"`
+		Namespace   string   `json:"namespace"`
+		Uptime      int64    `json:"pm_uptime"`
+		Restarts    int      `json:"restart_time"`
+		Unstable    int      `json:"unstable_restarts"`
+		Cwd         string   `json:"pm_cwd"`
+		Script      string   `json:"pm_exec_path"`
+		Args        []string `json:"args"`
+		Interpreter string   `json:"exec_interpreter"`
+		OutLog      string   `json:"pm_out_log_path"`
+		ErrLog      string   `json:"pm_err_log_path"`
 	} `json:"pm2_env"`
 }
 
 // crashloopRestarts: a service that has restarted this often is not flapping
 // once, it is failing on every start.
 const crashloopRestarts = 50
+
+// crashloop: failing now. An app the owner stopped keeps its old restart
+// count — okx-bot was stopped on 2026-11-06 with 565,883 and was still shown
+// as crashing three weeks later. Only a status pm2 gives while it is trying
+// (and failing) to run counts.
+func crashloop(status string, restarts, unstable int) bool {
+	switch status {
+	case "errored", "launching", "waiting restart":
+		return restarts >= crashloopRestarts || unstable > 0
+	}
+	return false
+}
 
 func (in *Infra) pm2List(ctx context.Context, bin string) ([]PM2App, error) {
 	out, err := in.Run(ctx, bin, "jlist")
@@ -289,7 +316,8 @@ func (in *Infra) pm2List(ctx context.Context, bin string) ([]PM2App, error) {
 			Restarts: a.Env.Restarts, Unstable: a.Env.Unstable,
 			Cwd: a.Env.Cwd, Script: a.Env.Script, Interpreter: a.Env.Interpreter,
 			OutLog: a.Env.OutLog, ErrLog: a.Env.ErrLog,
-			Crashloop: a.Env.Restarts >= crashloopRestarts && a.Env.Status != "online" || a.Env.Unstable > 0,
+			Crashloop: crashloop(a.Env.Status, a.Env.Restarts, a.Env.Unstable),
+			Sandboxed: sandboxed(a.Env.Script, a.Env.Args),
 		})
 	}
 	sort.Slice(apps, func(i, j int) bool {
@@ -357,6 +385,7 @@ func (in *Infra) services(ctx context.Context) ([]Service, error) {
 		if strings.HasPrefix(p.Label, "com.bomclaw") {
 			s.Kind = "bomclaw"
 		}
+		s.Missing = in.missing(args, p.WorkingDirectory)
 		if st, ok := loaded[p.Label]; ok {
 			s.Loaded, s.PID, s.LastExit = true, st[0], st[1]
 		}
@@ -375,6 +404,29 @@ func (in *Infra) services(ctx context.Context) ([]Service, error) {
 		return out, fmt.Errorf("launchd: %s", strings.Join(errs, "; "))
 	}
 	return out, nil
+}
+
+// missing reports the first thing a job points at that is gone: its program
+// (when given as a path) or its working folder.
+func (in *Infra) missing(args []string, cwd string) string {
+	if len(args) > 0 && filepath.IsAbs(args[0]) {
+		if _, err := in.stat(args[0]); err != nil {
+			return "program " + args[0]
+		}
+	}
+	if cwd != "" {
+		if _, err := in.stat(cwd); err != nil {
+			return "folder " + cwd
+		}
+	}
+	return ""
+}
+
+func (in *Infra) stat(p string) (os.FileInfo, error) {
+	if in.statFile != nil {
+		return in.statFile(p)
+	}
+	return os.Stat(p)
 }
 
 func truthy(raw json.RawMessage) bool {
@@ -418,6 +470,13 @@ func isSystemPath(exe string) bool {
 		}
 	}
 	return false
+}
+
+// isToolPath: an executable shipped inside a global npm install
+// (…/lib/node_modules/<pkg>/…). A project's own dependencies live in its
+// node_modules, without the lib/ in front.
+func isToolPath(exe string) bool {
+	return strings.Contains(exe, "/lib/node_modules/")
 }
 
 func (in *Infra) listeners(ctx context.Context) ([]Listener, error) {
@@ -478,6 +537,9 @@ func (in *Infra) crossRef(ctx context.Context, s *Snapshot) {
 	parents, exes := in.processes(ctx)
 	for i := range s.Listeners {
 		s.Listeners[i].System = isSystemPath(exes[s.Listeners[i].PID])
+		s.Listeners[i].Tool = isToolPath(exes[s.Listeners[i].PID])
+		a := s.Listeners[i].Addr
+		s.Listeners[i].Exposed = a == "*" || a == "0.0.0.0" || a == "[::]"
 	}
 	cwds := in.cwds(ctx, s.Listeners)
 	type portOwner struct {
