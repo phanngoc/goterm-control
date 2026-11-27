@@ -64,12 +64,17 @@ type EnvStatus struct {
 	Dev        EnvDev            `json:"dev"`
 	Prod       deploy.ProdStatus `json:"prod"`
 	Deploy     *DeployJobView    `json:"deploy,omitempty"`
+	// DevAhead is how many commits DEV has that PROD does not run: 0 when
+	// PROD runs DEV's HEAD, -1 when it cannot be told (PROD's commit unknown).
+	DevAhead int `json:"dev_ahead"`
 }
 
 // EnvDev is the local environment.
 type EnvDev struct {
 	Preview *PreviewStatus    `json:"preview,omitempty"`
 	Build   *deploy.DevStatus `json:"build,omitempty"`
+	// Git is the project folder's checkout: the version DEV is at.
+	Git *deploy.GitVersion `json:"git,omitempty"`
 }
 
 // DeployJobView is the last deploy of a channel, running or finished.
@@ -97,10 +102,19 @@ func (m *EnvManager) resolve(channelID string) (*coord.Channel, *deploy.Spec, er
 
 // Status reports both environments. It never changes anything.
 func (m *EnvManager) Status(ctx context.Context, channelID string) EnvStatus {
-	st := EnvStatus{ChannelID: channelID}
+	st := m.status(ctx, channelID)
+	if v := st.Prod.Version; v != nil && v.Commit != "" {
+		st.DevAhead = deploy.CommitsSince(ctx, st.ProjectDir, v.Commit)
+	}
+	return st
+}
+
+func (m *EnvManager) status(ctx context.Context, channelID string) EnvStatus {
+	st := EnvStatus{ChannelID: channelID, DevAhead: -1}
 	c, spec, err := m.resolve(channelID)
 	if c != nil {
 		st.ProjectDir = c.Workspace
+		st.Dev.Git = deploy.Git(ctx, c.Workspace)
 	}
 	if m.preview != nil && c != nil && c.Workspace != "" {
 		p := m.preview.Status(channelID)

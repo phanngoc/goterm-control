@@ -20,6 +20,8 @@ type ProdStatus struct {
 	Error     string `json:"error,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Deployed  bool   `json:"deployed"`
+	// Version is which version is live (see version.go).
+	Version *ProdVersion `json:"version,omitempty"`
 	// DeployedAt is when the live version went out.
 	DeployedAt string `json:"deployed_at,omitempty"`
 	// URL is where it answers: the custom domain when one is attached, else
@@ -150,6 +152,7 @@ func Prod(ctx context.Context, c *Client, r Resolved) ProdStatus {
 	if dep != nil {
 		st.Deployed = true
 		st.DeployedAt = dep.CreatedOn.Format(time.RFC3339)
+		st.Version = dep.Version()
 		if sub != "" {
 			st.WorkersDev = fmt.Sprintf("https://%s.%s.workers.dev", r.Name, sub)
 			st.URL = st.WorkersDev

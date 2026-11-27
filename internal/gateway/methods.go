@@ -337,6 +337,8 @@ func NewMethodHandler(deps Deps) MethodHandler {
 			return handlePreview(deps, method, params)
 		case "env.status", "env.deploy", "env.logs":
 			return handleEnv(ctx, deps, method, params)
+		case "cloud.status":
+			return handleCloud(ctx, deps, params)
 		case "secrets.list", "secrets.set", "secrets.unset", "secrets.verify":
 			return handleSecrets(ctx, deps, method, params)
 		case "connectors.list", "connectors.set", "connectors.unset", "connectors.verify", "connectors.enable":

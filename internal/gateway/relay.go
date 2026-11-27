@@ -133,6 +133,8 @@ var DetachedMethods = map[string]bool{
 	"env.deploy": true,
 	"env.logs":   true,
 
+	"cloud.status": true,
+
 	"secrets.list":   true,
 	"secrets.set":    true,
 	"secrets.unset":  true,

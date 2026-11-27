@@ -3,15 +3,16 @@ import { ago } from './format'
 
 type Call = (method: string, params?: any) => Promise<any>
 
-// The infrastructure a project room runs on, as the first thing its header
-// says: which provider, whether it is connected, whose account and plan, which
-// services, and whether PROD is live right now. Before this the header had a
-// "DEV · PROD" button that said nothing until opened — a live site and a
-// project that had never been deployed looked exactly the same.
+// A project room's environments, as the first thing its header says: is PROD
+// live, which version it runs, and whether DEV has moved on since. The
+// provider behind PROD — its account, plan, traffic — is Admin → Infra's to
+// show (CloudPane), once for every project on it, not repeated in each room.
 
 export interface DBStatus { engine: string; name: string; exists: boolean; bytes: number; tables: number; error?: string }
 export interface ZonePlan { zone: string; plan: string; price: number; currency?: string; frequency?: string }
 export interface InfraAccount { name?: string; plan?: string; plan_hint?: string; zones?: ZonePlan[] }
+export interface GitVersion { commit: string; short: string; branch?: string; subject?: string; at?: string; dirty: number }
+export interface ProdVersion { id?: string; message?: string; commit?: string; by?: string }
 export interface EnvStatus {
   channel_id: string
   project_dir?: string
@@ -21,10 +22,12 @@ export interface EnvStatus {
   dev: {
     preview?: { declared: boolean; state?: string; url?: string; kind?: string }
     build?: { static_dir?: string; built: boolean; built_at?: string; files: number; database?: DBStatus }
+    git?: GitVersion
   }
   prod: {
     provider?: string; title?: string
     declared: boolean; connected: boolean; error?: string; name?: string; deployed: boolean
+    version?: ProdVersion
     deployed_at?: string; url?: string; workers_dev?: string; domains?: string[]; want_domain?: string
     database?: DBStatus
     account?: InfraAccount
@@ -32,6 +35,8 @@ export interface EnvStatus {
     services?: string[]
   }
   deploy?: { running: boolean; started: string; finished?: string; with_db: boolean; dry_run: boolean; error?: string; result?: { url?: string } }
+  /** Commits DEV has that PROD does not run; -1 when it cannot be told. */
+  dev_ahead: number
 }
 
 // The last answer per room, so coming back to a room shows its infrastructure
@@ -123,22 +128,70 @@ export function host(u?: string) {
   try { return new URL(u).host } catch { return u }
 }
 
+/** shortVer is a version id or commit in a few characters. */
+export function shortVer(v?: string) { return v ? v.slice(0, 7) : '' }
+
+/** prodVersion is PROD's version in a word: the commit it was built from when
+ *  the deploy recorded one, else the provider's own version id. */
+export function prodVersion(st: EnvStatus | null): { text: string; commit: boolean } | null {
+  const v = st?.prod.version
+  if (!v) return null
+  if (v.commit) return { text: shortVer(v.commit), commit: true }
+  if (v.id) return { text: shortVer(v.id), commit: false }
+  return null
+}
+
+/** devVersion is DEV's checkout in a word. */
+export function devVersion(st: EnvStatus | null): string {
+  const g = st?.dev.git
+  if (!g) return ''
+  return g.short + (g.dirty ? '*' : '')
+}
+
 /**
- * InfraBadge is the room header's infrastructure pill: provider, PROD state and
- * where it answers, with DEV's light beside it. Hovering or focusing it shows
- * the account, plan and services; clicking opens the full environments panel.
+ * projectState is the project in one tone and a sentence: is it live, is
+ * what is live the version being worked on, did the last publish go out.
+ */
+export function projectState(st: EnvStatus | null): { tone: Tone; label: string } {
+  if (!st) return { tone: 'idle', label: 'đang kiểm tra…' }
+  const p = st.prod
+  if (st.deploy?.running) return { tone: 'busy', label: 'Đang publish bản mới…' }
+  if (st.error) return { tone: 'bad', label: st.error }
+  if (!st.declared && p.deployed) return { tone: 'live', label: 'Đang live — publish ngoài dashboard, chưa thiết lập ở đây' }
+  if (!st.declared) return { tone: 'idle', label: 'Chưa có PROD — dự án mới chạy ở DEV' }
+  if (!p.connected) return { tone: 'warn', label: `Chưa kết nối ${p.title || p.provider || 'nhà cung cấp'} — không publish được` }
+  if (p.error) return { tone: 'bad', label: 'PROD lỗi: ' + p.error }
+  if (st.deploy?.error && !st.deploy.dry_run) return { tone: 'bad', label: 'Lần publish gần nhất lỗi — PROD vẫn chạy bản cũ' }
+  if (!p.deployed) return { tone: 'ok', label: 'Chưa publish lần nào' }
+  const dirty = st.dev.git?.dirty ?? 0
+  if (st.dev_ahead > 0) return { tone: 'warn', label: `Đang live · DEV mới hơn PROD ${st.dev_ahead} commit — chưa publish` }
+  if (st.dev_ahead === 0) {
+    return dirty
+      ? { tone: 'live', label: `Đang live · PROD = DEV, còn ${dirty} file sửa chưa commit` }
+      : { tone: 'live', label: 'Đang live · PROD chạy đúng bản DEV' }
+  }
+  return { tone: 'live', label: 'Đang live' }
+}
+
+/**
+ * InfraBadge is the room header's environments pill: PROD's state, where it
+ * answers and which version, with DEV's light beside it. Hovering or focusing
+ * it shows both environments; clicking opens the environments panel. The
+ * provider's account, plan and traffic are not here — they are facts about the
+ * provider, on Admin → Infra.
  */
 export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: string | null; onOpen: () => void }) {
   const prod = prodState(st)
   const dev = devState(st)
+  const proj = projectState(st)
   const p = st?.prod
   const c = toneClass[err ? 'bad' : prod.tone]
-  const provider = p?.title || p?.provider || 'Cloudflare'
-  const plan = p?.connected ? planLabel(st) : ''
   const where = prod.tone === 'live' ? host(p?.url) : ''
+  const pv = prodVersion(st)
+  const behind = (st?.dev_ahead ?? 0) > 0
   const summary = err
-    ? `Không đọc được trạng thái hạ tầng: ${err}`
-    : `${provider}${plan ? ` (gói ${plan})` : ''}: ${prod.label}${where ? ` tại ${where}` : ''}. DEV: ${dev.label}. Bấm để mở Môi trường.`
+    ? `Không đọc được trạng thái môi trường: ${err}`
+    : `PROD: ${prod.label}${where ? ` tại ${where}` : ''}${pv ? `, bản ${pv.text}` : ''}. DEV: ${dev.label}. ${proj.label}. Bấm để mở Môi trường.`
 
   return (
     <span className="relative group shrink-0">
@@ -148,15 +201,6 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
         className={`flex items-center gap-1.5 @2xl:gap-2 h-7 pl-2 pr-2.5 rounded-full ring-1 ${c.ring} ${c.soft} text-[11px] cursor-pointer
           transition-colors duration-200 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400`}
       >
-        <CloudIcon className={`h-3.5 w-3.5 shrink-0 ${c.text}`} />
-        <span className="font-medium text-gray-200 hidden @2xl:inline">{provider}</span>
-        {plan && (
-          <span className={`hidden @xl:inline px-1.5 rounded-full text-[10px] font-medium ring-1 whitespace-nowrap ${
-            /free/i.test(plan) ? 'bg-gray-900/60 text-gray-300 ring-gray-700' : 'bg-violet-500/15 text-violet-200 ring-violet-500/30'}`}>
-            {plan}
-          </span>
-        )}
-        <span className="h-3 w-px bg-gray-700 hidden @2xl:block" aria-hidden />
         <Dot tone={err ? 'bad' : prod.tone} />
         <span className={`${c.text} whitespace-nowrap`}>
           {err ? 'lỗi' : (
@@ -167,93 +211,49 @@ export function InfraBadge({ st, err, onOpen }: { st: EnvStatus | null; err: str
           )}
         </span>
         {where && <span className="font-mono text-gray-400 max-w-[180px] truncate hidden @6xl:inline">{where}</span>}
+        {pv && (
+          <span className={`hidden @2xl:inline font-mono px-1.5 rounded-full ring-1 ${behind ? 'ring-amber-500/40 text-amber-200' : 'ring-gray-700 text-gray-300'}`}
+            title={behind ? `PROD chậm ${st?.dev_ahead} commit so với DEV` : 'phiên bản đang chạy trên PROD'}>
+            {pv.text}{behind ? ` · −${st?.dev_ahead}` : ''}
+          </span>
+        )}
         <span className="h-3 w-px bg-gray-700 hidden @3xl:block" aria-hidden />
         <span className="hidden @3xl:flex items-center gap-1 text-gray-400" title={`DEV: ${dev.label}`}>
           <Dot tone={dev.tone} size="h-1.5 w-1.5" />DEV
         </span>
       </button>
 
-      {/* Details on hover or keyboard focus — never the only place a fact lives:
-          the panel behind the click shows all of it. */}
+      {/* Both environments on hover or keyboard focus — never the only place
+          a fact lives: the panel behind the click shows all of it. */}
       {st && !err && (
         <div
           role="tooltip"
           className="invisible opacity-0 translate-y-1 group-hover:visible group-hover:opacity-100 group-hover:translate-y-0
             group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0
             transition-all duration-150 motion-reduce:transition-none
-            absolute left-0 top-full mt-2 z-40 w-96 max-w-[calc(100vw-2rem)] rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl p-3 space-y-2.5 text-xs"
+            absolute left-0 top-full mt-2 z-40 w-80 max-w-[calc(100vw-2rem)] rounded-xl bg-gray-950 ring-1 ring-gray-800 shadow-2xl p-3 space-y-2 text-xs"
         >
-          <div className="flex items-center gap-2">
-            <Dot tone={prod.tone} />
-            <span className="text-gray-200 font-medium">{provider}</span>
-            <span className={`ml-auto ${toneClass[prod.tone].text}`}>{prod.label}</span>
+          <div className={`flex items-start gap-2 ${toneClass[proj.tone].text}`}>
+            <span className="mt-1"><Dot tone={proj.tone} size="h-1.5 w-1.5" /></span>
+            <span>{proj.label}</span>
           </div>
-          <Facts st={st} />
+          <dl className="grid grid-cols-[44px_1fr] gap-x-2 gap-y-1.5 pt-1 border-t border-gray-800">
+            <dt className="text-orange-300 font-semibold text-[10px] tracking-wider pt-px">PROD</dt>
+            <dd className="min-w-0 text-gray-300">
+              <span className={toneClass[prod.tone].text}>{prod.label}</span>
+              {pv && <span className="font-mono text-gray-400"> · {pv.text}</span>}
+              {p?.deployed_at && <span className="text-gray-500"> · {ago(p.deployed_at)}</span>}
+              {p?.url && <div className="font-mono text-sky-300 truncate">{host(p.url)}</div>}
+            </dd>
+            <dt className="text-sky-300 font-semibold text-[10px] tracking-wider pt-px">DEV</dt>
+            <dd className="min-w-0 text-gray-300">
+              <span className={toneClass[dev.tone].text}>{dev.label}</span>
+              {st.dev.git && <span className="font-mono text-gray-400"> · {devVersion(st)}{st.dev.git.branch ? ` (${st.dev.git.branch})` : ''}</span>}
+            </dd>
+          </dl>
         </div>
       )}
     </span>
-  )
-}
-
-/** Facts is the account / plan / services / address list, shared by the
- *  hover card and the environments panel. */
-export function Facts({ st }: { st: EnvStatus }) {
-  const p = st.prod
-  const a = p.account
-  const zones = projectZones(st)
-  return (
-    <dl className="grid grid-cols-[72px_1fr] gap-x-2 gap-y-1.5">
-      <dt className="text-gray-500">Tài khoản</dt>
-      <dd className="text-gray-200 min-w-0 truncate" title={a?.name}>
-        {p.connected ? (a?.name || 'đã kết nối') : <span className="text-amber-300">chưa kết nối</span>}
-      </dd>
-      <dt className="text-gray-500">Gói</dt>
-      <dd className="min-w-0 space-y-1">
-        {zones.length === 0 && !a?.plan && <span className="text-gray-500">{p.connected ? 'chưa đọc được' : '—'}</span>}
-        {zones.map(z => (
-          <div key={z.zone} className="flex items-center gap-1.5 min-w-0">
-            <PlanChip name={z.plan} />
-            <span className="font-mono text-gray-400 truncate">{z.zone}</span>
-            {z.price > 0 && <span className="text-gray-500 whitespace-nowrap">{z.price} {z.currency}{z.frequency ? `/${z.frequency}` : ''}</span>}
-          </div>
-        ))}
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-gray-500">Workers</span>
-          {a?.plan
-            ? <PlanChip name={a.plan} />
-            : <span className="text-gray-500 truncate" title={a?.plan_hint}>
-                chưa đọc được
-                {p.connected && a?.plan_hint && p.provider !== 'fly' && (
-                  <a href="/admin/connections" title={a.plan_hint} className="ml-1 text-sky-300 hover:underline whitespace-nowrap">cấp quyền Billing ▸</a>
-                )}
-              </span>}
-        </div>
-      </dd>
-      {!!p.services?.length && (
-        <>
-          <dt className="text-gray-500">Service</dt>
-          <dd className="flex flex-wrap gap-1">
-            {p.services.map(s => (
-              <span key={s} className="px-1.5 rounded bg-gray-800/80 ring-1 ring-gray-700 text-gray-300 text-[10.5px]">{s}</span>
-            ))}
-          </dd>
-        </>
-      )}
-      {p.url && (
-        <>
-          <dt className="text-gray-500">Địa chỉ</dt>
-          <dd className="min-w-0">
-            <a href={p.url} target="_blank" rel="noreferrer" className="font-mono text-sky-300 hover:underline break-all">{host(p.url)}</a>
-          </dd>
-        </>
-      )}
-      {p.deployed_at && (
-        <>
-          <dt className="text-gray-500">Deploy</dt>
-          <dd className="text-gray-300">{ago(p.deployed_at)}</dd>
-        </>
-      )}
-    </dl>
   )
 }
 
@@ -287,35 +287,5 @@ export function SignalIcon({ className = '' }: { className?: string }) {
       <path d="M10 11v6M6.5 7.5a5 5 0 0 1 7 0M4 5a8.5 8.5 0 0 1 12 0" strokeLinecap="round" />
       <circle cx="10" cy="10.5" r="1" fill="currentColor" />
     </svg>
-  )
-}
-
-/** projectZones is the zone the project's domain lives on, or every zone of
- *  the account when the project has no domain of its own. */
-export function projectZones(st: EnvStatus | null): ZonePlan[] {
-  const all = st?.prod.account?.zones ?? []
-  const domain = st?.prod.domains?.[0] || st?.prod.want_domain || st?.spec?.domain || ''
-  const own = domain ? all.filter(z => domain === z.zone || domain.endsWith('.' + z.zone)) : []
-  return own.length ? own : all
-}
-
-/** planLabel is the plan in a word or two, for the header pill: the Workers
- *  plan when it is known, else the plan of the project's domain. */
-export function planLabel(st: EnvStatus | null): string {
-  const a = st?.prod.account
-  if (a?.plan) return a.plan
-  const z = projectZones(st)
-  if (!z.length) return ''
-  const names = [...new Set(z.map(x => x.plan.replace(/ Website$/, '')))]
-  return names.join(' / ')
-}
-
-function PlanChip({ name }: { name: string }) {
-  const free = /free/i.test(name)
-  return (
-    <span className={`inline-flex items-center px-1.5 rounded ring-1 whitespace-nowrap ${
-      free ? 'bg-gray-800/80 text-gray-200 ring-gray-700' : 'bg-violet-500/15 text-violet-200 ring-violet-500/30'}`}>
-      {name}
-    </span>
   )
 }

@@ -113,9 +113,29 @@ func (c *Client) acct() string { return "/accounts/" + url.PathEscape(c.Creds.Ac
 
 // Deployment is the live version of a Worker.
 type Deployment struct {
-	ID        string    `json:"id"`
-	CreatedOn time.Time `json:"created_on"`
-	Source    string    `json:"source,omitempty"`
+	ID          string            `json:"id"`
+	CreatedOn   time.Time         `json:"created_on"`
+	Source      string            `json:"source,omitempty"`
+	AuthorEmail string            `json:"author_email,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Versions    []struct {
+		VersionID  string  `json:"version_id"`
+		Percentage float64 `json:"percentage"`
+	} `json:"versions,omitempty"`
+}
+
+// Version is the deployment as a ProdVersion: the version serving most
+// traffic, the message it went out with, and the commit that message names.
+func (d *Deployment) Version() *ProdVersion {
+	v := &ProdVersion{Message: d.Annotations["workers/message"], By: firstNonEmpty(d.AuthorEmail, d.Source)}
+	best := -1.0
+	for _, x := range d.Versions {
+		if x.Percentage > best {
+			best, v.ID = x.Percentage, x.VersionID
+		}
+	}
+	v.Commit = commitIn(v.Message)
+	return v
 }
 
 // LatestDeployment is the Worker's newest deployment, or nil when the Worker
