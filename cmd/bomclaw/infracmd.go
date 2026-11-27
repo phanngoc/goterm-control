@@ -106,7 +106,7 @@ func runInfra(args []string) {
 		}
 		kind := infraKind(ctx, in, sub, pos[0])
 		r, err := in.Do(ctx, infra.Action{Kind: kind, Target: pos[0], Verb: sub})
-		exitIf(err)
+		infraExit(err)
 		fmt.Println(r.Ran)
 		if r.Output != "" {
 			fmt.Println(r.Output)
@@ -125,13 +125,13 @@ func runInfra(args []string) {
 		for _, kv := range envs {
 			k, v, ok := strings.Cut(kv, "=")
 			if !ok || k == "" {
-				exitIf(fmt.Errorf("--env %q: want K=V", kv))
+				infraExit(fmt.Errorf("--env %q: want K=V", kv))
 			}
 			env[k] = v
 		}
 		r, err := in.RunApp(ctx, infra.App{Name: *name, Project: *project, Cwd: dir, Command: command,
 			Env: env, MaxMemory: *maxMem, NoSandbox: *noSandbox})
-		exitIf(err)
+		infraExit(err)
 		fmt.Println(r.Ran)
 		if r.Output != "" {
 			fmt.Println(r.Output)
@@ -142,9 +142,9 @@ func runInfra(args []string) {
 			os.Exit(1)
 		}
 		pid, err := strayPID(ctx, in, pos[0])
-		exitIf(err)
+		infraExit(err)
 		r, err := in.Do(ctx, infra.Action{Kind: infra.KindPID, Target: strconv.Itoa(pid), Verb: "adopt", Name: *name, Project: *project})
-		exitIf(err)
+		infraExit(err)
 		fmt.Println(r.Ran)
 		if r.Output != "" {
 			fmt.Println(r.Output)
@@ -155,7 +155,7 @@ func runInfra(args []string) {
 			os.Exit(1)
 		}
 		r, err := in.Do(ctx, infra.Action{Kind: infra.KindLaunchd, Target: pos[0], Verb: "remove"})
-		exitIf(err)
+		infraExit(err)
 		fmt.Println(r.Ran)
 		if r.Output != "" {
 			fmt.Println(r.Output)
@@ -166,7 +166,7 @@ func runInfra(args []string) {
 			os.Exit(1)
 		}
 		logs, err := in.Logs(ctx, infraKind(ctx, in, sub, pos[0]), pos[0], *lines)
-		exitIf(err)
+		infraExit(err)
 		for _, k := range []string{"out", "err"} {
 			if v, ok := logs[k]; ok {
 				fmt.Printf("==> %s <==\n%s\n", logs[k+"_path"], v)
@@ -319,3 +319,10 @@ func ports(ps []int) string {
 
 func gib(b int64) string { return fmt.Sprintf("%.1fG", float64(b)/(1<<30)) }
 func mib(b int64) string { return fmt.Sprintf("%.0fM", float64(b)/(1<<20)) }
+
+func infraExit(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "infra: %v\n", err)
+		os.Exit(1)
+	}
+}

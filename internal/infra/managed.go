@@ -473,6 +473,12 @@ func (in *Infra) Adopt(ctx context.Context, pid int, name, project string) (Resu
 	if !appName.MatchString(a.Name) || !appName.MatchString(a.Project) {
 		return Result{}, fmt.Errorf("app %q / project %q: lowercase letters, digits, . _ - (max 63)", a.Name, a.Project)
 	}
+	// A process keeps running in a folder deleted under it, and lsof still
+	// names the old path: motor-3d's dev server served a deleted project for
+	// three months. There is nothing to restart it from; stop it instead.
+	if st, err := os.Stat(a.Cwd); err != nil || !st.IsDir() {
+		return Result{}, fmt.Errorf("pid %d runs in %s, which no longer exists — nothing to run it from; stop it instead", pid, a.Cwd)
+	}
 	if _, err := resolveBin(a.Cwd, a.Command[0]); err != nil {
 		return Result{}, err
 	}
