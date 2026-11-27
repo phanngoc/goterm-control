@@ -222,3 +222,11 @@ func TestAGrantOpensOneFileAfterTheDenies(t *testing.T) {
 		t.Error("a grant of all of home was accepted")
 	}
 }
+
+func TestPM2SaidDropsTheColoredTable(t *testing.T) {
+	out := "\x1b[32m[PM2]\x1b[39m Starting /x in fork_mode\n" +
+		"┌────┬──────┐\n│ \x1b[1m\x1b[36m0\x1b[39m\x1b[22m  │ okx-bot │\n└────┴──────┘\n"
+	if got := pm2Said(out); got != "[PM2] Starting /x in fork_mode" {
+		t.Errorf("pm2Said = %q", got)
+	}
+}
