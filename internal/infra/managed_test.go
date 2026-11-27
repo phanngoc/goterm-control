@@ -207,3 +207,18 @@ func TestAGlobalCLIsDaemonIsAToolNotAStray(t *testing.T) {
 		t.Error("a project's server taken for a tool")
 	}
 }
+
+func TestAGrantOpensOneFileAfterTheDenies(t *testing.T) {
+	in := &Infra{Home: "/Users/u"}
+	p := in.Profile("/Users/u/p", []string{"/Users/u/.bomclaw/.env"}, []string{"/Users/u/.goterm-shared/data/coord.db"})
+	deny := strings.Index(p, `(subpath "/Users/u/.bomclaw")`)
+	read := strings.Index(p, "(allow file-read*\n  (subpath \"/Users/u/.bomclaw/.env\")")
+	write := strings.Index(p, "(allow file-read* file-write*\n  (subpath \"/Users/u/.goterm-shared/data/coord.db\")")
+	if deny < 0 || read < deny || write < deny {
+		t.Errorf("grants must follow the denies:\n%s", p)
+	}
+	if _, err := (&Infra{Home: "/Users/u", PM2Bin: "/bin/true"}).RunApp(t.Context(),
+		App{Name: "x", Cwd: "/tmp", Command: []string{"true"}, AllowRead: []string{"/Users/u"}}); err == nil {
+		t.Error("a grant of all of home was accepted")
+	}
+}

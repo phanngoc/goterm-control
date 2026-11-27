@@ -55,6 +55,12 @@ type App struct {
 	Env     map[string]string `json:"env,omitempty"`
 	// MaxMemory restarts the app above this RSS (pm2 syntax, e.g. "1G").
 	MaxMemory string `json:"max_memory,omitempty"`
+	// AllowRead / AllowWrite open named paths the profile otherwise denies —
+	// one file, not its folder: film-studio reads ~/.bomclaw/.env for its
+	// Telegram token and writes the coord database through `bomclaw task new`.
+	// Granted after the denies, so they win (SBPL: last match).
+	AllowRead  []string `json:"allow_read,omitempty"`
+	AllowWrite []string `json:"allow_write,omitempty"`
 	// NoSandbox runs it unconfined. For a program the sandbox breaks; the
 	// entry still lives with the others and is still restarted.
 	NoSandbox bool `json:"no_sandbox,omitempty"`
@@ -105,8 +111,8 @@ func (in *Infra) writablePaths() []string {
 	}
 }
 
-// Profile is the SBPL for an app working in cwd.
-func (in *Infra) Profile(cwd string) string {
+// Profile is the SBPL for an app working in cwd, plus its grants.
+func (in *Infra) Profile(cwd string, grants ...[]string) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n")
 	b.WriteString(";; writes: the project, temp, package caches\n")
@@ -126,6 +132,40 @@ func (in *Infra) Profile(cwd string) string {
 		fmt.Fprintf(&b, "\n  (subpath %s)", sbQuote(p))
 	}
 	b.WriteString(")\n")
+	ops := []string{"file-read*", "file-read* file-write*"}
+	for i, paths := range grants {
+		if i >= len(ops) || len(paths) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, ";; granted to this app\n(allow %s", ops[i])
+		for _, p := range paths {
+			fmt.Fprintf(&b, "\n  (subpath %s)", sbQuote(p))
+		}
+		b.WriteString(")\n")
+	}
+	// A granted file is reached through its denied folders: let those be
+	// stat'ed (not listed, not read). Go's MkdirAll on the coord folder
+	// failed without it.
+	parents := map[string]bool{}
+	for _, paths := range grants {
+		for _, p := range paths {
+			for d := filepath.Dir(p); d != in.Home && d != "/" && d != "."; d = filepath.Dir(d) {
+				parents[d] = true
+			}
+		}
+	}
+	if len(parents) > 0 {
+		ds := make([]string, 0, len(parents))
+		for d := range parents {
+			ds = append(ds, d)
+		}
+		sort.Strings(ds)
+		b.WriteString("(allow file-read-metadata")
+		for _, d := range ds {
+			fmt.Fprintf(&b, "\n  (literal %s)", sbQuote(d))
+		}
+		b.WriteString(")\n")
+	}
 	return b.String()
 }
 
@@ -251,7 +291,7 @@ func (in *Infra) entry(a App) (pm2Entry, error) {
 	}
 	if !a.NoSandbox {
 		sb := filepath.Join(in.ManagedDir(), a.Name+".sb")
-		if err := os.WriteFile(sb, []byte(in.Profile(a.Cwd)), 0o644); err != nil {
+		if err := os.WriteFile(sb, []byte(in.Profile(a.Cwd, a.AllowRead, a.AllowWrite)), 0o644); err != nil {
 			return pm2Entry{}, err
 		}
 		e.Args = append(e.Args, sandboxExec, "-f", sb)
@@ -348,6 +388,11 @@ func (in *Infra) RunApp(ctx context.Context, a App) (Result, error) {
 	}
 	if st, err := os.Stat(a.Cwd); err != nil || !st.IsDir() {
 		return Result{}, fmt.Errorf("cwd %s: not a folder", a.Cwd)
+	}
+	for _, p := range append(append([]string{}, a.AllowRead...), a.AllowWrite...) {
+		if !filepath.IsAbs(p) || filepath.Clean(p) == in.Home || filepath.Clean(p) == "/" {
+			return Result{}, fmt.Errorf("grant %q: an absolute path narrower than home", p)
+		}
 	}
 	if a.Cwd == in.Home || a.Cwd == "/" {
 		return Result{}, fmt.Errorf("cwd %s: a project needs its own folder, the sandbox would allow writing all of it", a.Cwd)
