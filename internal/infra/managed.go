@@ -433,13 +433,16 @@ func (in *Infra) RunApp(ctx context.Context, a App) (Result, error) {
 	return Result{OK: true, Ran: fmt.Sprintf("pm2 start %s --only %s (%s)", path, a.Name, how), Output: pm2Said(string(out))}, nil
 }
 
+// ansi matches terminal color codes; pm2 colors its table even into a pipe.
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
 // pm2Said keeps pm2's own messages and drops the process table it prints
 // after every start.
 func pm2Said(out string) string {
 	var keep []string
-	for _, l := range strings.Split(out, "\n") {
+	for _, l := range strings.Split(ansi.ReplaceAllString(out, ""), "\n") {
 		t := strings.TrimSpace(l)
-		if t == "" || strings.ContainsAny(t[:1], "│┌└├┐┘┤─") {
+		if t == "" || strings.ContainsAny(string([]rune(t)[:1]), "│┌└├┐┘┤─") {
 			continue
 		}
 		keep = append(keep, t)
