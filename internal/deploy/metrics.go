@@ -32,7 +32,7 @@ type Metrics struct {
 	// "Distribution", "Project"); empty means Worker.
 	Unit string `json:"unit,omitempty"`
 	// Workers is per-resource usage, busiest first: Workers on Cloudflare,
-	// CloudFront distributions and App Runner services on AWS, projects on
+	// CloudFront distributions and ECS apps on AWS, projects on
 	// Vercel.
 	Workers []WorkerMetric `json:"workers,omitempty"`
 	// Deploys and DeployErrors count deployments in the window, where the
@@ -78,7 +78,7 @@ type MetricPoint struct {
 type WorkerMetric struct {
 	Name string `json:"name"`
 	// Kind is what the resource is when a provider has several ("CloudFront",
-	// "App Runner").
+	// "ECS").
 	Kind string `json:"kind,omitempty"`
 	// Project is the Worker / bucket / service name a project room deploys
 	// as, when it differs from Name (a CloudFront id).

@@ -97,7 +97,7 @@ func publishTools(db *coord.DB, envs *gateway.EnvManager) []mcpserver.Tool {
 				"database": map[string]any{"type": "string", "description": "Local SQLite file to host as D1, relative to the project"},
 				"main":     map[string]any{"type": "string", "description": "Optional Worker script (an API in front of the files)"},
 				"provider": map[string]any{"type": "string", "enum": deploy.Available(),
-					"description": "Where PROD lives: cloudflare (default; sites, Workers, D1), fly (Docker apps), aws (static on S3+CloudFront, or a Dockerfile on App Runner), vercel (built folder, or a framework Vercel builds)"},
+					"description": "Where PROD lives: cloudflare (default; sites, Workers, D1), fly (Docker apps), aws (static on S3+CloudFront, or a Dockerfile on ECS Fargate), vercel (built folder, or a framework Vercel builds)"},
 				"dockerfile": map[string]any{"type": "string", "description": "fly / aws: the project's Dockerfile, for an app that runs a server"},
 				"port":       map[string]any{"type": "integer", "description": "fly / aws: the port the image listens on (default 8080)"},
 				"region":     map[string]any{"type": "string", "description": "fly region (sin) or AWS region (ap-southeast-1)"},

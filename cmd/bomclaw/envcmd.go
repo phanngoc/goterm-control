@@ -47,8 +47,8 @@ func runEnv(args []string) {
 		dbFile := fs.String("database", "", "Local SQLite file to host as Cloudflare D1, relative to the project")
 		main := fs.String("main", "", "Optional Worker script (an API in front of the files)")
 		target := fs.String("provider", deploy.DefaultTarget, "Where PROD lives: "+strings.Join(deploy.Available(), ", "))
-		dockerfile := fs.String("dockerfile", "", "Fly.io / AWS App Runner: the project's Dockerfile, for an app that runs a server")
-		port := fs.Int("port", 0, "Fly.io / AWS App Runner: the port the image listens on (default 8080)")
+		dockerfile := fs.String("dockerfile", "", "Fly.io / AWS (ECS): the project's Dockerfile, for an app that runs a server")
+		port := fs.Int("port", 0, "Fly.io / AWS (ECS): the port the image listens on (default 8080)")
 		region := fs.String("region", "", "Fly.io region (default $FLY_REGION or sin) or AWS region (default $AWS_REGION or ap-southeast-1)")
 		framework := fs.String("framework", "", "Vercel: have Vercel build the source (nextjs, vite, astro…) instead of uploading --static")
 		force := fs.Bool("force", false, "Replace a deploy that is already declared")
@@ -285,7 +285,7 @@ SQLite), PROD is a hosting provider, picked by bomclaw.json "deploy.target":
               plus an optional custom domain
   aws         static: a private S3 bucket behind CloudFront (HTTPS, ACM
               certificate for a custom domain); dockerfile: the image in ECR,
-              run by App Runner. Month-to-date cost on Admin → Infra
+              run on Fargate (ECS Express). Month-to-date cost on Admin → Infra
   vercel      static: the built folder uploaded as is; framework: the source,
               built by Vercel (Next.js server routes included); <name>.vercel.app
 A custom domain on a Cloudflare zone is pointed at AWS or Vercel through

@@ -70,7 +70,7 @@ The same shape here:
 | `spa` | serve `index.html` for unknown paths (client-side routers) |
 | `main` | an optional Worker script in front of the files, e.g. an API. Only a script can read the database (`env.DB`). |
 | `domain` | a custom hostname. On Cloudflare it must be on a zone in the account. On Fly.io a certificate is added (`flyctl certs add`), and the hostname needs a CNAME to `<name>.fly.dev`. Optional. |
-| `dockerfile` | Fly.io and AWS (App Runner): the project's own image, for an app that runs a server |
+| `dockerfile` | Fly.io and AWS (ECS Express on Fargate): the project's own image, for an app that runs a server |
 | `port` | Fly.io and AWS: the port that image listens on (default 8080) |
 | `region` | Fly.io: where it runs (default `$FLY_REGION`, else `sin`). AWS: the region (default `$AWS_REGION`, else `ap-southeast-1`) |
 | `framework` | Vercel only: Vercel builds the source itself (`nextjs`, `vite`, `astro`…) instead of uploading `static` |
@@ -149,15 +149,23 @@ every time.
   for an hour; each publish invalidates `/*`. `spa` maps 403/404 to
   `index.html`. Answers on `https://<id>.cloudfront.net`; the first rollout of
   a new distribution takes a few minutes.
-- **`dockerfile`** — the image is built here (`docker build --platform
-  linux/amd64`), pushed to ECR (`bomclaw/<name>`), and run by App Runner
-  (0.25 vCPU / 0.5 GB to start) with the connectors' values as its
-  environment. The role `bomclaw-apprunner-ecr-access` is created the first
-  time. Answers on `https://<id>.<region>.awsapprunner.com`. Docker must be
-  installed.
+- **`dockerfile`** — the image is built here for this machine's architecture
+  (`linux/arm64` on Apple Silicon, `linux/amd64` otherwise), pushed to ECR
+  (`bomclaw/<name>`), and run on Fargate by an **ECS Express Mode** service in
+  the cluster `bomclaw` (0.25 vCPU / 512 MB, 1–2 tasks scaled on CPU) with the
+  connectors' values as its environment. Express Mode puts the service behind
+  an Application Load Balancer it manages (shared by up to 25 Express
+  services, roughly $16+/month on its own) in the region's default VPC, and
+  answers on `https://<id>.ecs.<region>.on.aws`. The health check is `/`,
+  which must answer 200. The roles `bomclaw-ecs-task-execution` and
+  `bomclaw-ecs-infrastructure` are created the first time. Docker must be
+  installed. (App Runner was the first choice; AWS no longer lets new
+  accounts create App Runner services.)
 
 With `domain`, a static site gets an ACM certificate in us-east-1 and the
-distribution an alias; an App Runner app gets a custom-domain association. The
+distribution an alias; an app gets a CloudFront distribution in front of its
+endpoint (no caching, every method passed through) with the same certificate
+and alias. The
 records each asks for (certificate validation, the CNAME) are written through
 Cloudflare DNS when the domain is on a Cloudflare zone, otherwise the deploy
 log lists them. Version: the commit, as bucket tags or the image tag.

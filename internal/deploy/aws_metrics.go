@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -14,11 +15,14 @@ import (
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
+	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 )
 
 // AWS usage for the Infra page: requests and 5xx per hour from CloudWatch,
-// for bomclaw's CloudFront distributions and the region's App Runner
-// services, and the month's spend from Cost Explorer. Cost Explorer bills
+// for bomclaw's CloudFront distributions and its ECS Express apps (their
+// load balancer's target groups), and the month's spend from Cost Explorer. Cost Explorer bills
 // each call ($0.01), so its answer is kept for hours, not minutes.
 
 type awsMetricKey struct{ kind, name string }
@@ -77,13 +81,13 @@ func (a *AWS) Metrics(ctx context.Context, window time.Duration) *Metrics {
 	}()
 	go func() {
 		defer wg.Done()
-		if err := a.runnerMetrics(ctx, since, until, func(name string, ts []time.Time, req, errv []float64) {
+		if err := a.appMetrics(ctx, since, until, func(name string, ts []time.Time, req, errv []float64) {
 			mu.Lock()
 			defer mu.Unlock()
-			add(awsMetricKey{"App Runner", name}, name, ts, req, errv)
+			add(awsMetricKey{"ECS", name}, name, ts, req, errv)
 		}); err != nil {
 			mu.Lock()
-			errs = append(errs, "App Runner: "+awsHint(err))
+			errs = append(errs, "ECS: "+awsHint(err))
 			mu.Unlock()
 		}
 	}()
@@ -236,34 +240,108 @@ func (a *AWS) cloudFrontMetrics(ctx context.Context, since, until time.Time, add
 	return nil
 }
 
-func (a *AWS) runnerMetrics(ctx context.Context, since, until time.Time, add func(name string, ts []time.Time, req, errv []float64)) error {
-	svcs, err := a.services(ctx, a.Region, false)
-	if err != nil {
-		return err
-	}
-	var qs []cwtypes.MetricDataQuery
-	for i, s := range svcs {
-		arn := aws.ToString(s.ServiceArn)
-		dims := map[string]string{"ServiceName": aws.ToString(s.ServiceName), "ServiceID": arn[strings.LastIndex(arn, "/")+1:]}
-		qs = append(qs, query(fmt.Sprintf("r%d", i), "AWS/AppRunner", "Requests", "Sum", dims),
-			query(fmt.Sprintf("e%d", i), "AWS/AppRunner", "5xxStatusResponses", "Sum", dims))
-	}
-	if len(qs) == 0 {
-		return nil
-	}
+func (a *AWS) appMetrics(ctx context.Context, since, until time.Time, add func(name string, ts []time.Time, req, errv []float64)) error {
 	cfg, err := a.regional(ctx, a.Region)
 	if err != nil {
 		return err
+	}
+	c := ecs.NewFromConfig(cfg)
+	var arns []string
+	var next *string
+	for {
+		page, err := c.ListServices(ctx, &ecs.ListServicesInput{Cluster: aws.String(ecsCluster), NextToken: next})
+		if err != nil {
+			var nf *ecstypes.ClusterNotFoundException
+			if errors.As(err, &nf) {
+				return nil // no app deployed yet
+			}
+			return err
+		}
+		arns = append(arns, page.ServiceArns...)
+		if page.NextToken == nil {
+			break
+		}
+		next = page.NextToken
+	}
+	// Each service's target groups, and the load balancer each sits behind:
+	// CloudWatch names a target group's metrics by both.
+	type tg struct{ service, arn string }
+	var groups []tg
+	for len(arns) > 0 {
+		n := min(len(arns), 10)
+		out, err := c.DescribeServices(ctx, &ecs.DescribeServicesInput{Cluster: aws.String(ecsCluster), Services: arns[:n]})
+		if err != nil {
+			return err
+		}
+		for _, s := range out.Services {
+			if aws.ToString(s.Status) == "INACTIVE" {
+				continue
+			}
+			for _, lb := range s.LoadBalancers {
+				if t := aws.ToString(lb.TargetGroupArn); t != "" {
+					groups = append(groups, tg{aws.ToString(s.ServiceName), t})
+				}
+			}
+		}
+		arns = arns[n:]
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	lbOf := map[string]string{}
+	ec := elbv2.NewFromConfig(cfg)
+	for i := 0; i < len(groups); i += 20 {
+		var batch []string
+		for _, g := range groups[i:min(i+20, len(groups))] {
+			batch = append(batch, g.arn)
+		}
+		out, err := ec.DescribeTargetGroups(ctx, &elbv2.DescribeTargetGroupsInput{TargetGroupArns: batch})
+		if err != nil {
+			return err
+		}
+		for _, t := range out.TargetGroups {
+			if len(t.LoadBalancerArns) > 0 {
+				lbOf[aws.ToString(t.TargetGroupArn)] = t.LoadBalancerArns[0]
+			}
+		}
+	}
+	var qs []cwtypes.MetricDataQuery
+	var named []tg
+	for _, g := range groups {
+		lb := lbOf[g.arn]
+		if lb == "" {
+			continue
+		}
+		dims := map[string]string{"TargetGroup": arnSuffix(g.arn, "targetgroup/"), "LoadBalancer": arnSuffix(lb, "loadbalancer/")}
+		i := len(named)
+		qs = append(qs, query(fmt.Sprintf("r%d", i), "AWS/ApplicationELB", "RequestCount", "Sum", dims),
+			query(fmt.Sprintf("e%d", i), "AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "Sum", dims))
+		named = append(named, g)
+	}
+	if len(qs) == 0 {
+		return nil
 	}
 	res, err := series(ctx, cloudwatch.NewFromConfig(cfg), since, until, qs)
 	if err != nil {
 		return err
 	}
-	for i, s := range svcs {
+	for i, g := range named {
 		r := res[fmt.Sprintf("r%d", i)]
-		add(aws.ToString(s.ServiceName), r.Timestamps, r.Values, aligned(r, res[fmt.Sprintf("e%d", i)]))
+		add(g.service, r.Timestamps, r.Values, aligned(r, res[fmt.Sprintf("e%d", i)]))
 	}
 	return nil
+}
+
+// arnSuffix is the part of an ARN CloudWatch uses as a dimension:
+// "targetgroup/name/id" or "app/name/id".
+func arnSuffix(arn, marker string) string {
+	if i := strings.Index(arn, marker); i >= 0 {
+		if marker == "loadbalancer/" {
+			return arn[i+len(marker):]
+		}
+		return arn[i:]
+	}
+	return arn
 }
 
 const costTTL = 6 * time.Hour

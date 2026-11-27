@@ -110,7 +110,7 @@ var Services = []Service{
 	},
 	{
 		ID: "aws", Title: "AWS",
-		Purpose: "PROD on AWS: static sites on S3 + CloudFront, apps from a Dockerfile on App Runner (ECR). Month-to-date cost on Infra.",
+		Purpose: "PROD on AWS: static sites on S3 + CloudFront, apps from a Dockerfile on ECS Fargate (ECR). Month-to-date cost on Infra.",
 		Docs:    "https://console.aws.amazon.com/iam/home#/security_credentials",
 		Fields: []Field{
 			{Env: "AWS_ACCESS_KEY_ID", Label: "Access key ID", Placeholder: "AKIA…",

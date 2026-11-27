@@ -166,7 +166,8 @@ It writes `bomclaw.json` → `"deploy": {…}`; edit that file directly to chang
   yet (Managed Postgres planned) — `--with-db` is refused.
 - `aws` — `--static dist`: private S3 bucket behind CloudFront (HTTPS);
   `--dockerfile Dockerfile --port 3000`: image built here with docker, pushed
-  to ECR, run by App Runner. No database — `--with-db` is refused. A new
+  to ECR, run on Fargate by ECS Express Mode (managed load balancer, HTTPS,
+  `/` must answer 200). No database — `--with-db` is refused. A new
   CloudFront distribution needs a few minutes before its URL answers.
 - `vercel` — `--static dist` uploads the built folder; `--framework nextjs`
   (or vite, astro…) uploads the source and Vercel builds it — the way to ship

@@ -26,8 +26,8 @@ import (
 //     bucket is never public). https://<id>.cloudfront.net, and a custom
 //     domain with an ACM certificate when deploy.domain is set.
 //   - "dockerfile": the image is built here with docker, pushed to ECR, and
-//     run by App Runner — HTTPS, scaling and health checks without a VPC or
-//     load balancer to look after. https://<id>.<region>.awsapprunner.com.
+//     run on Fargate by ECS Express Mode — HTTPS, a managed load balancer,
+//     health checks and scaling in one call. https://<id>.ecs.<region>.on.aws.
 //
 // Every resource is named after the project (bomclaw-<name>…) and tagged, so
 // status, metrics and the Infra page find them without a state file. The
@@ -58,13 +58,13 @@ func (a *AWS) Title() string { return "AWS" }
 
 func (a *AWS) Validate(s *Spec) error {
 	if s.Main != "" {
-		return fmt.Errorf("deploy.main is a Cloudflare Worker script; on AWS an app with a server is deploy.dockerfile (App Runner)")
+		return fmt.Errorf("deploy.main is a Cloudflare Worker script; on AWS an app with a server is deploy.dockerfile (ECS on Fargate)")
 	}
 	if s.Framework != "" {
 		return fmt.Errorf("deploy.framework is a Vercel build; on AWS build here (deploy.build + deploy.static) or ship a Dockerfile")
 	}
 	if s.Static == "" && s.Dockerfile == "" {
-		return fmt.Errorf("on AWS, deploy needs \"static\" (S3 + CloudFront) or \"dockerfile\" (App Runner)")
+		return fmt.Errorf("on AWS, deploy needs \"static\" (S3 + CloudFront) or \"dockerfile\" (ECS on Fargate)")
 	}
 	if s.Static != "" && s.Dockerfile != "" {
 		return fmt.Errorf("on AWS, deploy has both \"static\" and \"dockerfile\"; keep one (copy the static files in your Dockerfile)")
@@ -118,7 +118,7 @@ func (a *AWS) config(ctx context.Context) (aws.Config, error) {
 }
 
 // regional is the config for another region (CloudFront and ACM for it live
-// in us-east-1; App Runner in the project's region).
+// in us-east-1; ECS in the project's region).
 func (a *AWS) regional(ctx context.Context, region string) (aws.Config, error) {
 	cfg, err := a.config(ctx)
 	if err != nil {
@@ -180,7 +180,7 @@ func (a *AWS) Status(ctx context.Context, r Resolved) (st ProdStatus) {
 	if r.Static != "" {
 		a.staticStatus(ctx, r.Name, &st)
 	} else {
-		a.runnerStatus(ctx, a.region(r), r.Name, &st)
+		a.appStatus(ctx, a.region(r), r.Name, &st)
 	}
 	if st.Deployed && r.Domain != "" {
 		for _, d := range st.Domains {
@@ -194,9 +194,9 @@ func (a *AWS) Status(ctx context.Context, r Resolved) (st ProdStatus) {
 
 func awsServices(r Resolved) []string {
 	if r.Dockerfile != "" {
-		out := []string{"ECR", "App Runner"}
+		out := []string{"ECR", "ECS Fargate", "Load Balancer"}
 		if r.Domain != "" {
-			out = append(out, "Custom Domain")
+			out = append(out, "CloudFront", "ACM")
 		}
 		return out
 	}
@@ -257,7 +257,7 @@ func (a *AWS) Discover(ctx context.Context, cands []Candidate) (*ProdStatus, str
 		a.staticStatus(ctx, c.Name, &st)
 		if !st.Deployed {
 			st = ProdStatus{Provider: a.Name(), Title: a.Title(), Connected: true, Name: c.Name}
-			a.runnerStatus(ctx, a.Region, c.Name, &st)
+			a.appStatus(ctx, a.Region, c.Name, &st)
 		}
 		if st.Deployed {
 			st.Error = ""
@@ -267,7 +267,7 @@ func (a *AWS) Discover(ctx context.Context, cands []Candidate) (*ProdStatus, str
 	return nil, ""
 }
 
-// Deploy publishes: S3 + CloudFront for a static site, ECR + App Runner for
+// Deploy publishes: S3 + CloudFront for a static site, ECR + ECS Express for
 // a Dockerfile.
 func (a *AWS) Deploy(ctx context.Context, r Resolved, opt Options, log io.Writer) (*Result, error) {
 	if opt.WithDB {
@@ -281,7 +281,7 @@ func (a *AWS) Deploy(ctx context.Context, r Resolved, opt Options, log io.Writer
 	if r.Static != "" {
 		return a.deployStatic(ctx, r, opt, log)
 	}
-	return a.deployRunner(ctx, r, opt, log)
+	return a.deployApp(ctx, r, opt, log)
 }
 
 // resourceName is a project's name as an AWS resource name: bucket names are

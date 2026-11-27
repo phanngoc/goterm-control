@@ -15,7 +15,7 @@ import (
 //
 // Cloudflare is for sites (a Worker serving built files, D1 for data); Fly.io
 // is for apps that run a server process (Machines from a Docker image); AWS
-// takes both (S3 + CloudFront, or App Runner from a Dockerfile); Vercel takes
+// takes both (S3 + CloudFront, or ECS on Fargate from a Dockerfile); Vercel takes
 // a built folder or a framework's source it builds itself. Only Cloudflare
 // hosts a database (D1); Managed Postgres and Supabase are the engines to come.
 type Provider interface {

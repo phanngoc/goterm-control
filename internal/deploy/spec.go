@@ -63,7 +63,7 @@ type Spec struct {
 	// Framework has Vercel build the project's source itself ("nextjs",
 	// "vite", "astro"…) instead of uploading a folder built here. Vercel only.
 	Framework string `json:"framework,omitempty"`
-	// Port is the port that image listens on (Fly.io, AWS App Runner).
+	// Port is the port that image listens on (Fly.io, AWS ECS).
 	// Default 8080.
 	Port int `json:"port,omitempty"`
 	// Region is where it runs: a Fly.io region ("sin", default $FLY_REGION)

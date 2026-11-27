@@ -30,6 +30,10 @@ github.com/aws/aws-sdk-go-v2/service/costexplorer v1.75.1 h1:VzjV3jYcUJ2qJVJdyZP
 github.com/aws/aws-sdk-go-v2/service/costexplorer v1.75.1/go.mod h1:yw2RxSv771peTxacMiuvMlHhCH7MVPhD8GLqn9fxZfA=
 github.com/aws/aws-sdk-go-v2/service/ecr v1.69.1 h1:0MvfM6Sjf1adM0BNgBY4nQ9RnR4no5o9hS2vQDPEuXs=
 github.com/aws/aws-sdk-go-v2/service/ecr v1.69.1/go.mod h1:iAnMBmKm9/0+X29eLYrlzia7eWZIUCVG3bvhZAqGZwU=
+github.com/aws/aws-sdk-go-v2/service/ecs v1.106.1 h1:BblAO05pw81e7+4M9X+gNoTW3kNHqtaTz7ui/ERJkaw=
+github.com/aws/aws-sdk-go-v2/service/ecs v1.106.1/go.mod h1:IWQ00BsLCz/oZGhStaDqXH0nCMx0aHTmo9OZ6lsnxG0=
+github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.65.1 h1:UqDKhsfnlAYOELMvkcYu5PxovcoCWWh4WAulr+4q/o4=
+github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.65.1/go.mod h1:vYppu9EoHoM9pS0R4oXqo2p07v88w66vh0hWQGik8Rk=
 github.com/aws/aws-sdk-go-v2/service/iam v1.68.1 h1:P2k2OzQIlVmJbglZNE9dSwwBbpDCe3mb7jYCdMGM//s=
 github.com/aws/aws-sdk-go-v2/service/iam v1.68.1/go.mod h1:B/Bn/klo9NVzz8c0qSYE2A6kXvxXlDak1++qg98yYEQ=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.26 h1:PgkTkbD4VhN7KX1fQXiNMsSZqPnEfXmi+UuISMDEuy8=
